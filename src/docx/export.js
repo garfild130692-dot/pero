@@ -2,6 +2,7 @@
 import JSZip from 'jszip';
 import { DEFAULT_FONT, DEFAULT_SIZE, highlightName, normalizeColor, parseSize } from '../editor/font.js';
 import { NEW_DOC_PARA, ptToTwips } from '../editor/paragraph.js';
+import { CELL_SIDES, GRID_BORDERS, TABLE_SIDES, TWIPS_PER_PX, borderToOoxml } from '../editor/table.js';
 
 // <w:spacing> и <w:ind> из параметров абзаца (в pt); пустая строка, если задавать нечего
 function spacingXml(a) {
@@ -156,7 +157,7 @@ class Exporter {
           grid[rr] = grid[rr] || [];
           for (let cc = c; cc < c + cs; cc++) {
             if (rr === r && cc === c) grid[rr][cc] = { cell, origin: true, colspan: cs, vMerge: rs > 1 };
-            else if (cc === c) grid[rr][cc] = { cont: true, colspan: cs };
+            else if (cc === c) grid[rr][cc] = { cell, cont: true, colspan: cs };
             else grid[rr][cc] = { covered: true };
           }
         }
@@ -171,7 +172,7 @@ class Exporter {
     rows.forEach((row, r) => {
       grid[r].forEach((g, c) => {
         if (g && g.origin && g.cell.attrs && Array.isArray(g.cell.attrs.colwidth)) {
-          g.cell.attrs.colwidth.forEach((px, k) => { if (px && c + k < cols) widths[c + k] = Math.round(px * 15); });
+          g.cell.attrs.colwidth.forEach((px, k) => { if (px && c + k < cols) widths[c + k] = Math.round(px * TWIPS_PER_PX); });
         }
       });
     });
@@ -180,14 +181,23 @@ class Exporter {
     const rest = unknown ? Math.max(Math.floor((TEXT_WIDTH - known) / unknown), 600) : 0;
     const W = widths.map((w) => w || rest);
 
-    const border = (s) => `<w:${s} w:val="single" w:sz="4" w:space="0" w:color="auto"/>`;
+    // tblPr по схеме: tblStyle, tblW, jc, tblBorders, tblLook. Стиль TableGrid оставляем ради интервалов абзацев
+    // в ячейках (после 0, одинарный); границы пишем явно — они перекрывают стиль.
+    const ta = node.attrs || {};
+    const tb = { ...GRID_BORDERS, ...(ta.borders || {}) };
     let xml = '<w:tbl><w:tblPr><w:tblStyle w:val="TableGrid"/><w:tblW w:w="0" w:type="auto"/>' +
-      `<w:tblBorders>${['top', 'left', 'bottom', 'right', 'insideH', 'insideV'].map(border).join('')}</w:tblBorders>` +
+      (ta.align === 'center' || ta.align === 'right' ? `<w:jc w:val="${ta.align}"/>` : '') +
+      `<w:tblBorders>${TABLE_SIDES.map((s) => borderToOoxml(s, tb[s])).join('')}</w:tblBorders>` +
       '<w:tblLook w:val="04A0"/></w:tblPr>';
     xml += `<w:tblGrid>${W.map((w) => `<w:gridCol w:w="${w}"/>`).join('')}</w:tblGrid>`;
 
-    grid.forEach((cells) => {
-      xml += '<w:tr>';
+    grid.forEach((cells, r) => {
+      // trPr по схеме: trHeight, tblHeader
+      const ra = (rows[r] && rows[r].attrs) || {};
+      let trPr = '';
+      if (ra.height) trPr += `<w:trHeight w:val="${ptToTwips(ra.height)}"${ra.heightRule === 'exact' ? ' w:hRule="exact"' : ''}/>`;
+      if (ra.repeatHeader) trPr += '<w:tblHeader/>';
+      xml += `<w:tr>${trPr ? `<w:trPr>${trPr}</w:trPr>` : ''}`;
       for (let c = 0; c < cols; c++) {
         const g = cells[c];
         if (!g || g.covered) {
@@ -199,6 +209,14 @@ class Exporter {
         if (g.colspan > 1) tcPr += `<w:gridSpan w:val="${g.colspan}"/>`;
         if (g.cont) tcPr += '<w:vMerge/>';
         else if (g.vMerge) tcPr += '<w:vMerge w:val="restart"/>';
+        // оформление: у продолжения объединённой ячейки — как у начала (Word рисует каждую часть по её tcPr)
+        // порядок: tcBorders, shd, vAlign
+        const ca = g.cell.attrs || {};
+        const cb = ca.borders || {};
+        const sides = CELL_SIDES.filter((s) => cb[s]);
+        if (sides.length) tcPr += `<w:tcBorders>${sides.map((s) => borderToOoxml(s, cb[s])).join('')}</w:tcBorders>`;
+        if (ca.background) tcPr += `<w:shd w:val="clear" w:color="auto" w:fill="${ca.background.slice(1).toUpperCase()}"/>`;
+        if (ca.verticalAlign === 'center' || ca.verticalAlign === 'bottom') tcPr += `<w:vAlign w:val="${ca.verticalAlign}"/>`;
         let body = g.cont ? '<w:p/>' : this.blocks(g.cell.content);
         if (!body.endsWith('</w:p>')) body += '<w:p/>'; // ячейка обязана заканчиваться абзацем
         xml += `<w:tc><w:tcPr>${tcPr}</w:tcPr>${body}</w:tc>`;

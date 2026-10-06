@@ -236,7 +236,7 @@ const Swatch = ({ color, title, onPick }) => (
 );
 
 // Кнопка с разделённым действием: основная часть применяет последний цвет, стрелка открывает палитру
-function SplitColor({ title, icon, color, children }) {
+export function SplitColor({ title, icon, color, children }) {
   const { open, setOpen, ref, style } = usePopover();
   return (
     <div className="split" ref={ref}>
@@ -249,28 +249,37 @@ function SplitColor({ title, icon, color, children }) {
   );
 }
 
+// Палитра: «Авто»/«Нет цвета», основные и стандартные цвета, «Другие цвета…»
+export function ColorPalette({ autoLabel, autoClass = 'auto', current, onAuto, onPick }) {
+  const customRef = useRef(null);
+  return (
+    <>
+      <button type="button" className="pop-item" onMouseDown={(e) => e.preventDefault()} onClick={onAuto}>
+        <span className={`swatch ${autoClass}`} /> {autoLabel}
+      </button>
+      <div className="pop-title">Основные цвета</div>
+      <div className="swatches">{PALETTE.flat().map((c, i) => <Swatch key={i} color={c} onPick={onPick} />)}</div>
+      <div className="pop-title">Стандартные цвета</div>
+      <div className="swatches">{STANDARD.map((c) => <Swatch key={c} color={c} onPick={onPick} />)}</div>
+      <button type="button" className="pop-item" onMouseDown={(e) => e.preventDefault()} onClick={() => customRef.current && customRef.current.click()}>
+        Другие цвета…
+      </button>
+      <input ref={customRef} type="color" className="hidden-color" defaultValue={current || '#000000'} onChange={(e) => onPick(e.target.value)} />
+    </>
+  );
+}
+
 export function TextColorButton({ editor }) {
   const [last, setLast] = useState('#c00000');
-  const customRef = useRef(null);
   const apply = (c) => { setLast(c); editor.chain().focus().setColor(c).run(); };
   return (
     <SplitColor title="Цвет текста" color={last} icon={<span className="glyph-a">A</span>}>
       {{
         apply: () => apply(last),
         palette: (close) => (
-          <>
-            <button type="button" className="pop-item" onMouseDown={(e) => e.preventDefault()} onClick={() => { close(); editor.chain().focus().unsetColor().run(); }}>
-              <span className="swatch auto" /> Авто
-            </button>
-            <div className="pop-title">Основные цвета</div>
-            <div className="swatches">{PALETTE.flat().map((c, i) => <Swatch key={i} color={c} onPick={(x) => { close(); apply(x); }} />)}</div>
-            <div className="pop-title">Стандартные цвета</div>
-            <div className="swatches">{STANDARD.map((c) => <Swatch key={c} color={c} onPick={(x) => { close(); apply(x); }} />)}</div>
-            <button type="button" className="pop-item" onMouseDown={(e) => e.preventDefault()} onClick={() => customRef.current && customRef.current.click()}>
-              Другие цвета…
-            </button>
-            <input ref={customRef} type="color" className="hidden-color" defaultValue={last} onChange={(e) => { close(); apply(e.target.value); }} />
-          </>
+          <ColorPalette autoLabel="Авто" current={last}
+            onAuto={() => { close(); editor.chain().focus().unsetColor().run(); }}
+            onPick={(x) => { close(); apply(x); }} />
         ),
       }}
     </SplitColor>

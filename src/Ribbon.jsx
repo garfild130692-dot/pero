@@ -6,6 +6,7 @@ import { clipboard } from './fileApi.js';
 import { FontFamilyBox, FontSizeBox, HighlightButton, TextColorButton, fontState, usePopover } from './FontControls.jsx';
 import { effectivePara } from './editor/paraFormat.js';
 import { LINE_PRESETS, fmtNum } from './editor/paragraph.js';
+import { BordersButton, RowHeightField, ShadingButton, TableIcons, tableState } from './TableControls.jsx';
 
 function Btn({ icon, label, title, onClick, active, disabled, big, children }) {
   const I = icon && Icon[icon];
@@ -136,6 +137,7 @@ export default function Ribbon({ editor, file, onLink, onParagraph }) {
       canSplit: e.can().splitCell(),
       font: fontState(e),
       para: paraState(e),
+      table: e.isActive('table') ? tableState(e) : null,
     }),
     // в состоянии есть вложенный объект — сравниваем по значению, чтобы лента не перерисовывалась зря
     equalityFn: (a, b) => JSON.stringify(a) === JSON.stringify(b),
@@ -281,10 +283,10 @@ export default function Ribbon({ editor, file, onLink, onParagraph }) {
         {activeTab === 'table' && (
           <>
             <Group title="Строки и столбцы">
-              <Btn big icon="rowAbove" label="Вставить сверху" onClick={() => c().addRowBefore().run()} />
-              <Btn big icon="rowBelow" label="Вставить снизу" onClick={() => c().addRowAfter().run()} />
-              <Btn big icon="colLeft" label="Вставить слева" onClick={() => c().addColumnBefore().run()} />
-              <Btn big icon="colRight" label="Вставить справа" onClick={() => c().addColumnAfter().run()} />
+              <Btn big icon="rowAbove" label="Вставить сверху" onClick={() => c().insertRowFormatted(-1).run()} />
+              <Btn big icon="rowBelow" label="Вставить снизу" onClick={() => c().insertRowFormatted(1).run()} />
+              <Btn big icon="colLeft" label="Вставить слева" onClick={() => c().insertColumnFormatted(-1).run()} />
+              <Btn big icon="colRight" label="Вставить справа" onClick={() => c().insertColumnFormatted(1).run()} />
             </Group>
             <Group title="Удаление">
               <Btn big icon="delRow" label="Удалить строку" onClick={() => c().deleteRow().run()} />
@@ -295,6 +297,42 @@ export default function Ribbon({ editor, file, onLink, onParagraph }) {
               <Btn big icon="merge" label="Объединить ячейки" disabled={!s.canMerge} onClick={() => c().mergeCells().run()} />
               <Btn big icon="split" label="Разделить ячейки" disabled={!s.canSplit} onClick={() => c().splitCell().run()} />
             </Group>
+            {s.table && (
+              <>
+                <Group title="Оформление">
+                  <div className="rb-rows">
+                    <div className="rb-row"><BordersButton editor={editor} /></div>
+                    <div className="rb-row"><ShadingButton editor={editor} /></div>
+                  </div>
+                </Group>
+                <Group title="Выравнивание">
+                  <div className="rb-rows">
+                    <div className="rb-row">
+                      {[['top', 'Сверху'], ['center', 'По центру'], ['bottom', 'Снизу']].map(([v, l]) => (
+                        <Btn key={v} title={`Выравнивание в ячейке: ${l.toLowerCase()}`} active={s.table.verticalAlign === v}
+                          onClick={() => c().setCellAttribute('verticalAlign', v === 'top' ? null : v).run()}><TableIcons.VAlignIcon v={v} /></Btn>
+                      ))}
+                    </div>
+                    <div className="rb-row">
+                      {[['left', 'слева'], ['center', 'по центру'], ['right', 'справа']].map(([v, l]) => (
+                        <Btn key={v} title={`Таблица на странице: ${l}`} active={s.table.align === v}
+                          onClick={() => c().setTableAlign(v).run()}><TableIcons.PosIcon a={v} /></Btn>
+                      ))}
+                    </div>
+                  </div>
+                </Group>
+                <Group title="Размер">
+                  <div className="rb-rows">
+                    <RowHeightField editor={editor} t={s.table} />
+                    <Btn title="Выровнять ширину столбцов" onClick={() => c().distributeColumns().run()}><TableIcons.DistributeIcon /> <span className="rb-inline">Выровнять столбцы</span></Btn>
+                  </div>
+                </Group>
+                <Group title="Данные">
+                  <Btn big label="Повторять заголовки" title="Повторять строку как заголовок на каждой странице" active={s.table.repeatHeader}
+                    onClick={() => c().toggleRepeatHeader().run()}><TableIcons.HeaderIcon /></Btn>
+                </Group>
+              </>
+            )}
           </>
         )}
       </div>

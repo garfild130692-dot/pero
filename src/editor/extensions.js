@@ -3,7 +3,6 @@ import { Extension } from '@tiptap/core';
 import StarterKit from '@tiptap/starter-kit';
 import Document from '@tiptap/extension-document';
 import TextAlign from '@tiptap/extension-text-align';
-import { TableKit } from '@tiptap/extension-table';
 import { TextStyle } from '@tiptap/extension-text-style';
 import Highlight from '@tiptap/extension-highlight';
 import Subscript from '@tiptap/extension-subscript';
@@ -13,6 +12,7 @@ import {
 } from './font.js';
 import { NEW_DOC_PARA } from './paragraph.js';
 import { ParaFormat } from './paraFormat.js';
+import { PeroTable, PeroTableCell, PeroTableHeader, PeroTableRow, TableFormat } from './tableFormat.js';
 
 // Как оформлены заголовки (совпадает со styles.css и стилями Heading1–6 в export.js)
 export const HEADING_FONT = 'Calibri Light';
@@ -174,7 +174,11 @@ export const extensions = [
   PeroDocument,
   TextAlign.configure({ types: ['heading', 'paragraph'] }),
   ParaFormat,
-  TableKit.configure({ table: { resizable: true } }),
+  PeroTable.configure({ resizable: true }),
+  PeroTableRow,
+  PeroTableCell,
+  PeroTableHeader,
+  TableFormat,
   TextStyle,
   RunStyle,
   Highlight.configure({ multicolor: true }),

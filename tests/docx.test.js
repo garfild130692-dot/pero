@@ -205,3 +205,72 @@ for p in d.paragraphs:
     expect(xml).toMatch(/<w:pPrDefault><w:pPr><w:spacing w:before="0" w:after="160" w:line="259" w:lineRule="auto"\/><w:ind w:left="0" w:right="0" w:firstLine="0"\/><\/w:pPr><\/w:pPrDefault>/);
   });
 });
+
+describe('таблицы', () => {
+  const tables = (doc) => doc.content.filter((n) => n.type === 'table');
+  const cell = (t, r, c) => t.content[r].content[c].attrs;
+  const line = (style, width, color = null) => ({ style, width, color });
+
+  it('импорт: ширины, границы (прямые, из стиля, «нет»), заливка, выравнивание, строки', async () => {
+    const { doc } = await importDocx(readFileSync('tests/fixtures/tables.docx'));
+    Node.fromJSON(schema, doc).check();
+    const [t1, t2, t3, t4] = tables(doc);
+    // 1) «Сетка таблицы»
+    expect(t1.attrs.align).toBe('center');
+    expect(t1.attrs.borders.insideV).toEqual(line('single', 0.5));
+    expect(t1.content.map((r) => r.content[0].attrs.colwidth)).toEqual([[113.4], [113.4], [113.4]]); // 3 см
+    expect(cell(t1, 0, 2).colwidth[0] * 15).toBeCloseTo(4535, 5); // 8 см в твипах
+    expect(t1.content[0].attrs).toEqual({ height: null, heightRule: null, repeatHeader: true });
+    expect(t1.content[1].attrs).toEqual({ height: 28.35, heightRule: 'exact', repeatHeader: false });
+    expect(cell(t1, 0, 0).background).toBe('#dcefe9');
+    expect([cell(t1, 1, 1).verticalAlign, cell(t1, 1, 2).verticalAlign]).toEqual(['center', 'bottom']);
+    expect(cell(t1, 2, 2).borders).toEqual({ bottom: line('single', 3, '#c00000') });
+    // 2) без стиля — границ нет
+    expect(Object.values(t2.attrs.borders).every((b) => b.style === 'none')).toBe(true);
+    // 3) прямые tblBorders
+    expect(t3.attrs.borders.top).toEqual(line('double', 0.5, '#1f6f5c'));
+    expect(t3.attrs.borders.insideH).toEqual(line('dashed', 1));
+    // 4) границы из стиля таблицы
+    expect(t4.attrs.borders.insideH).toEqual(line('single', 1, '#4f81bd'));
+  });
+
+  it('round-trip сохраняет оформление таблиц', async () => {
+    const a = (await importDocx(readFileSync('tests/fixtures/tables.docx'))).doc;
+    const bytes = await exportDocx(a);
+    mkdirSync('tests/out', { recursive: true });
+    writeFileSync('tests/out/tables.docx', bytes);
+    const b = (await importDocx(bytes)).doc;
+    Node.fromJSON(schema, b).check();
+    expect(b).toEqual(a);
+  });
+
+  it('python-docx видит ширины, высоту строк, заголовок и положение таблицы', () => {
+    const out = execFileSync(PYTHON, ['-c', `
+import docx
+d = docx.Document('tests/out/tables.docx')
+t = d.tables[0]
+print('widths', [round(c.width.cm, 2) for c in t.columns])
+print('align', t.alignment)
+print('row1', round(t.rows[1].height.cm, 2), t.rows[1].height_rule)
+print('header', bool(t.rows[0]._tr.xpath('./w:trPr/w:tblHeader')))
+print('valign', t.cell(1, 1).vertical_alignment, t.cell(1, 2).vertical_alignment)
+print('shd', t.cell(0, 0)._tc.xpath('./w:tcPr/w:shd/@w:fill'))
+print('t2', d.tables[1]._tbl.xpath('./w:tblPr/w:tblBorders/w:top/@w:val'))
+`], { env: { ...process.env, PYTHONIOENCODING: 'utf-8' } }).toString('utf8');
+    expect(out).toContain('widths [3.0, 5.0, 8.0]');
+    expect(out).toContain('align CENTER');
+    expect(out).toContain('row1 1.0 EXACTLY');
+    expect(out).toContain('header True');
+    expect(out).toContain('valign CENTER (1) BOTTOM (3)');
+    expect(out).toContain("shd ['DCEFE9']");
+    expect(out).toContain("t2 ['nil']");
+  });
+
+  it('новая таблица — «Сетка таблицы»', async () => {
+    const table = { type: 'table', content: [{ type: 'tableRow', content: [{ type: 'tableCell', content: [{ type: 'paragraph' }] }] }] };
+    const doc = Node.fromJSON(schema, { type: 'doc', content: [table] }).toJSON();
+    expect(doc.content[0].attrs.borders.top).toEqual(line('single', 0.5));
+    const xml = await (await JSZip.loadAsync(await exportDocx(doc))).file('word/document.xml').async('string');
+    expect(xml).toContain('<w:tblBorders><w:top w:val="single" w:sz="4" w:space="0" w:color="auto"/>');
+  });
+});

@@ -4,6 +4,7 @@ import JSZip from 'jszip';
 import { DOMParser } from '@xmldom/xmldom';
 import { HIGHLIGHTS, normalizeColor } from '../editor/font.js';
 import { WORD_FALLBACK_PARA, paraBase, paraDiff, twipsToPt } from '../editor/paragraph.js';
+import { CELL_SIDES, NO_BORDERS, TABLE_SIDES, TWIPS_PER_PX, borderFromOoxml } from '../editor/table.js';
 
 const W = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main';
 const R = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships';
@@ -84,6 +85,7 @@ function parseStyles(doc, theme) {
       outlineLvl: wAttr(child(pPr, 'outlineLvl'), 'val'),
       marks: readRunMarks(rPr, theme),
       para: readParaProps(pPr),
+      tblBorders: readBorders(child(child(st, 'tblPr'), 'tblBorders'), TABLE_SIDES), // у стилей таблиц
     };
     const isDefault = ['1', 'true', 'on'].includes(String(wAttr(st, 'default')).toLowerCase());
     if (map[id].type === 'paragraph' && isDefault) defaultPara = id;
@@ -108,6 +110,19 @@ function resolvedStyle(styles, styleId, cache, key) {
 }
 const resolvedStyleMarks = (styles, id, cache) => resolvedStyle(styles, id, cache, 'marks');
 const resolvedStylePara = (styles, id, cache) => resolvedStyle(styles, id, cache, 'para');
+
+// ---------- Границы таблиц и ячеек ----------
+// <w:tblBorders>/<w:tcBorders> → { сторона: граница } только для заданных сторон (start/end = left/right)
+function readBorders(el, sides) {
+  const out = {};
+  if (!el) return out;
+  for (const side of sides) {
+    const alt = { left: 'start', right: 'end' }[side];
+    const b = child(el, side) || (alt && child(el, alt));
+    if (b) out[side] = borderFromOoxml(wAttr(b, 'val'), wAttr(b, 'sz'), wAttr(b, 'color'));
+  }
+  return out;
+}
 
 // ---------- Свойства абзаца: интервалы и отступы ----------
 // Возвращает только заданные в pPr ключи (в pt; межстрочный auto — множитель)
@@ -404,6 +419,19 @@ class Importer {
   }
 
   table(tbl) {
+    const tblPr = child(tbl, 'tblPr');
+    // Границы по умолчанию: стиль таблицы (с basedOn) ← прямые tblBorders; не заданное нигде — «нет» (TableNormal)
+    const styleId = wAttr(child(tblPr, 'tblStyle'), 'val');
+    const chain = [];
+    for (let id = styleId; id && this.styles[id] && chain.length < 10 && !chain.includes(id); id = this.styles[id].basedOn) chain.push(id);
+    const borders = { ...NO_BORDERS };
+    for (const id of chain.reverse()) Object.assign(borders, this.styles[id].tblBorders);
+    Object.assign(borders, readBorders(child(tblPr, 'tblBorders'), TABLE_SIDES));
+    const jc = wAttr(child(tblPr, 'jc'), 'val');
+    const align = { center: 'center', right: 'right', end: 'right' }[jc] || null;
+    // Ширины столбцов из сетки таблицы (твипы → px, как хранит TipTap)
+    const grid = children(child(tbl, 'tblGrid'), 'gridCol').map((g) => +wAttr(g, 'w') || 0);
+
     const rows = [];
     const origins = {}; // колонка → ячейка, начавшая вертикальное объединение
     for (const tr of children(tbl, 'tr')) {
@@ -414,21 +442,50 @@ class Importer {
         const span = +(wAttr(child(tcPr, 'gridSpan'), 'val') || 1);
         const vm = child(tcPr, 'vMerge');
         const vmVal = vm ? wAttr(vm, 'val') || 'continue' : null;
+        const cellBorders = readBorders(child(tcPr, 'tcBorders'), CELL_SIDES);
         if (vmVal === 'continue' && origins[col]) {
-          origins[col].attrs.rowspan += 1;
+          const o = origins[col];
+          o.attrs.rowspan += 1;
+          // нижнюю границу объединённой ячейки Word берёт у последней ячейки объединения
+          if (cellBorders.bottom) o.attrs.borders = { ...(o.attrs.borders || {}), bottom: cellBorders.bottom };
         } else {
           let content = this.blocks(tc);
           if (!content.length) content = [{ type: 'paragraph' }];
-          const cell = { type: 'tableCell', attrs: { colspan: span, rowspan: 1, colwidth: null }, content };
+          const widths = grid.slice(col, col + span);
+          const colwidth = widths.length === span && widths.every((w) => w > 0) ? widths.map((w) => w / TWIPS_PER_PX) : null;
+          const shd = child(tcPr, 'shd');
+          const fill = shd && (wAttr(shd, 'val') === 'solid' ? wAttr(shd, 'color') : wAttr(shd, 'fill'));
+          const va = wAttr(child(tcPr, 'vAlign'), 'val');
+          const cell = {
+            type: 'tableCell',
+            attrs: {
+              colspan: span,
+              rowspan: 1,
+              colwidth,
+              align: null,
+              borders: Object.keys(cellBorders).length ? cellBorders : null,
+              background: fill && fill.toLowerCase() !== 'auto' ? normalizeColor(fill) : null,
+              verticalAlign: va === 'center' || va === 'bottom' ? va : null,
+            },
+            content,
+          };
           cells.push(cell);
           if (vmVal === 'restart') origins[col] = cell;
           else delete origins[col];
         }
         col += span;
       }
-      if (cells.length) rows.push({ type: 'tableRow', content: cells });
+      const trPr = child(tr, 'trPr');
+      const th = child(trPr, 'trHeight');
+      const height = twipsToPt(wAttr(th, 'val'));
+      const rowAttrs = {
+        height: height || null,
+        heightRule: height && wAttr(th, 'hRule') === 'exact' ? 'exact' : null,
+        repeatHeader: !!onOff(child(trPr, 'tblHeader')),
+      };
+      if (cells.length) rows.push({ type: 'tableRow', attrs: rowAttrs, content: cells });
     }
-    return rows.length ? { type: 'table', content: rows } : null;
+    return rows.length ? { type: 'table', attrs: { borders, align }, content: rows } : null;
   }
 
   // Блочное содержимое тела документа / ячейки: абзацы, списки, таблицы
