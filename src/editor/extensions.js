@@ -20,6 +20,7 @@ import { Pagination } from './pagination.js';
 import { SearchReplace } from './search.js';
 import { ParagraphStyles, styleOf } from './styles.js';
 import { Comments } from './comments.js';
+import { Deletion, Insertion, TrackChanges } from './track.js';
 
 // Как оформлены заголовки (совпадает со styles.css и стилями Heading1–6 в export.js)
 export const HEADING_FONT = 'Calibri Light';
@@ -194,6 +195,9 @@ export const extensions = [
   ParaFormat,
   ParagraphStyles,
   Comments,
+  Insertion,
+  Deletion,
+  TrackChanges,
   PeroTable.configure({ resizable: true }),
   PeroTableRow,
   PeroTableCell,

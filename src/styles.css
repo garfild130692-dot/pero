@@ -247,6 +247,11 @@ body { background: var(--workspace); overflow: hidden; }
 .cc-text { width: 100%; margin-top: 4px; font: 12.5px 'Segoe UI', sans-serif; border: 1px solid #ccc; border-radius: 3px; padding: 4px 6px; resize: vertical; }
 @media print { .comments-panel { display: none !important; } .page-content .comment-range { background: none; border: 0; } }
 
+/* Исправления */
+.page-content ins.rev-ins { color: #1a5fb4; text-decoration: underline; text-decoration-color: #1a5fb4; }
+.page-content del.rev-del { color: #c01c28; text-decoration: line-through; }
+.statusbar .track-on { color: #1a5fb4; font-weight: 600; }
+
 /* Поиск и замена */
 .findbar {
   position: sticky; top: 4px; z-index: 6; float: right; margin: 4px 16px 0 0; background: #fff; border: 1px solid #c9c9c9;

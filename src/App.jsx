@@ -20,6 +20,7 @@ import StyleDialog from './StyleDialog.jsx';
 import { styleCss } from './editor/styles.js';
 import CommentsPanel from './CommentsPanel.jsx';
 import { orderedComments, commentsKey } from './editor/comments.js';
+import { trackInfo } from './editor/track.js';
 
 // «Одинарный» интервал Word = естественная высота строки шрифта (ascent + descent + lineGap).
 // В CSS её даёт line-height: normal; меряем отношение к размеру шрифта и кешируем.
@@ -140,11 +141,11 @@ function LinkDialog({ editor, onClose }) {
 }
 
 function StatusBar({ editor, warnings, preserved, zoom, setZoom }) {
-  const { words, chars, page, total } = useEditorState({
+  const { words, chars, page, total, track } = useEditorState({
     editor,
     selector: ({ editor: e }) => {
       const t = e.state.doc.textBetween(0, e.state.doc.content.size, ' ', ' ');
-      return { words: (t.match(/[\p{L}\p{N}][\p{L}\p{N}'’-]*/gu) || []).length, chars: t.replace(/\s/g, '').length, ...pageInfo(e.state) };
+      return { words: (t.match(/[\p{L}\p{N}][\p{L}\p{N}'’-]*/gu) || []).length, chars: t.replace(/\s/g, '').length, ...pageInfo(e.state), track: trackInfo(e.state) };
     },
   });
   const warnList = Object.entries(warnings);
@@ -156,6 +157,8 @@ function StatusBar({ editor, warnings, preserved, zoom, setZoom }) {
       <span>Слов: {words.toLocaleString('ru-RU')}</span>
       <span>Знаков: {chars.toLocaleString('ru-RU')}</span>
       <span>Русский</span>
+      {track.enabled && <span className="track-on" title="Правки записываются как исправления">Исправления: вкл.</span>}
+      {!track.enabled && track.count > 0 && <span title="В документе есть исправления — см. вкладку «Рецензирование»">Исправлений: {track.count}</span>}
       {warnList.length > 0 && (
         <span className="warn" title={'Пока не поддерживается и будет потеряно при сохранении:\n' + warnList.map(([k, n]) => `• ${k}: ${n}`).join('\n')}>
           ⚠ Будет потеряно при сохранении: {warnList.map(([k]) => k).join(', ')}
@@ -213,6 +216,8 @@ export default function App() {
     },
     onUpdate: ({ transaction }) => { if (transaction.docChanged) setDirtyState(true); },
   });
+
+  useEffect(() => { if (editor) editor.commands.setTrackAuthor(userName); }, [editor, userName]);
 
   useEffect(() => {
     fileApi.setDirty(dirty);

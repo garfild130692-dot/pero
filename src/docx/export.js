@@ -116,6 +116,11 @@ class Exporter {
     this.numBase = numBase; // первый свободный numId (в исходном numbering.xml уже могут быть свои)
   }
 
+  nextRev() {
+    this.revCounter = (this.revCounter || 90000) + 1;
+    return String(this.revCounter);
+  }
+
   linkId(href) {
     let i = this.links.indexOf(href);
     if (i < 0) { this.links.push(href); i = this.links.length - 1; }
@@ -154,13 +159,23 @@ class Exporter {
     if (has('superscript')) rPr += '<w:vertAlign w:val="superscript"/>';
     else if (has('subscript')) rPr += '<w:vertAlign w:val="subscript"/>';
     const rPrXml = rPr ? `<w:rPr>${rPr}</w:rPr>` : '';
+    const del = marks.find((m) => m.type === 'deletion');
+    const ins = marks.find((m) => m.type === 'insertion');
+    const tTag = del ? 'w:delText' : 'w:t'; // удалённый текст — w:delText
     const parts = node.text.split('\t');
     let inner = '';
     parts.forEach((p, i) => {
       if (i > 0) inner += '<w:tab/>';
-      if (p) inner += `<w:t xml:space="preserve">${esc(p)}</w:t>`;
+      if (p) inner += `<${tTag} xml:space="preserve">${esc(p)}</${tTag}>`;
     });
-    const r = `<w:r>${rPrXml}${inner}</w:r>`;
+    let r = `<w:r>${rPrXml}${inner}</w:r>`;
+    // исправления: w:ins / w:del вокруг прогона (гиперссылка — снаружи)
+    const rev = del || ins;
+    if (rev) {
+      const a = rev.attrs || {};
+      const tag = del ? 'w:del' : 'w:ins';
+      r = `<${tag} w:id="${esc(a.id || this.nextRev())}" w:author="${esc(a.author || 'Пользователь')}"${a.date ? ` w:date="${esc(a.date)}"` : ''}>${r}</${tag}>`;
+    }
     if (link) {
       const href = link.attrs.href || '';
       if (href.startsWith('#')) return `<w:hyperlink w:anchor="${esc(href.slice(1))}">${r}</w:hyperlink>`;

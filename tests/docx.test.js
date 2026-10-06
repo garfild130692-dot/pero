@@ -644,3 +644,34 @@ describe('примечания', () => {
     expect(await zip.file('word/_rels/document.xml.rels').async('string')).not.toContain('/comments"');
   });
 });
+
+describe('исправления', () => {
+  it('импорт: вставка и удаление Word — текст с метками правки, потерь нет', async () => {
+    const { doc, warnings } = await importDocx(readFileSync('tests/fixtures/track.docx'));
+    expect(warnings).toEqual({});
+    const ins = marksOf(doc, 'срочной ');
+    expect(ins.insertion).toMatchObject({ author: 'Перо Тест' });
+    expect(ins.insertion.id).toBeTruthy();
+    expect(marksOf(doc, ' сегодня').deletion).toMatchObject({ author: 'Перо Тест' });
+    expect(text(doc)).toBe('Договор срочной поставки товара заключён сегодня.');
+  });
+
+  it('round-trip и python-docx: w:ins/w:del с автором, удалённый текст — w:delText', async () => {
+    const src = readFileSync('tests/fixtures/track.docx');
+    const a = (await importDocx(src)).doc;
+    const bytes = await exportDocx(a, { source: src });
+    writeFileSync('tests/out/track.docx', bytes);
+    expect((await importDocx(bytes)).doc).toEqual(a);
+    const xml = await (await JSZip.loadAsync(bytes)).file('word/document.xml').async('string');
+    expect(xml).toMatch(/<w:ins w:id="\d+" w:author="Перо Тест" w:date="[^"]+"><w:r><w:t xml:space="preserve">срочной <\/w:t><\/w:r><\/w:ins>/);
+    expect(xml).toMatch(/<w:del w:id="\d+" w:author="Перо Тест"[^>]*><w:r><w:delText xml:space="preserve"> сегодня<\/w:delText><\/w:r><\/w:del>/);
+  });
+
+  it('принять/отклонить: команды над JSON-документом через схему', async () => {
+    const { allRevisions } = await import('../src/editor/track.js');
+    const { doc } = await importDocx(readFileSync('tests/fixtures/track.docx'));
+    const node = Node.fromJSON(schema, doc);
+    const revs = allRevisions(node);
+    expect(revs.map((r) => [r.type, node.textBetween(r.from, r.to)])).toEqual([['insertion', 'срочной '], ['deletion', ' сегодня']]);
+  });
+});

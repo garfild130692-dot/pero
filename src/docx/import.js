@@ -360,6 +360,7 @@ class Importer {
     this.docDefaults = ctx.docDefaults;
     this.docPara = ctx.docPara;
     this.usedStyles = {};  // пользовательские стили абзацев, на которые ссылается документ
+    this.rev = null;       // текущая правка (внутри w:ins / w:del)
     this.fontBase = null;  // шрифт/размер, от которых считается прямое форматирование в текущем абзаце
     this.styleCache = {};
     this.numbering = ctx.numbering;
@@ -401,8 +402,13 @@ class Importer {
           const href = rid && this.rels[rid] ? this.rels[rid].target : anchor ? '#' + anchor : null;
           walk(n, href);
         } else if (['smartTag', 'customXml', 'dir', 'bdo'].includes(name)) walk(n, link);
-        else if (name === 'ins' || name === 'moveTo') { this.warn('исправления'); walk(n, link); } // текст остаётся, пометка правки — нет
-        else if (name === 'del' || name === 'moveFrom') this.warn('исправления');                   // удалённый текст теряется
+        else if (['ins', 'moveTo', 'del', 'moveFrom'].includes(name)) {
+          // исправления: вставленный/удалённый текст с меткой правки (автор, дата, id)
+          const prev = this.rev;
+          this.rev = { type: name === 'ins' || name === 'moveTo' ? 'insertion' : 'deletion', attrs: { id: wAttr(n, 'id'), author: wAttr(n, 'author') || '', date: wAttr(n, 'date') || '' } };
+          walk(n, link);
+          this.rev = prev;
+        }
         else if (name === 'sdt') { this.warn('элементы управления содержимым'); walk(child(n, 'sdtContent'), link); }
         else if (name === 'bookmarkStart' || name === 'bookmarkEnd') this.opaque(push, 'bookmark', xmlOf(n));
         else if (name === 'commentRangeStart' || name === 'commentRangeEnd') this.opaque(push, 'commentRange', xmlOf(n));
@@ -431,6 +437,8 @@ class Importer {
       if (m.fontSize === base.fontSize) delete m.fontSize;
     }
     const marks = marksToArray(m, link);
+    if (this.rev) marks.push({ type: this.rev.type, attrs: this.rev.attrs });
+    if (child(rPr, 'rPrChange')) this.warn('исправления форматирования');
     const text = (t) => t && push(marks.length ? { type: 'text', text: t, marks } : { type: 'text', text: t });
     // Отдельный «прогон» для сохраняемого элемента: те же свойства символов (rPr) + сам элемент
     const runXml = (n) => {
@@ -441,7 +449,7 @@ class Importer {
     };
     for (const n of children(r)) {
       switch (ln(n)) {
-        case 't': text(n.textContent); break;
+        case 't': case 'delText': text(n.textContent); break;
         case 'tab': case 'ptab': text('\t'); break;
         case 'noBreakHyphen': text('‑'); break;
         case 'softHyphen': text('\u00ad'); break;
@@ -511,6 +519,7 @@ class Importer {
 
   paragraph(p) {
     const pPr = child(p, 'pPr');
+    if (child(pPr, 'pPrChange')) this.warn('исправления форматирования');
     const styleId = wAttr(child(pPr, 'pStyle'), 'val') || this.defaultPara;
     const level = headingLevel(this.styles, styleId);
     let numPr = readNumPr(child(pPr, 'numPr'));

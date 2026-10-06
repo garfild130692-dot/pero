@@ -8,6 +8,7 @@ import { PicturePanel } from './PictureControls.jsx';
 import { LayoutPanel } from './PageControls.jsx';
 import { cssFontStack } from './editor/font.js';
 import { TABLE_STYLES } from './editor/tableFormat.js';
+import { trackInfo } from './editor/track.js';
 import { FontFamilyBox, FontSizeBox, HighlightButton, TextColorButton, fontState, usePopover } from './FontControls.jsx';
 import { effectivePara } from './editor/paraFormat.js';
 import { LINE_PRESETS, fmtNum } from './editor/paragraph.js';
@@ -200,6 +201,7 @@ export default function Ribbon({ editor, file, onLink, onParagraph, onMargins, o
       image: e.state.selection.node && e.state.selection.node.type.name === 'image' ? e.state.selection.node.attrs : null,
       page: { sectPr: e.state.doc.attrs.sectPr, hf: e.state.doc.attrs.hf }, // для вкладки «Макет»
       styles: e.state.doc.attrs.styles || [],
+      track: trackInfo(e.state),
       styleId: e.state.selection.$from.parent.attrs.styleId || null,
     }),
     // в состоянии есть вложенный объект — сравниваем по значению, чтобы лента не перерисовывалась зря
@@ -391,6 +393,27 @@ export default function Ribbon({ editor, file, onLink, onParagraph, onMargins, o
                 <Btn title="Следующее примечание" onClick={() => review.stepComment(1)}><span className="rb-inline">Следующее ▶</span></Btn>
               </div>
               <Btn big icon="comments" label="Показать примечания" active={review.showComments} onClick={review.toggleComments} />
+            </Group>
+            <Group title="Исправления">
+              <Btn big icon="track" label="Исправления" active={s.track.enabled}
+                title="Режим исправлений: правки записываются и показываются, их можно принять или отклонить"
+                onClick={() => c().setTrackChanges(!s.track.enabled).run()} />
+              <div className="rb-rows">
+                <Btn title="Принять исправление под курсором или в выделении" disabled={!s.track.count} onClick={() => c().resolveChange(true).run()}>
+                  <Icon.accept /> <span className="rb-inline">Принять</span>
+                </Btn>
+                <Btn title="Отклонить исправление под курсором или в выделении" disabled={!s.track.count} onClick={() => c().resolveChange(false).run()}>
+                  <Icon.reject /> <span className="rb-inline">Отклонить</span>
+                </Btn>
+              </div>
+              <div className="rb-rows">
+                <Btn title="Принять все исправления" disabled={!s.track.count} onClick={() => c().resolveAllChanges(true).run()}><span className="rb-inline">Принять все</span></Btn>
+                <Btn title="Отклонить все исправления" disabled={!s.track.count} onClick={() => c().resolveAllChanges(false).run()}><span className="rb-inline">Отклонить все</span></Btn>
+              </div>
+              <div className="rb-rows">
+                <Btn title="Предыдущее исправление" disabled={!s.track.count} onClick={() => c().goToChange(-1).run()}><span className="rb-inline">◀ Предыдущее</span></Btn>
+                <Btn title="Следующее исправление" disabled={!s.track.count} onClick={() => c().goToChange(1).run()}><span className="rb-inline">Следующее ▶</span></Btn>
+              </div>
             </Group>
           </>
         )}
