@@ -3,6 +3,7 @@ import React, { useState } from 'react';
 import { useEditorState } from '@tiptap/react';
 import { Icon } from './icons.jsx';
 import { clipboard } from './fileApi.js';
+import { FontFamilyBox, FontSizeBox, HighlightButton, TextColorButton, fontState, usePopover } from './FontControls.jsx';
 
 function Btn({ icon, label, title, onClick, active, disabled, big, children }) {
   const I = icon && Icon[icon];
@@ -36,11 +37,11 @@ const STYLES = [
   { key: 3, label: 'Заголовок 3', cls: 'st-h3' },
 ];
 
-function TablePicker({ onPick }) {
+function TablePicker({ onPick, style }) {
   const [hover, setHover] = useState([0, 0]);
   const N = 8;
   return (
-    <div className="table-picker" onMouseLeave={() => setHover([0, 0])}>
+    <div className="table-picker" style={style} onMouseLeave={() => setHover([0, 0])}>
       <div className="tp-title">{hover[0] ? `Таблица ${hover[1]}×${hover[0]}` : 'Вставка таблицы'}</div>
       <div className="tp-grid">
         {Array.from({ length: N * N }, (_, i) => {
@@ -64,7 +65,7 @@ function TablePicker({ onPick }) {
 
 export default function Ribbon({ editor, file, onLink }) {
   const [tab, setTab] = useState('home');
-  const [tablePicker, setTablePicker] = useState(false);
+  const tablePicker = usePopover();
 
   const s = useEditorState({
     editor,
@@ -85,7 +86,10 @@ export default function Ribbon({ editor, file, onLink }) {
       canLift: e.can().liftListItem('listItem'),
       canMerge: e.can().mergeCells(),
       canSplit: e.can().splitCell(),
+      font: fontState(e),
     }),
+    // в состоянии есть вложенный объект — сравниваем по значению, чтобы лента не перерисовывалась зря
+    equalityFn: (a, b) => JSON.stringify(a) === JSON.stringify(b),
   });
 
   const c = () => editor.chain().focus();
@@ -135,12 +139,25 @@ export default function Ribbon({ editor, file, onLink }) {
             </Group>
 
             <Group title="Шрифт">
-              <div className="rb-row">
-                <Btn title="Полужирный (Ctrl+B)" active={s.bold} onClick={() => c().toggleBold().run()}><b className="glyph">Ж</b></Btn>
-                <Btn title="Курсив (Ctrl+I)" active={s.italic} onClick={() => c().toggleItalic().run()}><i className="glyph serif">К</i></Btn>
-                <Btn title="Подчёркнутый (Ctrl+U)" active={s.underline} onClick={() => c().toggleUnderline().run()}><u className="glyph">Ч</u></Btn>
-                <Btn title="Зачёркнутый" active={s.strike} onClick={() => c().toggleStrike().run()}><s className="glyph">abc</s></Btn>
-                <Btn icon="clear" title="Очистить форматирование" onClick={() => c().unsetAllMarks().run()} />
+              <div className="rb-rows">
+                <div className="rb-row">
+                  <FontFamilyBox editor={editor} value={s.font.fontFamily} />
+                  <FontSizeBox editor={editor} value={s.font.fontSize} />
+                  <Btn title="Увеличить размер (Ctrl+Shift+>)" onClick={() => c().changeFontSize(1).run()}><span className="glyph-grow">A<small>▲</small></span></Btn>
+                  <Btn title="Уменьшить размер (Ctrl+Shift+<)" onClick={() => c().changeFontSize(-1).run()}><span className="glyph-grow small">A<small>▼</small></span></Btn>
+                  <Btn icon="clear" title="Очистить форматирование (Ctrl+Пробел)" onClick={() => c().clearFormatting().run()} />
+                </div>
+                <div className="rb-row">
+                  <Btn title="Полужирный (Ctrl+B)" active={s.bold} onClick={() => c().toggleBold().run()}><b className="glyph">Ж</b></Btn>
+                  <Btn title="Курсив (Ctrl+I)" active={s.italic} onClick={() => c().toggleItalic().run()}><i className="glyph serif">К</i></Btn>
+                  <Btn title="Подчёркнутый (Ctrl+U)" active={s.underline} onClick={() => c().toggleUnderline().run()}><u className="glyph">Ч</u></Btn>
+                  <Btn title="Зачёркнутый" active={s.strike} onClick={() => c().toggleStrike().run()}><s className="glyph">abc</s></Btn>
+                  <Btn title="Подстрочный знак (Ctrl+=)" active={s.font.subscript} onClick={() => c().toggleSubscript().run()}><span className="glyph">x<sub>2</sub></span></Btn>
+                  <Btn title="Надстрочный знак (Ctrl+Shift++)" active={s.font.superscript} onClick={() => c().toggleSuperscript().run()}><span className="glyph">x<sup>2</sup></span></Btn>
+                  <span className="rb-sep" />
+                  <HighlightButton editor={editor} />
+                  <TextColorButton editor={editor} />
+                </div>
               </div>
             </Group>
 
@@ -185,12 +202,13 @@ export default function Ribbon({ editor, file, onLink }) {
         {activeTab === 'insert' && (
           <>
             <Group title="Таблицы">
-              <div className="rb-popover-anchor">
-                <Btn big icon="table" label="Таблица" onClick={() => setTablePicker((v) => !v)} />
-                {tablePicker && (
+              <div className="rb-popover-anchor" ref={tablePicker.ref}>
+                <Btn big icon="table" label="Таблица" onClick={() => tablePicker.setOpen(!tablePicker.open)} />
+                {tablePicker.open && (
                   <TablePicker
+                    style={tablePicker.style}
                     onPick={(rows, cols) => {
-                      setTablePicker(false);
+                      tablePicker.setOpen(false);
                       c().insertTable({ rows, cols, withHeaderRow: false }).run();
                     }}
                   />

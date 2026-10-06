@@ -2,6 +2,7 @@
 // Собственный разбор OOXML: никаких сторонних конвертеров, только распаковка zip и XML.
 import JSZip from 'jszip';
 import { DOMParser } from '@xmldom/xmldom';
+import { HIGHLIGHTS, normalizeColor } from '../editor/font.js';
 
 const W = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main';
 const R = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships';
@@ -40,11 +41,34 @@ function parseXml(text) {
   return new DOMParser().parseFromString(text, 'text/xml');
 }
 
+// ---------- Тема оформления: шрифты заголовков (major) и основного текста (minor) ----------
+function parseTheme(doc) {
+  const theme = { major: null, minor: null };
+  if (!doc) return theme;
+  const find = (el, name) => {
+    if (!el) return null;
+    for (const c of children(el)) {
+      if (ln(c) === name) return c;
+      const deep = find(c, name);
+      if (deep) return deep;
+    }
+    return null;
+  };
+  const scheme = find(doc.documentElement, 'fontScheme');
+  for (const key of ['major', 'minor']) {
+    const latin = child(child(scheme, key + 'Font'), 'latin');
+    theme[key] = (latin && latin.getAttribute('typeface')) || null;
+  }
+  return theme;
+}
+
 // ---------- Стили ----------
-function parseStyles(doc) {
+function parseStyles(doc, theme) {
   const map = {};
-  if (!doc) return map;
+  const defaults = { marks: {} };
+  if (!doc) return { map, defaults, defaultPara: null };
   const root = doc.documentElement;
+  let defaultPara = null;
   for (const st of children(root, 'style')) {
     const id = wAttr(st, 'styleId');
     if (!id) continue;
@@ -57,10 +81,26 @@ function parseStyles(doc) {
       jc: wAttr(child(pPr, 'jc'), 'val'),
       numPr: readNumPr(child(pPr, 'numPr')),
       outlineLvl: wAttr(child(pPr, 'outlineLvl'), 'val'),
-      marks: readRunMarks(rPr),
+      marks: readRunMarks(rPr, theme),
     };
+    const isDefault = ['1', 'true', 'on'].includes(String(wAttr(st, 'default')).toLowerCase());
+    if (map[id].type === 'paragraph' && isDefault) defaultPara = id;
   }
-  return map;
+  const rPrDefault = child(child(child(root, 'docDefaults'), 'rPrDefault'), 'rPr');
+  defaults.marks = readRunMarks(rPrDefault, theme);
+  return { map, defaults, defaultPara };
+}
+
+// Свойства символов стиля с учётом цепочки basedOn (родитель → потомок)
+function resolvedStyleMarks(styles, styleId, cache) {
+  if (!styleId || !styles[styleId]) return {};
+  if (cache[styleId]) return cache[styleId];
+  const chain = [];
+  for (let id = styleId; id && styles[id] && chain.length < 10 && !chain.includes(id); id = styles[id].basedOn) chain.push(id);
+  const marks = {};
+  for (const id of chain.reverse()) Object.assign(marks, styles[id].marks);
+  cache[styleId] = marks;
+  return marks;
 }
 
 // Уровень заголовка по стилю. Учитываем локализованные styleId (в русском Word
@@ -137,7 +177,22 @@ function parseRels(doc) {
 }
 
 // ---------- Форматирование символов ----------
-function readRunMarks(rPr) {
+// Гарнитура из w:rFonts. Шрифт темы (asciiTheme/hAnsiTheme) приоритетнее явного — так считает Word.
+// Кириллица в Word отображается шрифтом hAnsi, латиница — ascii; обычно они совпадают.
+function readFont(rFonts, theme) {
+  if (!rFonts) return null;
+  for (const attr of ['hAnsiTheme', 'asciiTheme']) {
+    const t = wAttr(rFonts, attr);
+    if (t) {
+      const f = t.startsWith('major') ? theme.major : t.startsWith('minor') ? theme.minor : null;
+      if (f) return f;
+    }
+  }
+  return wAttr(rFonts, 'hAnsi') || wAttr(rFonts, 'ascii') || null;
+}
+
+// Свойства символов. Для цвета/выделения null означает явное «нет» (перекрывает стиль), отсутствие ключа — «не задано».
+function readRunMarks(rPr, theme = {}) {
   const marks = {};
   if (!rPr) return marks;
   const b = onOff(child(rPr, 'b'));
@@ -148,6 +203,27 @@ function readRunMarks(rPr) {
   if (s !== null) marks.strike = s;
   const u = child(rPr, 'u');
   if (u) marks.underline = onOff(u);
+
+  const font = readFont(child(rPr, 'rFonts'), theme);
+  if (font) marks.fontFamily = font;
+  const sz = +wAttr(child(rPr, 'sz'), 'val');
+  if (sz > 0) marks.fontSize = sz / 2;
+  const color = child(rPr, 'color');
+  if (color) {
+    const v = wAttr(color, 'val');
+    marks.color = !v || v.toLowerCase() === 'auto' ? null : normalizeColor(v);
+  }
+  const hl = child(rPr, 'highlight');
+  if (hl) marks.highlight = HIGHLIGHTS[wAttr(hl, 'val')] || null;
+  const shd = child(rPr, 'shd');
+  if (shd) {
+    // заливка: обычно fill; при узоре solid цвет берётся из color
+    const v = wAttr(shd, 'val');
+    const fill = v === 'solid' ? wAttr(shd, 'color') : wAttr(shd, 'fill');
+    marks.shading = fill && fill.toLowerCase() !== 'auto' && v !== 'nil' ? normalizeColor(fill) : null;
+  }
+  const va = wAttr(child(rPr, 'vertAlign'), 'val');
+  if (va) marks.vertAlign = va === 'superscript' || va === 'subscript' ? va : null;
   return marks;
 }
 
@@ -158,6 +234,14 @@ function marksToArray(m, link) {
   if (m.italic) out.push({ type: 'italic' });
   if (m.strike) out.push({ type: 'strike' });
   if (m.underline) out.push({ type: 'underline' });
+  if (m.fontFamily || m.fontSize || m.color) {
+    out.push({ type: 'textStyle', attrs: { fontFamily: m.fontFamily || null, fontSize: m.fontSize || null, color: m.color || null } });
+  }
+  // выделение цветом рисуется поверх заливки — если есть оба, видно выделение
+  const bg = m.highlight || m.shading;
+  if (bg) out.push({ type: 'highlight', attrs: { color: bg } });
+  if (m.vertAlign === 'superscript') out.push({ type: 'superscript' });
+  if (m.vertAlign === 'subscript') out.push({ type: 'subscript' });
   return out;
 }
 
@@ -165,6 +249,10 @@ function marksToArray(m, link) {
 class Importer {
   constructor(ctx) {
     this.styles = ctx.styles;
+    this.defaultPara = ctx.defaultPara;
+    this.theme = ctx.theme;
+    this.docDefaults = ctx.docDefaults;
+    this.styleCache = {};
     this.numbering = ctx.numbering;
     this.rels = ctx.rels;
     this.warnings = {};
@@ -175,7 +263,7 @@ class Importer {
   }
 
   // Содержимое абзаца → массив inline-узлов
-  inlines(p, paraMarks) {
+  inlines(p, paraMarks, isHeading) {
     const out = [];
     const push = (node) => {
       const last = out[out.length - 1];
@@ -188,7 +276,7 @@ class Importer {
     const walk = (el, link) => {
       for (const n of children(el)) {
         const name = ln(n);
-        if (name === 'r') this.run(n, paraMarks, link, push);
+        if (name === 'r') this.run(n, paraMarks, link, push, isHeading);
         else if (name === 'hyperlink') {
           const rid = n.getAttributeNS(R, 'id') || n.getAttribute('r:id');
           const anchor = wAttr(n, 'anchor');
@@ -205,8 +293,18 @@ class Importer {
     return out;
   }
 
-  run(r, paraMarks, link, push) {
-    const m = { ...paraMarks, ...readRunMarks(child(r, 'rPr')) };
+  run(r, paraMarks, link, push, isHeading) {
+    const rPr = child(r, 'rPr');
+    // символьный стиль (кроме «Гиперссылки» — её вид задаёт сама ссылка)
+    const rStyle = wAttr(child(rPr, 'rStyle'), 'val');
+    const charMarks = rStyle && this.styles[rStyle] && this.styles[rStyle].name !== 'hyperlink'
+      ? resolvedStyleMarks(this.styles, rStyle, this.styleCache) : {};
+    const m = { ...paraMarks, ...charMarks, ...readRunMarks(rPr, this.theme) };
+    // совпадающее с умолчаниями документа — не прямое форматирование (у заголовков свои шрифт и размер)
+    if (!isHeading) {
+      if (m.fontFamily === this.docDefaults.fontFamily) delete m.fontFamily;
+      if (m.fontSize === this.docDefaults.fontSize) delete m.fontSize;
+    }
     const marks = marksToArray(m, link);
     const text = (t) => t && push(marks.length ? { type: 'text', text: t, marks } : { type: 'text', text: t });
     for (const n of children(r)) {
@@ -229,12 +327,12 @@ class Importer {
 
   paragraph(p) {
     const pPr = child(p, 'pPr');
-    const styleId = wAttr(child(pPr, 'pStyle'), 'val');
+    const styleId = wAttr(child(pPr, 'pStyle'), 'val') || this.defaultPara;
     const jc = wAttr(child(pPr, 'jc'), 'val') || styleProp(this.styles, styleId, 'jc');
     const textAlign = { center: 'center', right: 'right', end: 'right', both: 'justify', distribute: 'justify' }[jc] || null;
-    const styleMarks = (styleId && this.styles[styleId] && this.styles[styleId].marks) || {};
     const level = headingLevel(this.styles, styleId);
-    const content = this.inlines(p, level ? {} : styleMarks);
+    const styleMarks = level ? {} : resolvedStyleMarks(this.styles, styleId, this.styleCache);
+    const content = this.inlines(p, styleMarks, !!level);
     const node = level
       ? { type: 'heading', attrs: { level, textAlign }, content }
       : { type: 'paragraph', attrs: { textAlign }, content };
@@ -347,8 +445,17 @@ export async function importDocx(data) {
   const documentXml = await read('word/document.xml');
   if (!documentXml) throw new Error('Это не документ Word: внутри нет word/document.xml');
 
+  const theme = parseTheme(await read('word/theme/theme1.xml'));
+  const { map: styles, defaults, defaultPara } = parseStyles(await read('word/styles.xml'), theme);
+  // Шрифт/размер документа: docDefaults, поверх — стиль абзаца по умолчанию («Обычный»).
+  // Если не задано нигде — так же, как Word: Times New Roman 10 pt.
+  const normal = { ...defaults.marks, ...resolvedStyleMarks(styles, defaultPara, {}) };
+  const docDefaults = { fontFamily: normal.fontFamily || 'Times New Roman', fontSize: normal.fontSize || 10 };
   const imp = new Importer({
-    styles: parseStyles(await read('word/styles.xml')),
+    styles,
+    defaultPara,
+    theme,
+    docDefaults,
     numbering: parseNumbering(await read('word/numbering.xml')),
     rels: parseRels(await read('word/_rels/document.xml.rels')),
   });
@@ -356,5 +463,5 @@ export async function importDocx(data) {
   let content = imp.blocks(body);
   if (!content.length) content = [{ type: 'paragraph' }];
   if (zip.file('word/comments.xml')) imp.warn('комментарии');
-  return { doc: { type: 'doc', content }, warnings: imp.warnings };
+  return { doc: { type: 'doc', attrs: docDefaults, content }, warnings: imp.warnings };
 }

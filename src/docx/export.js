@@ -1,5 +1,6 @@
 // Экспорт JSON-документа редактора → .docx (OOXML), собственная генерация.
 import JSZip from 'jszip';
+import { DEFAULT_FONT, DEFAULT_SIZE, highlightName, normalizeColor, parseSize } from '../editor/font.js';
 
 // Параметры страницы A4 как у русского Word по умолчанию (в твипах, 1 см = 567)
 export const PAGE = { w: 11906, h: 16838, top: 1134, right: 850, bottom: 1134, left: 1701 };
@@ -31,14 +32,30 @@ class Exporter {
     if (node.type !== 'text') return '';
     const marks = node.marks || [];
     const has = (t) => marks.some((m) => m.type === t);
+    const attrs = (t) => (marks.find((m) => m.type === t) || {}).attrs || {};
     const link = marks.find((m) => m.type === 'link');
-    // порядок элементов rPr задан схемой: rStyle, b, i, strike, color, u
+    const ts = attrs('textStyle');
+    const font = ts.fontFamily;
+    const size = parseSize(ts.fontSize);
+    const color = normalizeColor(ts.color);
+    const bg = has('highlight') ? normalizeColor(attrs('highlight').color) || '#ffff00' : null;
+    const hl = bg && highlightName(bg);
+    // порядок элементов rPr задан схемой (CT_RPr): rStyle, rFonts, b, bCs, i, iCs, strike, color, sz, szCs,
+    // highlight, u, shd, vertAlign
     let rPr = '';
     if (link) rPr += '<w:rStyle w:val="Hyperlink"/>';
+    if (font) rPr += `<w:rFonts w:ascii="${esc(font)}" w:hAnsi="${esc(font)}" w:eastAsia="${esc(font)}" w:cs="${esc(font)}"/>`;
     if (has('bold')) rPr += '<w:b/><w:bCs/>';
     if (has('italic')) rPr += '<w:i/><w:iCs/>';
     if (has('strike')) rPr += '<w:strike/>';
+    if (color) rPr += `<w:color w:val="${color.slice(1).toUpperCase()}"/>`;
+    if (size) rPr += `<w:sz w:val="${Math.round(size * 2)}"/><w:szCs w:val="${Math.round(size * 2)}"/>`;
+    // стандартный цвет выделения — w:highlight, любой другой — заливка w:shd
+    if (hl) rPr += `<w:highlight w:val="${hl}"/>`;
     if (has('underline')) rPr += '<w:u w:val="single"/>';
+    if (bg && !hl) rPr += `<w:shd w:val="clear" w:color="auto" w:fill="${bg.slice(1).toUpperCase()}"/>`;
+    if (has('superscript')) rPr += '<w:vertAlign w:val="superscript"/>';
+    else if (has('subscript')) rPr += '<w:vertAlign w:val="subscript"/>';
     const rPrXml = rPr ? `<w:rPr>${rPr}</w:rPr>` : '';
     const parts = node.text.split('\t');
     let inner = '';
@@ -223,12 +240,14 @@ function headingStyle(n) {
   const color = n <= 2 ? '2F5496' : '1F3763';
   return `<w:style w:type="paragraph" w:styleId="Heading${n}"><w:name w:val="heading ${n}"/><w:basedOn w:val="Normal"/><w:next w:val="Normal"/><w:uiPriority w:val="9"/><w:qFormat/>` +
     `<w:pPr><w:keepNext/><w:keepLines/><w:spacing w:before="${n === 1 ? 240 : 40}" w:after="0"/><w:outlineLvl w:val="${n - 1}"/></w:pPr>` +
-    `<w:rPr><w:rFonts w:asciiTheme="majorHAnsi" w:hAnsiTheme="majorHAnsi" w:cstheme="majorBidi"/>${n >= 4 ? '<w:i/>' : ''}<w:color w:val="${color}"/><w:sz w:val="${size}"/><w:szCs w:val="${size}"/></w:rPr></w:style>`;
+    // шрифт заголовков задаём явно: темы оформления (theme1.xml) мы не пишем
+    `<w:rPr><w:rFonts w:ascii="Calibri Light" w:hAnsi="Calibri Light" w:eastAsia="Calibri Light" w:cs="Calibri Light"/>${n >= 4 ? '<w:i/>' : ''}<w:color w:val="${color}"/><w:sz w:val="${size}"/><w:szCs w:val="${size}"/></w:rPr></w:style>`;
 }
 
-const STYLES_XML = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+// Шрифт и размер документа по умолчанию — из атрибутов документа
+const stylesXml = (font, size) => `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <w:styles ${NS}>
-<w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:ascii="Calibri" w:hAnsi="Calibri" w:eastAsia="Calibri" w:cs="Calibri"/><w:sz w:val="22"/><w:szCs w:val="22"/><w:lang w:val="ru-RU" w:eastAsia="en-US" w:bidi="ar-SA"/></w:rPr></w:rPrDefault>
+<w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:ascii="${esc(font)}" w:hAnsi="${esc(font)}" w:eastAsia="${esc(font)}" w:cs="${esc(font)}"/><w:sz w:val="${Math.round(size * 2)}"/><w:szCs w:val="${Math.round(size * 2)}"/><w:lang w:val="ru-RU" w:eastAsia="en-US" w:bidi="ar-SA"/></w:rPr></w:rPrDefault>
 <w:pPrDefault><w:pPr><w:spacing w:after="160" w:line="259" w:lineRule="auto"/></w:pPr></w:pPrDefault></w:docDefaults>
 <w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/><w:qFormat/></w:style>
 ${[1, 2, 3, 4, 5, 6].map(headingStyle).join('\n')}
@@ -292,7 +311,8 @@ ${ex.links.map((href, i) => `<Relationship Id="rIdL${i + 1}" Type="http://schema
   zip.file('docProps/core.xml', coreXml());
   zip.file('docProps/app.xml', APP_XML);
   zip.file('word/document.xml', documentXml);
-  zip.file('word/styles.xml', STYLES_XML);
+  const da = doc.attrs || {};
+  zip.file('word/styles.xml', stylesXml(da.fontFamily || DEFAULT_FONT, parseSize(da.fontSize) || DEFAULT_SIZE));
   zip.file('word/numbering.xml', numberingXml(ex.orderedNums));
   zip.file('word/_rels/document.xml.rels', docRels);
   return zip.generateAsync({ type: 'uint8array', compression: 'DEFLATE' });

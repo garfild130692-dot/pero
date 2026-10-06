@@ -1,10 +1,11 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useEditor, EditorContent, useEditorState } from '@tiptap/react';
 import { EditorState } from '@tiptap/pm/state';
-import { extensions } from './editor/extensions.js';
+import { extensions, loadDocument } from './editor/extensions.js';
 import { importDocx } from './docx/import.js';
 import { exportDocx } from './docx/export.js';
 import Ribbon, { QuickAccess } from './Ribbon.jsx';
+import { cssFontStack } from './editor/font.js';
 import * as fileApi from './fileApi.js';
 
 const EMPTY = { type: 'doc', content: [{ type: 'paragraph' }] };
@@ -115,7 +116,7 @@ export default function App() {
   const load = useCallback(async (file) => {
     try {
       const { doc: json, warnings: w } = await importDocx(file.data);
-      editor.commands.setContent(json, { emitUpdate: false });
+      loadDocument(editor, json);
       resetHistory(editor);
       editor.commands.focus('start');
       setDoc({ path: file.path, name: file.name });
@@ -128,7 +129,7 @@ export default function App() {
 
   const newDoc = useCallback(async () => {
     if (dirty && !(await fileApi.confirmDiscard())) return;
-    editor.commands.setContent(EMPTY, { emitUpdate: false });
+    loadDocument(editor, EMPTY);
     resetHistory(editor);
     editor.commands.focus();
     setDoc({ path: null, name: DEFAULT_NAME });
@@ -213,6 +214,12 @@ export default function App() {
     await load({ path: fileApi.pathForFile(f), name: f.name, data: await f.arrayBuffer() });
   };
 
+  // Шрифт и размер документа по умолчанию (атрибуты документа) → CSS-переменные страницы
+  const docFont = useEditorState({
+    editor,
+    selector: ({ editor: e }) => (e ? { family: e.state.doc.attrs.fontFamily, size: e.state.doc.attrs.fontSize } : null),
+  });
+
   if (!editor) return null;
 
   return (
@@ -223,7 +230,10 @@ export default function App() {
       </div>
       <Ribbon editor={editor} file={{ newDoc, open, save: () => save(), saveAs }} onLink={() => setModal('link')} />
       <div className="workspace" onMouseDown={(e) => { if (e.target === e.currentTarget) editor.commands.focus('end'); }}>
-        <div className="page" style={{ zoom: zoom / 100 }}>
+        <div
+          className="page"
+          style={{ zoom: zoom / 100, '--doc-font': cssFontStack(docFont && docFont.family), '--doc-size': docFont && docFont.size ? `${docFont.size}pt` : undefined }}
+        >
           <EditorContent editor={editor} />
         </div>
       </div>
