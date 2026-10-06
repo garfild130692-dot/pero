@@ -274,6 +274,32 @@ body { background: var(--workspace); overflow: hidden; }
 }
 .page-content.resize-cursor { cursor: col-resize; }
 .ProseMirror-gapcursor:after { border-top-color: #000; }
+
+/* Сохраняемые без изменений фрагменты (значки). Сноски/комментарии нумеруются по порядку, как в Word. */
+.page-content { counter-reset: pero-fn pero-en pero-cm; }
+.opaque { cursor: default; user-select: none; }
+.opaque-drawing, .opaque-object, .opaque-math, .opaque-other {
+  display: inline-block; padding: 0 5px; margin: 0 1px; border: 1px dashed #9db3ab; border-radius: 3px;
+  background: #f1f7f5; color: #2f5d52; font: 9pt 'Segoe UI', sans-serif; line-height: 1.5; text-indent: 0; vertical-align: baseline;
+}
+.opaque-drawing::before { content: '▣ '; }
+.opaque-math::before { content: '∑ '; }
+.opaque-footnote, .opaque-endnote { color: var(--accent); font-size: 70%; vertical-align: super; line-height: 0; padding: 0 1px; }
+.opaque-footnote::after { counter-increment: pero-fn; content: counter(pero-fn); }
+.opaque-endnote::after { counter-increment: pero-en; content: counter(pero-en, lower-roman); }
+.opaque-comment::after {
+  counter-increment: pero-cm; content: 'К' counter(pero-cm); font: 8pt 'Segoe UI', sans-serif;
+  background: #fff1b8; border: 1px solid #e3c766; border-radius: 3px; padding: 0 3px; margin-left: 1px; vertical-align: super; line-height: 0;
+}
+.opaque-fieldSimple { background: #e8ecef; }
+.opaque-pageBreak, .opaque-columnBreak {
+  display: inline-block; width: 100%; margin: 4px 0; border-top: 1px dashed #8fa6a0; text-align: center; text-indent: 0;
+  font: 8.5pt 'Segoe UI', sans-serif; color: #6c827c; line-height: 1.6;
+}
+p[data-section-break]::after {
+  content: 'Разрыв раздела'; display: block; margin-top: 4px; border-top: 3px double #8fa6a0; text-align: center; text-indent: 0;
+  font: 8.5pt 'Segoe UI', sans-serif; color: #6c827c;
+}
 .ProseMirror-selectednode { outline: 2px solid var(--accent); }
 
 /* ---------- Строка состояния ---------- */
@@ -282,6 +308,7 @@ body { background: var(--workspace); overflow: hidden; }
   background: #f3f3f3; border-top: 1px solid var(--line); font-size: 12px; color: #444;
 }
 .statusbar .spacer { flex: 1; }
+.statusbar .kept { color: #4b6b62; cursor: help; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 40%; }
 .statusbar .warn { color: #a05a00; cursor: help; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 45%; }
 .statusbar input[type=range] { width: 110px; accent-color: var(--accent); }
 .zoom-btn { border: 0; background: transparent; font-size: 15px; cursor: pointer; padding: 0 2px; color: #444; }

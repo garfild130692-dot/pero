@@ -4,6 +4,7 @@ import { EditorState } from '@tiptap/pm/state';
 import { extensions, loadDocument } from './editor/extensions.js';
 import { importDocx } from './docx/import.js';
 import { exportDocx } from './docx/export.js';
+import { OPAQUE_SUMMARY } from './editor/opaque.js';
 import Ribbon, { QuickAccess } from './Ribbon.jsx';
 import Ruler from './Ruler.jsx';
 import ParagraphDialog from './ParagraphDialog.jsx';
@@ -102,7 +103,7 @@ function LinkDialog({ editor, onClose }) {
   );
 }
 
-function StatusBar({ editor, warnings, zoom, setZoom }) {
+function StatusBar({ editor, warnings, preserved, zoom, setZoom }) {
   const { words, chars } = useEditorState({
     editor,
     selector: ({ editor: e }) => {
@@ -111,6 +112,8 @@ function StatusBar({ editor, warnings, zoom, setZoom }) {
     },
   });
   const warnList = Object.entries(warnings);
+  // что Перо показывает значком и сохраняет без изменений (без служебных меток вроде закладок)
+  const keptList = [...new Set(Object.keys(preserved).map((k) => OPAQUE_SUMMARY[k]).filter(Boolean))];
   return (
     <div className="statusbar">
       <span>Слов: {words.toLocaleString('ru-RU')}</span>
@@ -118,7 +121,12 @@ function StatusBar({ editor, warnings, zoom, setZoom }) {
       <span>Русский</span>
       {warnList.length > 0 && (
         <span className="warn" title={'Пока не поддерживается и будет потеряно при сохранении:\n' + warnList.map(([k, n]) => `• ${k}: ${n}`).join('\n')}>
-          ⚠ Есть неподдерживаемые элементы: {warnList.map(([k]) => k).join(', ')}
+          ⚠ Будет потеряно при сохранении: {warnList.map(([k]) => k).join(', ')}
+        </span>
+      )}
+      {keptList.length > 0 && (
+        <span className="kept" title={'Перо пока не редактирует эти элементы, но сохраняет их без изменений:\n' + keptList.map((k) => `• ${k}`).join('\n')}>
+          Сохраняются без изменений: {keptList.join(', ')}
         </span>
       )}
       <span className="spacer" />
@@ -133,7 +141,10 @@ function StatusBar({ editor, warnings, zoom, setZoom }) {
 export default function App() {
   const [doc, setDoc] = useState({ path: null, name: DEFAULT_NAME });
   const [dirty, setDirtyState] = useState(false);
-  const [warnings, setWarnings] = useState({});
+  const [warnings, setWarnings] = useState({});   // что теряется при сохранении
+  const [preserved, setPreserved] = useState({}); // что сохраняется как есть
+  // Исходный .docx: при сохранении всё, что Перо не меняет, переносится из него без изменений
+  const source = useRef(null);
   const [zoom, setZoom] = useState(100);
   const [modal, setModal] = useState(null);
 
@@ -152,12 +163,14 @@ export default function App() {
 
   const load = useCallback(async (file) => {
     try {
-      const { doc: json, warnings: w } = await importDocx(file.data);
+      const { doc: json, warnings: w, preserved: kept } = await importDocx(file.data);
       loadDocument(editor, json);
       resetHistory(editor);
       editor.commands.focus('start');
       setDoc({ path: file.path, name: file.name });
       setWarnings(w);
+      setPreserved(kept);
+      source.current = file.data;
       setDirtyState(false);
     } catch (e) {
       fileApi.showError('Не удалось открыть файл', `${file.name}\n\n${e.message || e}`);
@@ -171,6 +184,8 @@ export default function App() {
     editor.commands.focus();
     setDoc({ path: null, name: DEFAULT_NAME });
     setWarnings({});
+    setPreserved({});
+    source.current = null;
     setDirtyState(false);
   }, [dirty, editor]);
 
@@ -182,7 +197,7 @@ export default function App() {
 
   const write = useCallback(async (asNew) => {
     try {
-      const bytes = await exportDocx(editor.getJSON());
+      const bytes = await exportDocx(editor.getJSON(), { source: source.current });
       const r = asNew || !doc.path ? await fileApi.saveFileAs(doc.name, bytes) : await fileApi.saveFile(doc.path, doc.name, bytes);
       if (!r) return false;
       setDoc({ path: r.path, name: r.name });
@@ -201,7 +216,7 @@ export default function App() {
     if (doc.path && Object.keys(warnings).length) {
       setModal({
         title: 'Сохранение может удалить часть содержимого',
-        body: `В исходном файле есть элементы, которые Перо пока не поддерживает (${Object.keys(warnings).join(', ')}). ` +
+        body: `В исходном файле есть элементы, которые Перо пока не умеет сохранять (${Object.keys(warnings).join(', ')}). ` +
           'Если перезаписать файл, они пропадут. Рекомендуется сохранить копию.',
         actions: [
           ['Сохранить копию', true, async () => { setModal(null); done(await write(true)); }],
@@ -280,7 +295,7 @@ export default function App() {
           <EditorContent editor={editor} />
         </div>
       </div>
-      <StatusBar editor={editor} warnings={warnings} zoom={zoom} setZoom={setZoom} />
+      <StatusBar editor={editor} warnings={warnings} preserved={preserved} zoom={zoom} setZoom={setZoom} />
 
       {modal === 'link' && <LinkDialog editor={editor} onClose={() => setModal(null)} />}
       {modal === 'para' && <ParagraphDialog editor={editor} onClose={() => setModal(null)} />}

@@ -274,3 +274,104 @@ print('t2', d.tables[1]._tbl.xpath('./w:tblPr/w:tblBorders/w:top/@w:val'))
     expect(xml).toContain('<w:tblBorders><w:top w:val="single" w:sz="4" w:space="0" w:color="auto"/>');
   });
 });
+
+describe('сохранность исходного файла', () => {
+  const SRC = 'tests/fixtures/preserve.docx'; // создан самим Word (tests/make_preserve_fixture.ps1)
+  const kinds = (doc) => {
+    const out = [];
+    const walk = (n) => { if (n.type === 'opaque') out.push(n.attrs.kind); (n.content || []).forEach(walk); };
+    walk(doc);
+    return out;
+  };
+  const files = async (bytes) => {
+    const z = await JSZip.loadAsync(bytes);
+    const out = {};
+    for (const n of Object.keys(z.files)) if (!z.files[n].dir) out[n] = await z.file(n).async('string');
+    return out;
+  };
+
+  it('импорт: непонятное сохраняется значками, разделы — исходным XML, потерь нет', async () => {
+    const { doc, warnings, preserved } = await importDocx(readFileSync(SRC));
+    Node.fromJSON(schema, doc).check();
+    expect(warnings).toEqual({});
+    expect(kinds(doc)).toEqual(['footnote', 'commentRange', 'commentRange', 'comment', 'drawing', 'bookmark', 'bookmark',
+      'field', 'field', 'field', 'field', 'math', 'symbol', 'pageBreak']);
+    expect(preserved.header).toBe(1);
+    expect(doc.attrs.sectPr).toMatch(/^<w:sectPr\b[\s\S]*<w:pgSz\b[^>]*w:orient="landscape"/);
+    const sect = doc.content.find((n) => n.attrs.sectPr);
+    expect(sect.content[0].text).toBe('Конец первого раздела');
+    expect(sect.attrs.sectPr).toContain('w:headerReference');
+    // результат поля — обычный редактируемый текст между частями поля
+    expect(text(doc)).toContain('06.10.2026');
+  });
+
+  it('сохранение с исходным пакетом: всё, чего Перо не касается, — байт в байт', async () => {
+    const src = readFileSync(SRC);
+    const a = (await importDocx(src)).doc;
+    const bytes = await exportDocx(a, { source: src });
+    mkdirSync('tests/out', { recursive: true });
+    writeFileSync('tests/out/preserve.docx', bytes);
+    const b = await importDocx(bytes);
+    expect(b.doc).toEqual(a);
+    expect(b.warnings).toEqual({});
+    const before = await files(src);
+    const after = await files(bytes);
+    const touched = ['word/document.xml', 'word/styles.xml', 'word/_rels/document.xml.rels', '[Content_Types].xml', 'docProps/core.xml'];
+    for (const [name, content] of Object.entries(before)) {
+      if (!touched.includes(name)) expect(after[name], name).toBe(content);
+    }
+    // корневой тег документа — исходный (все пространства имён и mc:Ignorable)
+    expect(after['word/document.xml'].match(/<w:document\b[^>]*>/)[0]).toBe(before['word/document.xml'].match(/<w:document\b[^>]*>/)[0]);
+    // исходные связи (колонтитулы, сноски, картинка…) на месте
+    for (const id of before['word/_rels/document.xml.rels'].match(/Id="rId\d+"/g)) expect(after['word/_rels/document.xml.rels']).toContain(id);
+  });
+
+  it('python-docx видит разделы, колонтитул и рисунок после сохранения', () => {
+    const out = execFileSync(PYTHON, ['-c', `
+import docx
+d = docx.Document('tests/out/preserve.docx')
+print('sections', len(d.sections), d.sections[1].orientation)
+print('header', d.sections[0].header.paragraphs[0].text)
+print('shapes', len(d.inline_shapes))
+print('margin', round(d.sections[0].left_margin.cm, 2))
+`], { env: { ...process.env, PYTHONIOENCODING: 'utf-8' } }).toString('utf8');
+    expect(out).toContain('sections 2 LANDSCAPE (1)');
+    expect(out).toContain('header Верхний колонтитул Перо');
+    expect(out).toContain('shapes 1');
+    expect(out).toContain('margin 3.0');
+  });
+
+  it('правки в документе со своими стилями: заголовок и ссылка — на стили файла, недостающие дописываются', async () => {
+    const src = readFileSync(SRC);
+    const a = (await importDocx(src)).doc;
+    a.content.unshift(
+      { type: 'heading', attrs: { level: 2 }, content: [{ type: 'text', text: 'Новый заголовок' }] },
+      { type: 'paragraph', content: [{ type: 'text', text: 'сайт', marks: [{ type: 'link', attrs: { href: 'https://example.org' } }] }] },
+    );
+    const f = await files(await exportDocx(a, { source: src }));
+    const doc = f['word/document.xml'];
+    expect(doc).toContain('<w:rStyle w:val="af"/>');           // «Hyperlink» в этом файле — af
+    expect(doc).toContain('<w:pStyle w:val="Heading2"/>');     // заголовка 2 не было — дописан
+    expect(f['word/styles.xml']).toMatch(/<w:style [^>]*w:styleId="Heading2"[\s\S]*?<w:basedOn w:val="a"\/>/); // на «Обычный» файла
+    expect(f['word/_rels/document.xml.rels']).toContain('Target="https://example.org" TargetMode="External"');
+    const b = (await importDocx(await exportDocx(a, { source: src }))).doc;
+    expect(b.content[0]).toMatchObject({ type: 'heading', attrs: { level: 2 } });
+  });
+
+  it('нумерация: наши списки добавляются к исходной с непересекающимися номерами', async () => {
+    const src = readFileSync('tests/fixtures/sample.docx');
+    const a = (await importDocx(src)).doc;
+    const before = await files(src);
+    const f = await files(await exportDocx(a, { source: src }));
+    const count = (xml, re) => (xml.match(re) || []).length;
+    const origAbs = count(before['word/numbering.xml'], /<w:abstractNum\b/g);
+    const origNums = count(before['word/numbering.xml'], /<w:num\b/g);
+    expect(count(f['word/numbering.xml'], /<w:abstractNum\b/g)).toBe(origAbs + 2);
+    expect(count(f['word/numbering.xml'], /<w:num\b/g)).toBeGreaterThan(origNums);
+    // все abstractNum — до первого num (порядок схемы)
+    const n = f['word/numbering.xml'];
+    expect(n.lastIndexOf('<w:abstractNum ')).toBeLessThan(n.search(/<w:num[\s>]/));
+    const b = (await importDocx(await exportDocx(a, { source: src }))).doc;
+    expect(b).toEqual(a);
+  });
+});

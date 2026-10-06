@@ -1,5 +1,6 @@
 // Экспорт JSON-документа редактора → .docx (OOXML), собственная генерация.
 import JSZip from 'jszip';
+import { DOMParser } from '@xmldom/xmldom';
 import { DEFAULT_FONT, DEFAULT_SIZE, highlightName, normalizeColor, parseSize } from '../editor/font.js';
 import { NEW_DOC_PARA, ptToTwips } from '../editor/paragraph.js';
 import { CELL_SIDES, GRID_BORDERS, TABLE_SIDES, TWIPS_PER_PX, borderToOoxml } from '../editor/table.js';
@@ -39,19 +40,37 @@ const esc = (s) =>
     // удаляем символы, недопустимые в XML 1.0
     .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, '');
 
+// Идентификаторы стилей, на которые ссылается экспорт. В исходном файле они могут быть другими
+// (русский Word: «1» вместо Heading1) — тогда берутся из его styles.xml по внутреннему имени стиля.
+const OUR_STYLE_IDS = {
+  Heading1: 'Heading1', Heading2: 'Heading2', Heading3: 'Heading3', Heading4: 'Heading4', Heading5: 'Heading5', Heading6: 'Heading6',
+  ListParagraph: 'ListParagraph', Hyperlink: 'Hyperlink', TableGrid: 'TableGrid',
+};
+const STYLE_NAMES = {
+  Heading1: 'heading 1', Heading2: 'heading 2', Heading3: 'heading 3', Heading4: 'heading 4', Heading5: 'heading 5', Heading6: 'heading 6',
+  ListParagraph: 'list paragraph', Hyperlink: 'hyperlink', TableGrid: 'table grid',
+};
+
+const DEFAULT_SECTPR = `<w:sectPr><w:pgSz w:w="${PAGE.w}" w:h="${PAGE.h}"/>` +
+  `<w:pgMar w:top="${PAGE.top}" w:right="${PAGE.right}" w:bottom="${PAGE.bottom}" w:left="${PAGE.left}" w:header="708" w:footer="708" w:gutter="0"/>` +
+  '<w:cols w:space="708"/><w:docGrid w:linePitch="360"/></w:sectPr>';
+
 class Exporter {
-  constructor() {
+  constructor({ styleIds = OUR_STYLE_IDS, numBase = 1 } = {}) {
     this.links = [];      // гиперссылки → relationships
     this.orderedNums = []; // экземпляры нумерованных списков: { start, ilvl }
+    this.styleIds = styleIds;
+    this.numBase = numBase; // первый свободный numId (в исходном numbering.xml уже могут быть свои)
   }
 
   linkId(href) {
     let i = this.links.indexOf(href);
     if (i < 0) { this.links.push(href); i = this.links.length - 1; }
-    return 'rIdL' + (i + 1);
+    return 'rIdPeroL' + (i + 1);
   }
 
   run(node) {
+    if (node.type === 'opaque') return node.attrs.xml || ''; // сохраняемый фрагмент — как был
     if (node.type === 'hardBreak') return '<w:r><w:br/></w:r>';
     if (node.type !== 'text') return '';
     const marks = node.marks || [];
@@ -67,7 +86,7 @@ class Exporter {
     // порядок элементов rPr задан схемой (CT_RPr): rStyle, rFonts, b, bCs, i, iCs, strike, color, sz, szCs,
     // highlight, u, shd, vertAlign
     let rPr = '';
-    if (link) rPr += '<w:rStyle w:val="Hyperlink"/>';
+    if (link) rPr += `<w:rStyle w:val="${this.styleIds.Hyperlink}"/>`;
     if (font) rPr += `<w:rFonts w:ascii="${esc(font)}" w:hAnsi="${esc(font)}" w:eastAsia="${esc(font)}" w:cs="${esc(font)}"/>`;
     if (has('bold')) rPr += '<w:b/><w:bCs/>';
     if (has('italic')) rPr += '<w:i/><w:iCs/>';
@@ -105,22 +124,23 @@ class Exporter {
   paragraph(node, { numPr, style } = {}) {
     const attrs = node.attrs || {};
     let pPr = '';
-    const pStyle = style || (node.type === 'heading' ? 'Heading' + (attrs.level || 1) : null);
+    const pStyle = style || (node.type === 'heading' ? this.styleIds['Heading' + Math.min(Math.max(attrs.level || 1, 1), 6)] : null);
     if (pStyle) pPr += `<w:pStyle w:val="${pStyle}"/>`;
     if (numPr) pPr += `<w:numPr><w:ilvl w:val="${numPr.ilvl}"/><w:numId w:val="${numPr.numId}"/></w:numPr>`;
     // порядок в pPr по схеме: pStyle, numPr, spacing, ind, jc
     pPr += spacingXml(attrs) + indXml(attrs);
     const jc = { center: 'center', right: 'right', justify: 'both' }[attrs.textAlign];
     if (jc) pPr += `<w:jc w:val="${jc}"/>`;
+    if (attrs.sectPr) pPr += attrs.sectPr; // разрыв раздела — в конце pPr по схеме
     return `<w:p>${pPr ? `<w:pPr>${pPr}</w:pPr>` : ''}${this.inlines(node.content)}</w:p>`;
   }
 
   list(node, ilvl) {
     let numId;
-    if (node.type === 'bulletList') numId = 1;
+    if (node.type === 'bulletList') numId = this.numBase;
     else {
       this.orderedNums.push({ start: (node.attrs && node.attrs.start) || 1, ilvl });
-      numId = 1 + this.orderedNums.length; // 1 — маркированный, дальше — нумерованные
+      numId = this.numBase + this.orderedNums.length; // numBase — маркированный, дальше — нумерованные
     }
     let xml = '';
     for (const item of node.content || []) {
@@ -130,8 +150,8 @@ class Exporter {
           xml += this.list(block, Math.min(ilvl + 1, 8));
         } else if (block.type === 'paragraph' || block.type === 'heading') {
           xml += first
-            ? this.paragraph(block, { numPr: { numId, ilvl }, style: 'ListParagraph' })
-            : this.paragraph(block, { style: 'ListParagraph' });
+            ? this.paragraph(block, { numPr: { numId, ilvl }, style: this.styleIds.ListParagraph })
+            : this.paragraph(block, { style: this.styleIds.ListParagraph });
           first = false;
         } else {
           xml += this.block(block);
@@ -185,7 +205,7 @@ class Exporter {
     // в ячейках (после 0, одинарный); границы пишем явно — они перекрывают стиль.
     const ta = node.attrs || {};
     const tb = { ...GRID_BORDERS, ...(ta.borders || {}) };
-    let xml = '<w:tbl><w:tblPr><w:tblStyle w:val="TableGrid"/><w:tblW w:w="0" w:type="auto"/>' +
+    let xml = `<w:tbl><w:tblPr><w:tblStyle w:val="${this.styleIds.TableGrid}"/><w:tblW w:w="0" w:type="auto"/>` +
       (ta.align === 'center' || ta.align === 'right' ? `<w:jc w:val="${ta.align}"/>` : '') +
       `<w:tblBorders>${TABLE_SIDES.map((s) => borderToOoxml(s, tb[s])).join('')}</w:tblBorders>` +
       '<w:tblLook w:val="04A0"/></w:tblPr>';
@@ -301,7 +321,8 @@ ${[1, 2, 3, 4, 5, 6].map(headingStyle).join('\n')}
 <w:style w:type="table" w:styleId="TableGrid"><w:name w:val="Table Grid"/><w:basedOn w:val="TableNormal"/><w:uiPriority w:val="39"/><w:pPr><w:spacing w:after="0" w:line="240" w:lineRule="auto"/></w:pPr><w:tblPr><w:tblBorders><w:top w:val="single" w:sz="4" w:space="0" w:color="auto"/><w:left w:val="single" w:sz="4" w:space="0" w:color="auto"/><w:bottom w:val="single" w:sz="4" w:space="0" w:color="auto"/><w:right w:val="single" w:sz="4" w:space="0" w:color="auto"/><w:insideH w:val="single" w:sz="4" w:space="0" w:color="auto"/><w:insideV w:val="single" w:sz="4" w:space="0" w:color="auto"/></w:tblBorders></w:tblPr></w:style>
 </w:styles>`;
 
-function numberingXml(orderedNums) {
+// Наши определения нумерации. absBase/numBase — первые свободные идентификаторы (при слиянии с исходным файлом).
+function numberingParts(orderedNums, absBase = 0, numBase = 1) {
   // маркеры Word: точка (Symbol U+F0B7), «o» (Courier New), квадрат (Wingdings U+F0A7)
   const BULLETS = [['\uF0B7', 'Symbol'], ['o', 'Courier New'], ['\uF0A7', 'Wingdings']];
   const bulletLvls = Array.from({ length: 9 }, (_, i) => {
@@ -315,48 +336,213 @@ function numberingXml(orderedNums) {
     `<w:lvl w:ilvl="${i}"><w:start w:val="1"/><w:numFmt w:val="${FMT[i % 3]}"/><w:lvlText w:val="%${i + 1}."/><w:lvlJc w:val="${i % 3 === 2 ? 'right' : 'left'}"/>` +
     `<w:pPr><w:ind w:left="${720 * (i + 1)}" w:hanging="${i % 3 === 2 ? 180 : 360}"/></w:pPr></w:lvl>`
   ).join('');
-  let nums = '<w:num w:numId="1"><w:abstractNumId w:val="0"/></w:num>';
+  let nums = `<w:num w:numId="${numBase}"><w:abstractNumId w:val="${absBase}"/></w:num>`;
   orderedNums.forEach((n, k) => {
-    nums += `<w:num w:numId="${k + 2}"><w:abstractNumId w:val="1"/>` +
+    nums += `<w:num w:numId="${numBase + k + 1}"><w:abstractNumId w:val="${absBase + 1}"/>` +
       `<w:lvlOverride w:ilvl="${n.ilvl}"><w:startOverride w:val="${n.start}"/></w:lvlOverride></w:num>`;
   });
+  const abstracts =
+    `<w:abstractNum w:abstractNumId="${absBase}"><w:multiLevelType w:val="hybridMultilevel"/>${bulletLvls}</w:abstractNum>` +
+    `<w:abstractNum w:abstractNumId="${absBase + 1}"><w:multiLevelType w:val="hybridMultilevel"/>${decimalLvls}</w:abstractNum>`;
+  return { abstracts, nums };
+}
+
+function numberingXml(orderedNums) {
+  const { abstracts, nums } = numberingParts(orderedNums);
   return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <w:numbering ${NS}>
-<w:abstractNum w:abstractNumId="0"><w:multiLevelType w:val="hybridMultilevel"/>${bulletLvls}</w:abstractNum>
-<w:abstractNum w:abstractNumId="1"><w:multiLevelType w:val="hybridMultilevel"/>${decimalLvls}</w:abstractNum>
+${abstracts}
 ${nums}
 </w:numbering>`;
 }
 
+// ---------- Сохранность исходного файла ----------
+const REL = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships';
+const relType = (t) => `${REL}/${t}`;
+
+// Путь части относительно папки, где лежит документ (Target в .rels — относительный)
+function resolvePart(dir, target) {
+  if (target.startsWith('/')) return target.slice(1);
+  const parts = (dir ? dir.split('/') : []).concat(target.split('/'));
+  const out = [];
+  for (const x of parts) { if (x === '..') out.pop(); else if (x && x !== '.') out.push(x); }
+  return out.join('/');
+}
+
+// Прочитать из исходного пакета то, что нужно для слияния
+async function readSource(zip) {
+  const text = async (path) => { const f = zip.file(path); return f ? f.async('string') : null; };
+  const rootRels = (await text('_rels/.rels')) || '';
+  const m = /<Relationship\b[^>]*Type="[^"]*\/officeDocument"[^>]*>/.exec(rootRels);
+  const target = m && /Target="([^"]+)"/.exec(m[0]);
+  const mainPath = target ? resolvePart('', target[1]) : 'word/document.xml';
+  const dir = mainPath.includes('/') ? mainPath.slice(0, mainPath.lastIndexOf('/')) : '';
+  const file = mainPath.slice(dir.length ? dir.length + 1 : 0);
+  const relsPath = `${dir ? dir + '/' : ''}_rels/${file}.rels`;
+
+  const docXml = (await text(mainPath)) || '';
+  const rootTag = (/<w:document\b[^>]*>/.exec(docXml) || [`<w:document ${NS}>`])[0];
+  const bodyAt = docXml.indexOf('<w:body');
+  const preBody = bodyAt > 0 ? docXml.slice(docXml.indexOf(rootTag) + rootTag.length, bodyAt) : ''; // напр. w:background
+  const rootNs = [...rootTag.matchAll(/xmlns:([\w.-]+)="([^"]*)"/g)].map((x) => [x[1], x[2]]);
+
+  const rels = (await text(relsPath)) || '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"></Relationships>';
+  const partOf = (type) => {
+    const r = new RegExp(`<Relationship\\b[^>]*Type="${relType(type).replace(/[.\/]/g, '\\$&')}"[^>]*>`).exec(rels);
+    const t = r && /Target="([^"]+)"/.exec(r[0]);
+    return t ? resolvePart(dir, t[1]) : null;
+  };
+  const stylesPath = partOf('styles');
+  const numberingPath = partOf('numbering');
+  return {
+    mainPath, dir, relsPath, rootTag, preBody, rootNs, rels, stylesPath, numberingPath,
+    styles: stylesPath ? await text(stylesPath) : null,
+    numbering: numberingPath ? await text(numberingPath) : null,
+    contentTypes: (await text('[Content_Types].xml')) || CONTENT_TYPES,
+    core: await text('docProps/core.xml'),
+  };
+}
+
+// Сопоставить нужные экспорту стили со стилями исходного файла; недостающие — дописать
+function mergeStyles(stylesXml, fallback) {
+  const doc = new DOMParser().parseFromString(stylesXml, 'text/xml');
+  const W = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main';
+  const byName = {};
+  const ids = new Set();
+  const defaults = {};
+  for (const st of Array.from(doc.getElementsByTagNameNS(W, 'style'))) {
+    const id = st.getAttributeNS(W, 'styleId');
+    const type = st.getAttributeNS(W, 'type');
+    ids.add(id);
+    const nameEl = st.getElementsByTagNameNS(W, 'name')[0];
+    const name = nameEl ? (nameEl.getAttributeNS(W, 'val') || '').toLowerCase() : '';
+    if (name && !byName[name]) byName[name] = id;
+    if (['1', 'true', 'on'].includes(String(st.getAttributeNS(W, 'default')).toLowerCase())) defaults[type] = id;
+  }
+  const styleIds = {};
+  let add = '';
+  for (const [key, name] of Object.entries(STYLE_NAMES)) {
+    if (byName[name]) { styleIds[key] = byName[name]; continue; }
+    let id = OUR_STYLE_IDS[key];
+    while (ids.has(id)) id += 'Pero';
+    ids.add(id);
+    styleIds[key] = id;
+    // определение из наших стилей; basedOn — на стили по умолчанию исходного файла (или без него)
+    let xml = fallback[key].replace(`w:styleId="${OUR_STYLE_IDS[key]}"`, `w:styleId="${id}"`);
+    const base = { Normal: defaults.paragraph, DefaultParagraphFont: defaults.character, TableNormal: defaults.table };
+    xml = xml.replace(/<w:basedOn w:val="(\w+)"\/>/, (all, b) => (base[b] ? `<w:basedOn w:val="${base[b]}"/>` : ''));
+    add += xml;
+  }
+  return { styleIds, xml: add ? stylesXml.replace(/<\/w:styles>\s*$/, `${add}</w:styles>`) : stylesXml };
+}
+
+// Наши определения стилей (из stylesXml), по ключу
+function ourStyleDefs() {
+  const all = stylesXml(DEFAULT_FONT, DEFAULT_SIZE, NEW_DOC_PARA);
+  const out = {};
+  for (const key of Object.keys(OUR_STYLE_IDS)) {
+    const m = new RegExp(`<w:style [^>]*w:styleId="${OUR_STYLE_IDS[key]}"[\\s\\S]*?</w:style>`).exec(all);
+    out[key] = m[0];
+  }
+  return out;
+}
+
+const maxId = (xml, re) => Math.max(-1, ...[...(xml || '').matchAll(re)].map((x) => +x[1]));
+
+// Убрать локальные объявления пространств имён, которые уже есть в корне документа
+function stripRootNs(xml, rootNs) {
+  let out = xml;
+  for (const [pfx, uri] of rootNs) out = out.split(` xmlns:${pfx}="${uri}"`).join('');
+  return out;
+}
+
+function addOverride(ct, partName, type) {
+  if (ct.includes(`PartName="/${partName}"`)) return ct;
+  return ct.replace('</Types>', `<Override PartName="/${partName}" ContentType="${type}"/></Types>`);
+}
+
 /**
  * @param {object} doc — JSON документа редактора (editor.getJSON())
+ * @param {{ source?: ArrayBuffer|Uint8Array }} [options] — исходный .docx: всё, что Перо не меняет
+ *   (колонтитулы, сноски, комментарии, картинки, тема, настройки…), переносится из него без изменений
  * @returns {Promise<Uint8Array>} — содержимое .docx
  */
-export async function exportDocx(doc) {
-  const ex = new Exporter();
+export async function exportDocx(doc, { source } = {}) {
+  const da = doc.attrs || {};
+  const sectPr = da.sectPr || DEFAULT_SECTPR;
+  if (!source) {
+    const ex = new Exporter();
+    let body = ex.blocks(doc.content || []);
+    if (!body) body = '<w:p/>';
+    const documentXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<w:document ${NS}><w:body>${body}${sectPr}</w:body></w:document>`;
+    const docRels = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+<Relationship Id="rId1" Type="${relType('styles')}" Target="styles.xml"/>
+<Relationship Id="rId2" Type="${relType('numbering')}" Target="numbering.xml"/>
+${ex.links.map((href, i) => `<Relationship Id="rIdPeroL${i + 1}" Type="${relType('hyperlink')}" Target="${esc(href)}" TargetMode="External"/>`).join('\n')}
+</Relationships>`;
+    const zip = new JSZip();
+    zip.file('[Content_Types].xml', CONTENT_TYPES);
+    zip.file('_rels/.rels', ROOT_RELS);
+    zip.file('docProps/core.xml', coreXml());
+    zip.file('docProps/app.xml', APP_XML);
+    zip.file('word/document.xml', documentXml);
+    zip.file('word/styles.xml', stylesXml(da.fontFamily || DEFAULT_FONT, parseSize(da.fontSize) || DEFAULT_SIZE, { ...NEW_DOC_PARA, ...(da.para || {}) }));
+    zip.file('word/numbering.xml', numberingXml(ex.orderedNums));
+    zip.file('word/_rels/document.xml.rels', docRels);
+    return zip.generateAsync({ type: 'uint8array', compression: 'DEFLATE' });
+  }
+
+  // Исходный пакет: меняем только документ, стили (дописываем недостающие), нумерацию (добавляем свою)
+  // и связи (добавляем гиперссылки). Всё остальное остаётся байт в байт.
+  const zip = await JSZip.loadAsync(source);
+  const src = await readSource(zip);
+  let ct = src.contentTypes;
+  let rels = src.rels;
+  const prefix = src.dir ? src.dir + '/' : '';
+
+  let styleIds = OUR_STYLE_IDS;
+  if (src.styles) {
+    const merged = mergeStyles(src.styles, ourStyleDefs());
+    styleIds = merged.styleIds;
+    zip.file(src.stylesPath, merged.xml);
+  } else {
+    zip.file(prefix + 'styles.xml', stylesXml(da.fontFamily || DEFAULT_FONT, parseSize(da.fontSize) || DEFAULT_SIZE, { ...NEW_DOC_PARA, ...(da.para || {}) }));
+    rels = rels.replace('</Relationships>', `<Relationship Id="rIdPeroS" Type="${relType('styles')}" Target="styles.xml"/></Relationships>`);
+    ct = addOverride(ct, prefix + 'styles.xml', 'application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml');
+  }
+
+  const absBase = maxId(src.numbering, /w:abstractNumId="(\d+)"/g) + 1;
+  const numBase = Math.max(1, maxId(src.numbering, /<w:num\b[^>]*w:numId="(\d+)"/g) + 1);
+  const ex = new Exporter({ styleIds, numBase });
   let body = ex.blocks(doc.content || []);
   if (!body) body = '<w:p/>';
-  const sectPr = `<w:sectPr><w:pgSz w:w="${PAGE.w}" w:h="${PAGE.h}"/>` +
-    `<w:pgMar w:top="${PAGE.top}" w:right="${PAGE.right}" w:bottom="${PAGE.bottom}" w:left="${PAGE.left}" w:header="708" w:footer="708" w:gutter="0"/>` +
-    '<w:cols w:space="708"/><w:docGrid w:linePitch="360"/></w:sectPr>';
-  const documentXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<w:document ${NS}><w:body>${body}${sectPr}</w:body></w:document>`;
+  body = stripRootNs(body + sectPr, src.rootNs);
+  zip.file(src.mainPath, `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n${src.rootTag}${src.preBody}<w:body>${body}</w:body></w:document>`);
 
-  const docRels = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
-<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>
-<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/numbering" Target="numbering.xml"/>
-${ex.links.map((href, i) => `<Relationship Id="rIdL${i + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink" Target="${esc(href)}" TargetMode="External"/>`).join('\n')}
-</Relationships>`;
+  const { abstracts, nums } = numberingParts(ex.orderedNums, absBase, numBase);
+  if (src.numbering) {
+    // по схеме все abstractNum идут перед num; num — перед numIdMacAtCleanup
+    let x = src.numbering;
+    const firstNum = x.search(/<w:num[\s>]/);
+    x = firstNum >= 0 ? x.slice(0, firstNum) + abstracts + x.slice(firstNum) : x.replace('</w:numbering>', abstracts + '</w:numbering>');
+    const tail = x.search(/<w:numIdMacAtCleanup\b|<\/w:numbering>/);
+    x = x.slice(0, tail) + nums + x.slice(tail);
+    zip.file(src.numberingPath, x);
+  } else {
+    zip.file(prefix + 'numbering.xml', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<w:numbering ${NS}>${abstracts}${nums}</w:numbering>`);
+    rels = rels.replace('</Relationships>', `<Relationship Id="rIdPeroN" Type="${relType('numbering')}" Target="numbering.xml"/></Relationships>`);
+    ct = addOverride(ct, prefix + 'numbering.xml', 'application/vnd.openxmlformats-officedocument.wordprocessingml.numbering+xml');
+  }
 
-  const zip = new JSZip();
-  zip.file('[Content_Types].xml', CONTENT_TYPES);
-  zip.file('_rels/.rels', ROOT_RELS);
-  zip.file('docProps/core.xml', coreXml());
-  zip.file('docProps/app.xml', APP_XML);
-  zip.file('word/document.xml', documentXml);
-  const da = doc.attrs || {};
-  zip.file('word/styles.xml', stylesXml(da.fontFamily || DEFAULT_FONT, parseSize(da.fontSize) || DEFAULT_SIZE, { ...NEW_DOC_PARA, ...(da.para || {}) }));
-  zip.file('word/numbering.xml', numberingXml(ex.orderedNums));
-  zip.file('word/_rels/document.xml.rels', docRels);
+  // гиперссылки Пера; исходные связи (картинки, колонтитулы, сноски…) не трогаем
+  const linkRels = ex.links.map((href, i) => `<Relationship Id="rIdPeroL${i + 1}" Type="${relType('hyperlink')}" Target="${esc(href)}" TargetMode="External"/>`).join('');
+  rels = rels.replace(/<Relationship\b[^>]*Id="rIdPeroL\d+"[^>]*\/>/g, '').replace('</Relationships>', linkRels + '</Relationships>');
+  zip.file(src.relsPath, rels);
+  zip.file('[Content_Types].xml', ct);
+  if (src.core) {
+    const now = new Date().toISOString().replace(/\.\d+Z$/, 'Z');
+    zip.file('docProps/core.xml', src.core.replace(/(<dcterms:modified\b[^>]*>)[^<]*(<\/dcterms:modified>)/, `$1${now}$2`));
+  }
   return zip.generateAsync({ type: 'uint8array', compression: 'DEFLATE' });
 }

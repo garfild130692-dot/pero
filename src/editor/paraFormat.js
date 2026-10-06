@@ -75,6 +75,14 @@ export const ParaFormat = Extension.create({
         indentLeft: attr((el) => cssPt(el.style.marginLeft), (a) => (a.indentLeft != null ? { style: `margin-left: ${a.indentLeft}pt` } : {})),
         indentRight: attr((el) => cssPt(el.style.marginRight), (a) => (a.indentRight != null ? { style: `margin-right: ${a.indentRight}pt` } : {})),
         indentFirst: attr((el) => cssPt(el.style.textIndent), (a) => (a.indentFirst != null ? { style: `text-indent: ${a.indentFirst}pt` } : {})),
+        // Разрыв раздела после этого абзаца: исходный XML w:sectPr (страница, поля, колонтитулы раздела).
+        // Не переносится при Enter — иначе раздел «размножился» бы.
+        sectPr: {
+          default: null,
+          keepOnSplit: false,
+          parseHTML: () => null,
+          renderHTML: (a) => (a.sectPr ? { 'data-section-break': 'true' } : {}),
+        },
       },
     }];
   },

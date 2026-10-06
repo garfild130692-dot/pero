@@ -1,7 +1,7 @@
 // Импорт .docx → JSON-документ редактора (формат ProseMirror/TipTap).
 // Собственный разбор OOXML: никаких сторонних конвертеров, только распаковка zip и XML.
 import JSZip from 'jszip';
-import { DOMParser } from '@xmldom/xmldom';
+import { DOMParser, XMLSerializer } from '@xmldom/xmldom';
 import { HIGHLIGHTS, normalizeColor } from '../editor/font.js';
 import { WORD_FALLBACK_PARA, paraBase, paraDiff, twipsToPt } from '../editor/paragraph.js';
 import { CELL_SIDES, NO_BORDERS, TABLE_SIDES, TWIPS_PER_PX, borderFromOoxml } from '../editor/table.js';
@@ -37,6 +37,16 @@ function onOff(el) {
   const v = wAttr(el, 'val');
   if (v === null) return true;
   return !['0', 'false', 'off', 'none'].includes(String(v).toLowerCase());
+}
+
+const serializer = new XMLSerializer();
+const xmlOf = (node) => serializer.serializeToString(node);
+// Видимый текст фрагмента (w:t внутри) — для полей
+function textOf(el) {
+  let out = '';
+  const walk = (n) => { for (const c of children(n)) { if (ln(c) === 't') out += c.textContent; else walk(c); } };
+  walk(el);
+  return out;
 }
 
 function parseXml(text) {
@@ -312,11 +322,19 @@ class Importer {
     this.styleCache = {};
     this.numbering = ctx.numbering;
     this.rels = ctx.rels;
-    this.warnings = {};
+    this.warnings = {};   // что теряется при сохранении
+    this.preserved = {};  // что Перо не редактирует, но сохраняет как есть
+    this.bodySectPr = null;
   }
 
   warn(key) {
     this.warnings[key] = (this.warnings[key] || 0) + 1;
+  }
+
+  // Фрагмент, который сохраняется как есть: значок в тексте с исходным XML
+  opaque(push, kind, xml, extra = {}) {
+    this.preserved[kind] = (this.preserved[kind] || 0) + 1;
+    push({ type: 'opaque', attrs: { kind, xml, text: '', font: null, ...extra } });
   }
 
   // Содержимое абзаца → массив inline-узлов
@@ -339,11 +357,17 @@ class Importer {
           const anchor = wAttr(n, 'anchor');
           const href = rid && this.rels[rid] ? this.rels[rid].target : anchor ? '#' + anchor : null;
           walk(n, href);
-        } else if (['ins', 'smartTag', 'fldSimple', 'customXml', 'dir', 'bdo'].includes(name)) walk(n, link);
-        else if (name === 'sdt') walk(child(n, 'sdtContent'), link);
-        else if (name === 'oMath' || name === 'oMathPara') this.warn('формулы');
-        else if (name === 'del') this.warn('исправления (удалённый текст)');
-        // pPr, bookmarkStart/End, proofErr, commentRangeStart и т.п. — пропускаем
+        } else if (['smartTag', 'customXml', 'dir', 'bdo'].includes(name)) walk(n, link);
+        else if (name === 'ins' || name === 'moveTo') { this.warn('исправления'); walk(n, link); } // текст остаётся, пометка правки — нет
+        else if (name === 'del' || name === 'moveFrom') this.warn('исправления');                   // удалённый текст теряется
+        else if (name === 'sdt') { this.warn('элементы управления содержимым'); walk(child(n, 'sdtContent'), link); }
+        else if (name === 'bookmarkStart' || name === 'bookmarkEnd') this.opaque(push, 'bookmark', xmlOf(n));
+        else if (name === 'commentRangeStart' || name === 'commentRangeEnd') this.opaque(push, 'commentRange', xmlOf(n));
+        else if (name === 'permStart' || name === 'permEnd') this.opaque(push, 'marker', xmlOf(n));
+        else if (name === 'oMath' || name === 'oMathPara') this.opaque(push, 'math', xmlOf(n));
+        else if (name === 'fldSimple') this.opaque(push, 'fieldSimple', xmlOf(n), { text: textOf(n) });
+        else if (name === 'AlternateContent') this.opaque(push, 'drawing', xmlOf(n));
+        else if (!['pPr', 'proofErr'].includes(name)) this.opaque(push, 'other', xmlOf(n)); // неизвестное — сохраняем
       }
     };
     walk(p, null);
@@ -364,20 +388,41 @@ class Importer {
     }
     const marks = marksToArray(m, link);
     const text = (t) => t && push(marks.length ? { type: 'text', text: t, marks } : { type: 'text', text: t });
+    // Отдельный «прогон» для сохраняемого элемента: те же свойства символов (rPr) + сам элемент
+    const runXml = (n) => {
+      const nr = r.cloneNode(false);
+      if (rPr) nr.appendChild(rPr.cloneNode(true));
+      nr.appendChild(n.cloneNode(true));
+      return xmlOf(nr);
+    };
     for (const n of children(r)) {
       switch (ln(n)) {
         case 't': text(n.textContent); break;
-        case 'tab': text('\t'); break;
+        case 'tab': case 'ptab': text('\t'); break;
         case 'noBreakHyphen': text('‑'); break;
-        case 'br':
-          if (wAttr(n, 'type') === 'page') this.warn('разрывы страниц');
-          push({ type: 'hardBreak' });
+        case 'softHyphen': text('\u00ad'); break;
+        case 'br': {
+          const type = wAttr(n, 'type');
+          if (type === 'page') this.opaque(push, 'pageBreak', runXml(n));
+          else if (type === 'column') this.opaque(push, 'columnBreak', runXml(n));
+          else push({ type: 'hardBreak' });
           break;
+        }
         case 'cr': push({ type: 'hardBreak' }); break;
-        case 'drawing': case 'pict': case 'object': this.warn('изображения и объекты'); break;
-        case 'footnoteReference': case 'endnoteReference': this.warn('сноски'); break;
-        case 'commentReference': this.warn('комментарии'); break;
-        default: break;
+        case 'drawing': case 'AlternateContent': this.opaque(push, 'drawing', runXml(n)); break;
+        case 'pict': case 'object': this.opaque(push, 'object', runXml(n)); break;
+        case 'footnoteReference': this.opaque(push, 'footnote', runXml(n)); break;
+        case 'endnoteReference': this.opaque(push, 'endnote', runXml(n)); break;
+        case 'commentReference': this.opaque(push, 'comment', runXml(n)); break;
+        case 'fldChar': case 'instrText': case 'delInstrText': this.opaque(push, 'field', runXml(n)); break;
+        case 'sym': {
+          // символ шрифта Symbol/Wingdings: код в области F000–F0FF
+          const code = parseInt(wAttr(n, 'char') || '', 16);
+          this.opaque(push, 'symbol', runXml(n), { text: isFinite(code) ? String.fromCharCode(code) : '', font: wAttr(n, 'font') });
+          break;
+        }
+        case 'rPr': case 'lastRenderedPageBreak': break;
+        default: this.opaque(push, 'other', runXml(n)); // неизвестное — сохраняем как есть
       }
     }
   }
@@ -414,6 +459,9 @@ class Importer {
     const node = level
       ? { type: 'heading', attrs: { level, textAlign, ...para }, content }
       : { type: 'paragraph', attrs: { textAlign, ...para }, content };
+    // разрыв раздела после абзаца — исходный XML параметров раздела
+    const sect = child(pPr, 'sectPr');
+    if (sect) node.attrs.sectPr = xmlOf(sect);
     if (!content.length) delete node.content;
     return { node, numPr };
   }
@@ -536,7 +584,7 @@ class Importer {
         closeLists();
         out.push(...this.blocks(el));
       } else if (name === 'sectPr') {
-        if (children(el, 'headerReference').length || children(el, 'footerReference').length) this.warn('колонтитулы');
+        this.bodySectPr = xmlOf(el); // параметры последнего раздела — сохраняем как есть
       } else if (!['tcPr', 'bookmarkStart', 'bookmarkEnd', 'proofErr', 'commentRangeStart', 'commentRangeEnd'].includes(name)) {
         this.warn('прочие элементы');
       }
@@ -578,6 +626,11 @@ export async function importDocx(data) {
   const body = child(documentXml.documentElement, 'body');
   let content = imp.blocks(body);
   if (!content.length) content = [{ type: 'paragraph' }];
-  if (zip.file('word/comments.xml')) imp.warn('комментарии');
-  return { doc: { type: 'doc', attrs: { ...docDefaults, para: docPara }, content }, warnings: imp.warnings };
+  // колонтитулы живут в отдельных частях пакета — сохраняются вместе с ним
+  if (Object.keys(zip.files).some((n) => /^word\/(header|footer)\d*\.xml$/.test(n))) imp.preserved.header = 1;
+  return {
+    doc: { type: 'doc', attrs: { ...docDefaults, para: docPara, sectPr: imp.bodySectPr }, content },
+    warnings: imp.warnings,
+    preserved: imp.preserved,
+  };
 }
