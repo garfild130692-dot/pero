@@ -4,6 +4,8 @@ import { useEditorState } from '@tiptap/react';
 import { Icon } from './icons.jsx';
 import { clipboard } from './fileApi.js';
 import { FontFamilyBox, FontSizeBox, HighlightButton, TextColorButton, fontState, usePopover } from './FontControls.jsx';
+import { effectivePara } from './editor/paraFormat.js';
+import { LINE_PRESETS, fmtNum } from './editor/paragraph.js';
 
 function Btn({ icon, label, title, onClick, active, disabled, big, children }) {
   const I = icon && Icon[icon];
@@ -23,12 +25,58 @@ function Btn({ icon, label, title, onClick, active, disabled, big, children }) {
   );
 }
 
-const Group = ({ title, children }) => (
+// launcher — кнопка в углу заголовка группы, открывает полный диалог (как в Word)
+const Group = ({ title, children, launcher }) => (
   <div className="rb-group">
     <div className="rb-group-body">{children}</div>
-    <div className="rb-group-title">{title}</div>
+    <div className="rb-group-title">
+      {title}
+      {launcher && (
+        <button type="button" className="rb-launcher" title={launcher.title} onMouseDown={(e) => e.preventDefault()} onClick={launcher.onClick}>
+          <Icon.launcher size={11} />
+        </button>
+      )}
+    </div>
   </div>
 );
+
+// Состояние абзаца под курсором для ленты
+function paraState(e) {
+  const { $from } = e.state.selection;
+  let inList = false;
+  for (let d = $from.depth; d > 0; d--) if ($from.node(d).type.name === 'listItem') inList = true;
+  const node = $from.parent;
+  if (!['paragraph', 'heading'].includes(node.type.name)) return { inList, lineRule: null, lineSpacing: null, before: 0, after: 0, left: 0 };
+  const p = effectivePara(node, e.state.doc.attrs, inList);
+  return { inList, lineRule: p.lineRule, lineSpacing: p.lineSpacing, before: p.spaceBefore, after: p.spaceAfter, left: p.indentLeft };
+}
+
+// Кнопка «Интервал» с меню: множители, «Другие варианты…», интервалы перед/после
+function LineSpacingButton({ editor, para, onMore }) {
+  const pop = usePopover();
+  const c = () => editor.chain().focus();
+  const item = (label, onClick, checked) => (
+    <button type="button" className="menu-item" onMouseDown={(e) => e.preventDefault()} onClick={() => { pop.setOpen(false); onClick(); }}>
+      <span className="check">{checked ? '✓' : ''}</span>{label}
+    </button>
+  );
+  return (
+    <div className="rb-popover-anchor" ref={pop.ref}>
+      <Btn icon="lineSpacing" title="Интервал между строками и абзацами" active={pop.open} onClick={() => pop.setOpen(!pop.open)} />
+      {pop.open && (
+        <div className="menu-pop" style={pop.style} role="menu">
+          {LINE_PRESETS.map((m) => item(fmtNum(m, 2).includes(',') ? fmtNum(m, 2) : `${m},0`, () => c().setLineSpacing(m).run(),
+            para.lineRule === 'auto' && Math.abs(para.lineSpacing - m) < 1e-6))}
+          <div className="menu-sep" />
+          {item('Другие варианты междустрочных интервалов…', onMore)}
+          <div className="menu-sep" />
+          {item(para.before > 0 ? 'Удалить интервал перед абзацем' : 'Добавить интервал перед абзацем', () => c().toggleSpaceBefore().run())}
+          {item(para.after > 0 ? 'Удалить интервал после абзаца' : 'Добавить интервал после абзаца', () => c().toggleSpaceAfter().run())}
+        </div>
+      )}
+    </div>
+  );
+}
 
 const STYLES = [
   { key: 'p', label: 'Обычный', cls: 'st-normal' },
@@ -63,7 +111,7 @@ function TablePicker({ onPick, style }) {
   );
 }
 
-export default function Ribbon({ editor, file, onLink }) {
+export default function Ribbon({ editor, file, onLink, onParagraph }) {
   const [tab, setTab] = useState('home');
   const tablePicker = usePopover();
 
@@ -87,6 +135,7 @@ export default function Ribbon({ editor, file, onLink }) {
       canMerge: e.can().mergeCells(),
       canSplit: e.can().splitCell(),
       font: fontState(e),
+      para: paraState(e),
     }),
     // в состоянии есть вложенный объект — сравниваем по значению, чтобы лента не перерисовывалась зря
     equalityFn: (a, b) => JSON.stringify(a) === JSON.stringify(b),
@@ -161,19 +210,23 @@ export default function Ribbon({ editor, file, onLink }) {
               </div>
             </Group>
 
-            <Group title="Абзац">
+            <Group title="Абзац" launcher={{ title: 'Параметры абзаца…', onClick: onParagraph }}>
               <div className="rb-rows">
                 <div className="rb-row">
                   <Btn icon="bullets" title="Маркированный список" active={s.bullet} onClick={() => c().toggleBulletList().run()} />
                   <Btn icon="numbers" title="Нумерованный список" active={s.ordered} onClick={() => c().toggleOrderedList().run()} />
-                  <Btn icon="outdent" title="Уменьшить уровень списка (Shift+Tab)" disabled={!s.canLift} onClick={() => c().liftListItem('listItem').run()} />
-                  <Btn icon="indent" title="Увеличить уровень списка (Tab)" disabled={!s.canSink} onClick={() => c().sinkListItem('listItem').run()} />
+                  {/* в списке — уровень списка, иначе левый отступ абзаца шагом 1,25 см */}
+                  <Btn icon="outdent" title={s.para.inList ? 'Уменьшить уровень списка (Shift+Tab)' : 'Уменьшить отступ (Ctrl+Shift+M)'}
+                    disabled={s.para.inList ? !s.canLift : s.para.left <= 0} onClick={() => c().changeIndent(-1).run()} />
+                  <Btn icon="indent" title={s.para.inList ? 'Увеличить уровень списка (Tab)' : 'Увеличить отступ (Ctrl+M)'}
+                    disabled={s.para.inList && !s.canSink} onClick={() => c().changeIndent(1).run()} />
                 </div>
                 <div className="rb-row">
                   <Btn icon="alignLeft" title="По левому краю (Ctrl+Shift+L)" active={s.align === 'left'} onClick={() => c().setTextAlign('left').run()} />
                   <Btn icon="alignCenter" title="По центру (Ctrl+Shift+E)" active={s.align === 'center'} onClick={() => c().setTextAlign('center').run()} />
                   <Btn icon="alignRight" title="По правому краю (Ctrl+Shift+R)" active={s.align === 'right'} onClick={() => c().setTextAlign('right').run()} />
                   <Btn icon="alignJustify" title="По ширине (Ctrl+Shift+J)" active={s.align === 'justify'} onClick={() => c().setTextAlign('justify').run()} />
+                  <LineSpacingButton editor={editor} para={s.para} onMore={onParagraph} />
                 </div>
               </div>
             </Group>

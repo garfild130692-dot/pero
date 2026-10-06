@@ -5,7 +5,44 @@ import { extensions, loadDocument } from './editor/extensions.js';
 import { importDocx } from './docx/import.js';
 import { exportDocx } from './docx/export.js';
 import Ribbon, { QuickAccess } from './Ribbon.jsx';
+import Ruler from './Ruler.jsx';
+import ParagraphDialog from './ParagraphDialog.jsx';
 import { cssFontStack } from './editor/font.js';
+import { NEW_DOC_PARA } from './editor/paragraph.js';
+import { lineCss } from './editor/paraFormat.js';
+
+// «Одинарный» интервал Word = естественная высота строки шрифта (ascent + descent + lineGap).
+// В CSS её даёт line-height: normal; меряем отношение к размеру шрифта и кешируем.
+const lineRatioCache = {};
+function lineRatio(stack) {
+  if (!stack) return 1.15;
+  if (lineRatioCache[stack]) return lineRatioCache[stack];
+  const el = document.createElement('span');
+  el.style.cssText = `position:absolute;visibility:hidden;white-space:nowrap;font-size:100px;line-height:normal;font-family:${stack}`;
+  el.textContent = 'АgЙ';
+  document.body.appendChild(el);
+  const r = Math.round((el.getBoundingClientRect().height / 100) * 1000) / 1000;
+  el.remove();
+  return (lineRatioCache[stack] = r > 0.8 && r < 2 ? r : 1.15);
+}
+
+// Умолчания документа → CSS-переменные страницы
+function pageVars(d) {
+  if (!d) return {};
+  const stack = cssFontStack(d.family);
+  const p = { ...NEW_DOC_PARA, ...(d.para || {}) };
+  return {
+    '--doc-font': stack,
+    '--doc-size': d.size ? `${d.size}pt` : undefined,
+    '--line-ratio': lineRatio(stack),
+    '--p-before': `${p.spaceBefore}pt`,
+    '--p-after': `${p.spaceAfter}pt`,
+    '--p-line': lineCss(p.lineRule, p.lineSpacing),
+    '--p-left': `${p.indentLeft}pt`,
+    '--p-right': `${p.indentRight}pt`,
+    '--p-indent': `${p.indentFirst}pt`,
+  };
+}
 import * as fileApi from './fileApi.js';
 
 const EMPTY = { type: 'doc', content: [{ type: 'paragraph' }] };
@@ -188,6 +225,7 @@ export default function App() {
     else if (cmd === 'saveAs') h.saveAs();
     else if (cmd === 'openData') h.load(payload);
     else if (cmd === 'saveAndClose') h.save(() => fileApi.closeNow());
+    else if (cmd === 'zoom') setZoom((z) => (payload === 0 ? 100 : Math.min(200, Math.max(50, z + payload * 10))));
   }), []);
 
   // Горячие клавиши, которые в Electron обслуживает меню, а в браузере (режим отладки) — мы сами; плюс Ctrl+K
@@ -217,7 +255,7 @@ export default function App() {
   // Шрифт и размер документа по умолчанию (атрибуты документа) → CSS-переменные страницы
   const docFont = useEditorState({
     editor,
-    selector: ({ editor: e }) => (e ? { family: e.state.doc.attrs.fontFamily, size: e.state.doc.attrs.fontSize } : null),
+    selector: ({ editor: e }) => (e ? { family: e.state.doc.attrs.fontFamily, size: e.state.doc.attrs.fontSize, para: e.state.doc.attrs.para } : null),
   });
 
   if (!editor) return null;
@@ -228,11 +266,16 @@ export default function App() {
         <QuickAccess editor={editor} onSave={() => save()} />
         <div className="doc-title">{doc.name}{dirty ? ' •' : ''}</div>
       </div>
-      <Ribbon editor={editor} file={{ newDoc, open, save: () => save(), saveAs }} onLink={() => setModal('link')} />
-      <div className="workspace" onMouseDown={(e) => { if (e.target === e.currentTarget) editor.commands.focus('end'); }}>
+      <Ribbon editor={editor} file={{ newDoc, open, save: () => save(), saveAs }} onLink={() => setModal('link')} onParagraph={() => setModal('para')} />
+      <div
+        className="workspace"
+        onMouseDown={(e) => { if (e.target === e.currentTarget) editor.commands.focus('end'); }}
+        onWheel={(e) => { if (e.ctrlKey) setZoom((z) => Math.min(200, Math.max(50, z + (e.deltaY < 0 ? 10 : -10)))); }} // Ctrl+колесо — масштаб
+      >
+        <Ruler editor={editor} zoom={zoom} />
         <div
           className="page"
-          style={{ zoom: zoom / 100, '--doc-font': cssFontStack(docFont && docFont.family), '--doc-size': docFont && docFont.size ? `${docFont.size}pt` : undefined }}
+          style={{ zoom: zoom / 100, ...pageVars(docFont) }}
         >
           <EditorContent editor={editor} />
         </div>
@@ -240,7 +283,8 @@ export default function App() {
       <StatusBar editor={editor} warnings={warnings} zoom={zoom} setZoom={setZoom} />
 
       {modal === 'link' && <LinkDialog editor={editor} onClose={() => setModal(null)} />}
-      {modal && modal !== 'link' && (
+      {modal === 'para' && <ParagraphDialog editor={editor} onClose={() => setModal(null)} />}
+      {modal && typeof modal === 'object' && (
         <Modal
           title={modal.title}
           onClose={() => modal.actions[modal.actions.length - 1][2]()}

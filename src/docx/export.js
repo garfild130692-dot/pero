@@ -1,6 +1,29 @@
 // Экспорт JSON-документа редактора → .docx (OOXML), собственная генерация.
 import JSZip from 'jszip';
 import { DEFAULT_FONT, DEFAULT_SIZE, highlightName, normalizeColor, parseSize } from '../editor/font.js';
+import { NEW_DOC_PARA, ptToTwips } from '../editor/paragraph.js';
+
+// <w:spacing> и <w:ind> из параметров абзаца (в pt); пустая строка, если задавать нечего
+function spacingXml(a) {
+  let attrs = '';
+  if (a.spaceBefore != null) attrs += ` w:before="${ptToTwips(a.spaceBefore)}"`;
+  if (a.spaceAfter != null) attrs += ` w:after="${ptToTwips(a.spaceAfter)}"`;
+  if (a.lineSpacing != null) {
+    const rule = a.lineRule || 'auto';
+    const line = rule === 'auto' ? Math.round(a.lineSpacing * 240) : ptToTwips(a.lineSpacing);
+    attrs += ` w:line="${line}" w:lineRule="${rule}"`;
+  }
+  return attrs ? `<w:spacing${attrs}/>` : '';
+}
+function indXml(a) {
+  let attrs = '';
+  if (a.indentLeft != null) attrs += ` w:left="${ptToTwips(a.indentLeft)}"`;
+  if (a.indentRight != null) attrs += ` w:right="${ptToTwips(a.indentRight)}"`;
+  if (a.indentFirst != null) {
+    attrs += a.indentFirst < 0 ? ` w:hanging="${ptToTwips(-a.indentFirst)}"` : ` w:firstLine="${ptToTwips(a.indentFirst)}"`;
+  }
+  return attrs ? `<w:ind${attrs}/>` : '';
+}
 
 // Параметры страницы A4 как у русского Word по умолчанию (в твипах, 1 см = 567)
 export const PAGE = { w: 11906, h: 16838, top: 1134, right: 850, bottom: 1134, left: 1701 };
@@ -84,6 +107,8 @@ class Exporter {
     const pStyle = style || (node.type === 'heading' ? 'Heading' + (attrs.level || 1) : null);
     if (pStyle) pPr += `<w:pStyle w:val="${pStyle}"/>`;
     if (numPr) pPr += `<w:numPr><w:ilvl w:val="${numPr.ilvl}"/><w:numId w:val="${numPr.numId}"/></w:numPr>`;
+    // порядок в pPr по схеме: pStyle, numPr, spacing, ind, jc
+    pPr += spacingXml(attrs) + indXml(attrs);
     const jc = { center: 'center', right: 'right', justify: 'both' }[attrs.textAlign];
     if (jc) pPr += `<w:jc w:val="${jc}"/>`;
     return `<w:p>${pPr ? `<w:pPr>${pPr}</w:pPr>` : ''}${this.inlines(node.content)}</w:p>`;
@@ -239,16 +264,16 @@ function headingStyle(n) {
   const size = { 1: 32, 2: 26, 3: 24, 4: 22, 5: 22, 6: 22 }[n];
   const color = n <= 2 ? '2F5496' : '1F3763';
   return `<w:style w:type="paragraph" w:styleId="Heading${n}"><w:name w:val="heading ${n}"/><w:basedOn w:val="Normal"/><w:next w:val="Normal"/><w:uiPriority w:val="9"/><w:qFormat/>` +
-    `<w:pPr><w:keepNext/><w:keepLines/><w:spacing w:before="${n === 1 ? 240 : 40}" w:after="0"/><w:outlineLvl w:val="${n - 1}"/></w:pPr>` +
+    `<w:pPr><w:keepNext/><w:keepLines/><w:spacing w:before="${n === 1 ? 240 : 40}" w:after="0" w:line="259" w:lineRule="auto"/><w:outlineLvl w:val="${n - 1}"/></w:pPr>` +
     // шрифт заголовков задаём явно: темы оформления (theme1.xml) мы не пишем
     `<w:rPr><w:rFonts w:ascii="Calibri Light" w:hAnsi="Calibri Light" w:eastAsia="Calibri Light" w:cs="Calibri Light"/>${n >= 4 ? '<w:i/>' : ''}<w:color w:val="${color}"/><w:sz w:val="${size}"/><w:szCs w:val="${size}"/></w:rPr></w:style>`;
 }
 
 // Шрифт и размер документа по умолчанию — из атрибутов документа
-const stylesXml = (font, size) => `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+const stylesXml = (font, size, para) => `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <w:styles ${NS}>
 <w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:ascii="${esc(font)}" w:hAnsi="${esc(font)}" w:eastAsia="${esc(font)}" w:cs="${esc(font)}"/><w:sz w:val="${Math.round(size * 2)}"/><w:szCs w:val="${Math.round(size * 2)}"/><w:lang w:val="ru-RU" w:eastAsia="en-US" w:bidi="ar-SA"/></w:rPr></w:rPrDefault>
-<w:pPrDefault><w:pPr><w:spacing w:after="160" w:line="259" w:lineRule="auto"/></w:pPr></w:pPrDefault></w:docDefaults>
+<w:pPrDefault><w:pPr>${spacingXml(para)}${indXml(para)}</w:pPr></w:pPrDefault></w:docDefaults>
 <w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/><w:qFormat/></w:style>
 ${[1, 2, 3, 4, 5, 6].map(headingStyle).join('\n')}
 <w:style w:type="paragraph" w:styleId="ListParagraph"><w:name w:val="List Paragraph"/><w:basedOn w:val="Normal"/><w:uiPriority w:val="34"/><w:qFormat/><w:pPr><w:ind w:left="720"/><w:contextualSpacing/></w:pPr></w:style>
@@ -312,7 +337,7 @@ ${ex.links.map((href, i) => `<Relationship Id="rIdL${i + 1}" Type="http://schema
   zip.file('docProps/app.xml', APP_XML);
   zip.file('word/document.xml', documentXml);
   const da = doc.attrs || {};
-  zip.file('word/styles.xml', stylesXml(da.fontFamily || DEFAULT_FONT, parseSize(da.fontSize) || DEFAULT_SIZE));
+  zip.file('word/styles.xml', stylesXml(da.fontFamily || DEFAULT_FONT, parseSize(da.fontSize) || DEFAULT_SIZE, { ...NEW_DOC_PARA, ...(da.para || {}) }));
   zip.file('word/numbering.xml', numberingXml(ex.orderedNums));
   zip.file('word/_rels/document.xml.rels', docRels);
   return zip.generateAsync({ type: 'uint8array', compression: 'DEFLATE' });

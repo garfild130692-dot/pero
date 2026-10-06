@@ -46,9 +46,11 @@ function buildMenu() {
     {
       label: 'Вид',
       submenu: [
-        { label: 'Масштаб 100%', role: 'resetZoom' },
-        { label: 'Крупнее', role: 'zoomIn' },
-        { label: 'Мельче', role: 'zoomOut' },
+        // Масштаб страницы документа (не всего окна). Без горячих клавиш: стандартные роли zoomIn/resetZoom
+        // перехватывали Ctrl+Shift+= (надстрочный) и Ctrl+0 (интервал перед абзацем). Масштаб — Ctrl+колесо.
+        { label: 'Масштаб 100%', click: () => send('zoom', 0) },
+        { label: 'Крупнее', click: () => send('zoom', 1) },
+        { label: 'Мельче', click: () => send('zoom', -1) },
         { type: 'separator' },
         { label: 'Во весь экран', role: 'togglefullscreen' },
         { label: 'Инструменты разработчика', role: 'toggleDevTools' },

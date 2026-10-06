@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import JSZip from 'jszip';
 import { readFileSync, writeFileSync, mkdirSync } from 'fs';
 import { execFileSync } from 'child_process';
 import { getSchema } from '@tiptap/core';
@@ -49,7 +50,7 @@ print(len(d.tables), d.tables[0].cell(2,0).text)
 
   it('шрифт документа по умолчанию берётся из темы оформления (python-docx: minorHAnsi = Cambria)', async () => {
     const { doc } = await importDocx(readFileSync('tests/fixtures/sample.docx'));
-    expect(doc.attrs).toEqual({ fontFamily: 'Cambria', fontSize: 11 });
+    expect(doc.attrs).toMatchObject({ fontFamily: 'Cambria', fontSize: 11 });
   });
 });
 
@@ -72,7 +73,7 @@ describe('шрифт', () => {
   it('импорт: умолчания документа, прямое форматирование, стили', async () => {
     const { doc } = await importDocx(readFileSync('tests/fixtures/fonts.docx'));
     Node.fromJSON(schema, doc).check();
-    expect(doc.attrs).toEqual({ fontFamily: 'Times New Roman', fontSize: 14 });
+    expect(doc.attrs).toMatchObject({ fontFamily: 'Times New Roman', fontSize: 14 });
     expect(marksOf(doc, 'Обычный, ')).toEqual({});
     expect(marksOf(doc, 'Arial 12')).toEqual({ textStyle: ts({ fontFamily: 'Arial', fontSize: 12 }) });
     expect(marksOf(doc, 'красный')).toEqual({ textStyle: ts({ color: '#c00000' }) });
@@ -129,5 +130,78 @@ for p in d.paragraphs:
     expect(parseSize('18.67px')).toBe(14);
     expect(parseSize('10,5')).toBe(10.5);
     expect([stepSize(11, 1), stepSize(11, -1), stepSize(72, 1), stepSize(80, -1), stepSize(8, -1)]).toEqual([12, 10.5, 80, 72, 7]);
+  });
+});
+
+// Атрибуты абзаца с указанным текстом (только заданные)
+function paraOf(doc, text) {
+  let found = null;
+  const walk = (n) => {
+    if (found) return;
+    if ((n.type === 'paragraph' || n.type === 'heading') && (n.content || []).map((t) => t.text).join('') === text) found = n;
+    (n.content || []).forEach(walk);
+  };
+  walk(doc);
+  if (!found) throw new Error(`нет абзаца «${text}»`);
+  return Object.fromEntries(Object.entries(found.attrs).filter(([k, v]) => v != null && !['textAlign', 'level'].includes(k)));
+}
+
+describe('абзац', () => {
+  it('импорт: умолчания из «Обычного», прямое форматирование, стиль, список', async () => {
+    const { doc } = await importDocx(readFileSync('tests/fixtures/para.docx'));
+    Node.fromJSON(schema, doc).check();
+    expect(doc.attrs.para).toEqual({
+      spaceBefore: 0, spaceAfter: 0, lineRule: 'auto', lineSpacing: 1.5, indentLeft: 0, indentRight: 0, indentFirst: 35.45,
+    });
+    expect(paraOf(doc, 'Обычный абзац по умолчанию.')).toEqual({});
+    expect(paraOf(doc, 'Перед 12, после 6.')).toEqual({ spaceBefore: 12, spaceAfter: 6 });
+    expect(paraOf(doc, 'Одинарный.')).toEqual({ lineRule: 'auto', lineSpacing: 1 });
+    expect(paraOf(doc, 'Двойной.')).toEqual({ lineRule: 'auto', lineSpacing: 2 });
+    expect(paraOf(doc, 'Точно 18 pt.')).toEqual({ lineRule: 'exact', lineSpacing: 18 });
+    expect(paraOf(doc, 'Минимум 20 pt.')).toEqual({ lineRule: 'atLeast', lineSpacing: 20 });
+    expect(paraOf(doc, 'Слева 2 см, справа 1 см.')).toEqual({ indentLeft: 56.7, indentRight: 28.35 });
+    expect(paraOf(doc, 'Выступ 1 см при отступе слева 1 см.')).toEqual({ indentLeft: 28.35, indentFirst: -28.35 });
+    expect(paraOf(doc, 'Без отступа первой строки.')).toEqual({ indentFirst: 0 });
+    expect(paraOf(doc, 'Абзац пользовательского стиля.')).toEqual({ spaceBefore: 6, indentLeft: 85.05 });
+    expect(paraOf(doc, 'Пункт списка с отступом')).toEqual({}); // отступы элемента списка задаёт список
+  });
+
+  it('round-trip сохраняет интервалы и отступы', async () => {
+    const a = (await importDocx(readFileSync('tests/fixtures/para.docx'))).doc;
+    const bytes = await exportDocx(a);
+    mkdirSync('tests/out', { recursive: true });
+    writeFileSync('tests/out/para.docx', bytes);
+    const b = (await importDocx(bytes)).doc;
+    Node.fromJSON(schema, b).check();
+    expect(b).toEqual(a);
+  });
+
+  it('python-docx видит интервалы, отступы и умолчания документа', () => {
+    const out = execFileSync(PYTHON, ['-c', `
+import docx
+d = docx.Document('tests/out/para.docx')
+x = d.styles.element.xpath
+print('default', x('.//w:pPrDefault//w:spacing/@w:line')[0], x('.//w:pPrDefault//w:ind/@w:firstLine')[0])
+for p in d.paragraphs:
+    f = p.paragraph_format
+    pt = lambda v: None if v is None else round(v.pt, 2)
+    ls = f.line_spacing
+    print(repr(p.text), pt(f.space_before), pt(f.space_after), ls if isinstance(ls, float) or ls is None else pt(ls),
+          f.line_spacing_rule, pt(f.left_indent), pt(f.right_indent), pt(f.first_line_indent))
+`], { env: { ...process.env, PYTHONIOENCODING: 'utf-8' } }).toString('utf8');
+    expect(out).toContain('default 360 709');
+    expect(out).toContain("'Перед 12, после 6.' 12.0 6.0");
+    expect(out).toMatch(/'Точно 18 pt\.' None None 18\.0 EXACTLY/);
+    expect(out).toMatch(/'Минимум 20 pt\.' None None 20\.0 AT_LEAST/);
+    expect(out).toMatch(/'Двойной\.' None None 2\.0 DOUBLE/);
+    expect(out).toContain("'Слева 2 см, справа 1 см.' None None None None 56.7 28.35 None");
+    expect(out).toContain("'Выступ 1 см при отступе слева 1 см.' None None None None 28.35 None -28.35");
+    expect(out).toContain("'Без отступа первой строки.' None None None None None None 0.0");
+  });
+
+  it('новый документ: умолчания как у Word 2013+', async () => {
+    const bytes = await exportDocx({ type: 'doc', content: [{ type: 'paragraph' }] });
+    const xml = await (await JSZip.loadAsync(bytes)).file('word/styles.xml').async('string');
+    expect(xml).toMatch(/<w:pPrDefault><w:pPr><w:spacing w:before="0" w:after="160" w:line="259" w:lineRule="auto"\/><w:ind w:left="0" w:right="0" w:firstLine="0"\/><\/w:pPr><\/w:pPrDefault>/);
   });
 });

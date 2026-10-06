@@ -3,6 +3,7 @@
 import JSZip from 'jszip';
 import { DOMParser } from '@xmldom/xmldom';
 import { HIGHLIGHTS, normalizeColor } from '../editor/font.js';
+import { WORD_FALLBACK_PARA, paraBase, paraDiff, twipsToPt } from '../editor/paragraph.js';
 
 const W = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main';
 const R = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships';
@@ -82,25 +83,65 @@ function parseStyles(doc, theme) {
       numPr: readNumPr(child(pPr, 'numPr')),
       outlineLvl: wAttr(child(pPr, 'outlineLvl'), 'val'),
       marks: readRunMarks(rPr, theme),
+      para: readParaProps(pPr),
     };
     const isDefault = ['1', 'true', 'on'].includes(String(wAttr(st, 'default')).toLowerCase());
     if (map[id].type === 'paragraph' && isDefault) defaultPara = id;
   }
   const rPrDefault = child(child(child(root, 'docDefaults'), 'rPrDefault'), 'rPr');
   defaults.marks = readRunMarks(rPrDefault, theme);
+  defaults.para = readParaProps(child(child(child(root, 'docDefaults'), 'pPrDefault'), 'pPr'));
   return { map, defaults, defaultPara };
 }
 
-// Свойства символов стиля с учётом цепочки basedOn (родитель → потомок)
-function resolvedStyleMarks(styles, styleId, cache) {
+// Свойства стиля с учётом цепочки basedOn (родитель → потомок); key — 'marks' или 'para'
+function resolvedStyle(styles, styleId, cache, key) {
   if (!styleId || !styles[styleId]) return {};
-  if (cache[styleId]) return cache[styleId];
+  const ck = key + ':' + styleId;
+  if (cache[ck]) return cache[ck];
   const chain = [];
   for (let id = styleId; id && styles[id] && chain.length < 10 && !chain.includes(id); id = styles[id].basedOn) chain.push(id);
-  const marks = {};
-  for (const id of chain.reverse()) Object.assign(marks, styles[id].marks);
-  cache[styleId] = marks;
-  return marks;
+  const out = {};
+  for (const id of chain.reverse()) Object.assign(out, styles[id][key]);
+  cache[ck] = out;
+  return out;
+}
+const resolvedStyleMarks = (styles, id, cache) => resolvedStyle(styles, id, cache, 'marks');
+const resolvedStylePara = (styles, id, cache) => resolvedStyle(styles, id, cache, 'para');
+
+// ---------- Свойства абзаца: интервалы и отступы ----------
+// Возвращает только заданные в pPr ключи (в pt; межстрочный auto — множитель)
+function readParaProps(pPr) {
+  const out = {};
+  if (!pPr) return out;
+  const sp = child(pPr, 'spacing');
+  if (sp) {
+    const before = twipsToPt(wAttr(sp, 'before'));
+    const after = twipsToPt(wAttr(sp, 'after'));
+    // «авто»-интервалы HTML (beforeAutospacing) Word рисует как 14 pt
+    if (['1', 'true', 'on'].includes(String(wAttr(sp, 'beforeAutospacing')).toLowerCase())) out.spaceBefore = 14;
+    else if (before !== null) out.spaceBefore = before;
+    if (['1', 'true', 'on'].includes(String(wAttr(sp, 'afterAutospacing')).toLowerCase())) out.spaceAfter = 14;
+    else if (after !== null) out.spaceAfter = after;
+    const line = +wAttr(sp, 'line');
+    if (line > 0) {
+      const rule = wAttr(sp, 'lineRule') || 'auto';
+      if (rule === 'exact' || rule === 'atLeast') { out.lineRule = rule; out.lineSpacing = line / 20; }
+      else { out.lineRule = 'auto'; out.lineSpacing = line / 240; }
+    }
+  }
+  const ind = child(pPr, 'ind');
+  if (ind) {
+    const left = twipsToPt(wAttr(ind, 'left') ?? wAttr(ind, 'start'));
+    const right = twipsToPt(wAttr(ind, 'right') ?? wAttr(ind, 'end'));
+    const first = twipsToPt(wAttr(ind, 'firstLine'));
+    const hanging = twipsToPt(wAttr(ind, 'hanging'));
+    if (left !== null) out.indentLeft = left;
+    if (right !== null) out.indentRight = right;
+    if (hanging !== null) out.indentFirst = -hanging; // выступ приоритетнее отступа первой строки
+    else if (first !== null) out.indentFirst = first;
+  }
+  return out;
 }
 
 // Уровень заголовка по стилю. Учитываем локализованные styleId (в русском Word
@@ -252,6 +293,7 @@ class Importer {
     this.defaultPara = ctx.defaultPara;
     this.theme = ctx.theme;
     this.docDefaults = ctx.docDefaults;
+    this.docPara = ctx.docPara;
     this.styleCache = {};
     this.numbering = ctx.numbering;
     this.rels = ctx.rels;
@@ -333,10 +375,6 @@ class Importer {
     const level = headingLevel(this.styles, styleId);
     const styleMarks = level ? {} : resolvedStyleMarks(this.styles, styleId, this.styleCache);
     const content = this.inlines(p, styleMarks, !!level);
-    const node = level
-      ? { type: 'heading', attrs: { level, textAlign }, content }
-      : { type: 'paragraph', attrs: { textAlign }, content };
-    if (!content.length) delete node.content;
     let numPr = readNumPr(child(pPr, 'numPr'));
     if (!numPr && styleId) {
       // нумерация задана стилем («Маркированный список 2» и т.п.) — уровень берём из имени стиля
@@ -344,7 +382,25 @@ class Importer {
       const sm = /^list (?:bullet|number) (\d)$/.exec((this.styles[styleId] || {}).name || '');
       if (sNum) numPr = { ...sNum, ilvl: sNum.ilvl || (sm ? +sm[1] - 1 : 0) };
     }
-    return { node, numPr: level ? null : numPr };
+    if (level) numPr = null;
+
+    // Интервалы и отступы: у заголовка — только прямые (вид заголовка задаёт наш стиль);
+    // у элемента списка отступы задаёт список, интервалы стиля (List Paragraph) не переносим;
+    // у обычного абзаца — стиль (с basedOn) + прямые. В атрибуты попадают только отличия от базы.
+    const direct = readParaProps(pPr);
+    const style = level ? {} : resolvedStylePara(this.styles, styleId, this.styleCache);
+    let values;
+    if (numPr) {
+      values = { lineRule: style.lineRule, lineSpacing: style.lineSpacing, ...direct };
+      delete values.indentLeft; delete values.indentRight; delete values.indentFirst;
+    } else values = { ...style, ...direct };
+    const para = paraDiff(values, paraBase(this.docPara, { headingLevel: level, inList: !!numPr }));
+
+    const node = level
+      ? { type: 'heading', attrs: { level, textAlign, ...para }, content }
+      : { type: 'paragraph', attrs: { textAlign, ...para }, content };
+    if (!content.length) delete node.content;
+    return { node, numPr };
   }
 
   table(tbl) {
@@ -451,11 +507,14 @@ export async function importDocx(data) {
   // Если не задано нигде — так же, как Word: Times New Roman 10 pt.
   const normal = { ...defaults.marks, ...resolvedStyleMarks(styles, defaultPara, {}) };
   const docDefaults = { fontFamily: normal.fontFamily || 'Times New Roman', fontSize: normal.fontSize || 10 };
+  // Абзац по умолчанию: как у Word без настроек ← pPrDefault ← стиль «Обычный»
+  const docPara = { ...WORD_FALLBACK_PARA, ...defaults.para, ...resolvedStylePara(styles, defaultPara, {}) };
   const imp = new Importer({
     styles,
     defaultPara,
     theme,
     docDefaults,
+    docPara,
     numbering: parseNumbering(await read('word/numbering.xml')),
     rels: parseRels(await read('word/_rels/document.xml.rels')),
   });
@@ -463,5 +522,5 @@ export async function importDocx(data) {
   let content = imp.blocks(body);
   if (!content.length) content = [{ type: 'paragraph' }];
   if (zip.file('word/comments.xml')) imp.warn('комментарии');
-  return { doc: { type: 'doc', attrs: docDefaults, content }, warnings: imp.warnings };
+  return { doc: { type: 'doc', attrs: { ...docDefaults, para: docPara }, content }, warnings: imp.warnings };
 }

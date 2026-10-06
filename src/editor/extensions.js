@@ -11,18 +11,21 @@ import Superscript from '@tiptap/extension-superscript';
 import {
   DEFAULT_FONT, DEFAULT_SIZE, cssFontStack, normalizeColor, normalizeFontFamily, parseSize, stepSize, MIN_SIZE, MAX_SIZE,
 } from './font.js';
+import { NEW_DOC_PARA } from './paragraph.js';
+import { ParaFormat } from './paraFormat.js';
 
 // Как оформлены заголовки (совпадает со styles.css и стилями Heading1–6 в export.js)
 export const HEADING_FONT = 'Calibri Light';
 export const HEADING_SIZES = { 1: 16, 2: 13, 3: 12, 4: 11, 5: 11, 6: 11 };
 
-// Шрифт/размер по умолчанию храним в атрибутах документа (аналог docDefaults + стиль «Обычный»).
-// В текст попадает только прямое форматирование — то, что отличается от умолчаний.
+// Умолчания шрифта и абзаца храним в атрибутах документа (аналог docDefaults + стиль «Обычный»).
+// В текст и абзацы попадает только прямое форматирование — то, что отличается от умолчаний.
 const PeroDocument = Document.extend({
   addAttributes() {
     return {
       fontFamily: { default: DEFAULT_FONT },
       fontSize: { default: DEFAULT_SIZE },
+      para: { default: NEW_DOC_PARA }, // { spaceBefore, spaceAfter, lineRule, lineSpacing, indentLeft, indentRight, indentFirst }
     };
   },
 });
@@ -31,7 +34,7 @@ const PeroDocument = Document.extend({
 // остаются от прошлого документа — выставляем их отдельно; без записи в историю и без события «изменён».
 export function loadDocument(editor, json) {
   editor.commands.setContent(json, { emitUpdate: false });
-  const attrs = { fontFamily: DEFAULT_FONT, fontSize: DEFAULT_SIZE, ...((json && json.attrs) || {}) };
+  const attrs = { fontFamily: DEFAULT_FONT, fontSize: DEFAULT_SIZE, para: NEW_DOC_PARA, ...((json && json.attrs) || {}) };
   const { tr } = editor.state;
   for (const [k, v] of Object.entries(attrs)) if (editor.state.doc.attrs[k] !== v) tr.setDocAttribute(k, v);
   if (tr.docChanged) editor.view.dispatch(tr.setMeta('addToHistory', false).setMeta('preventUpdate', true));
@@ -170,6 +173,7 @@ export const extensions = [
   }),
   PeroDocument,
   TextAlign.configure({ types: ['heading', 'paragraph'] }),
+  ParaFormat,
   TableKit.configure({ table: { resizable: true } }),
   TextStyle,
   RunStyle,

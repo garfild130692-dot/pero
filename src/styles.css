@@ -137,7 +137,58 @@ body { background: var(--workspace); overflow: hidden; }
 .tp-cell.on { border-color: var(--accent); background: var(--accent-soft); }
 
 /* ---------- Рабочая область и страница A4 ---------- */
-.workspace { flex: 1; overflow: auto; padding: 24px 0 48px; }
+.workspace { flex: 1; overflow: auto; padding: 0 0 48px; }
+
+/* Линейка: прилипает к верху рабочей области, ширина = ширина страницы с учётом масштаба */
+.ruler-bar { position: sticky; top: 0; z-index: 5; background: var(--workspace); padding: 4px 0 6px; margin-bottom: 14px; }
+.ruler { position: relative; margin: 0 auto; user-select: none; }
+.ruler svg { display: block; width: 100%; height: auto; }
+.ruler-margin { fill: #c9c9c9; }
+.ruler-text { fill: #fff; }
+.ruler-ticks line { stroke: #666; stroke-width: .6; }
+.ruler-ticks text { font: 6.5px 'Segoe UI', sans-serif; fill: #444; }
+.rm { position: absolute; width: 11px; transform: translateX(-50%); cursor: ew-resize; }
+.rm::before { content: ''; position: absolute; left: 0; width: 0; height: 0; border-left: 5.5px solid transparent; border-right: 5.5px solid transparent; }
+.rm-first { top: 0; height: 7px; }
+.rm-first::before { top: 0; border-top: 7px solid #6b6b6b; }
+.rm-hanging, .rm-right { top: calc(100% - 13px); height: 7px; }
+.rm-hanging::before, .rm-right::before { bottom: 0; border-bottom: 7px solid #6b6b6b; }
+.rm-left { top: calc(100% - 6px); height: 6px; background: #6b6b6b; }
+.rm:hover::before { border-top-color: var(--accent); border-bottom-color: var(--accent); }
+.rm-left:hover { background: var(--accent); }
+.ruler-guide { position: absolute; top: 0; height: 100vh; border-left: 1px dashed #333; pointer-events: none; }
+
+/* Кнопка вызова диалога группы (в углу заголовка группы, как в Word) */
+.rb-group-title { position: relative; }
+.rb-launcher {
+  position: absolute; right: -6px; bottom: 1px; width: 15px; height: 15px; padding: 0; border: 1px solid transparent;
+  background: transparent; border-radius: 2px; cursor: pointer; color: #666; display: grid; place-items: center;
+}
+.rb-launcher:hover { background: #e8e8e8; border-color: #d0d0d0; }
+
+/* Меню интервала */
+.menu-pop {
+  z-index: 30; background: #fff; border: 1px solid #bbb; box-shadow: 0 4px 16px rgba(0,0,0,.15); padding: 4px 0; min-width: 230px;
+}
+.menu-item { display: flex; align-items: center; gap: 8px; width: 100%; border: 0; background: transparent; font: inherit; padding: 5px 12px 5px 8px; cursor: pointer; text-align: left; white-space: nowrap; }
+.menu-item:hover { background: var(--accent-soft); }
+.menu-item .check { width: 14px; text-align: center; color: var(--accent); font-weight: 700; }
+.menu-sep { height: 1px; background: var(--line); margin: 4px 0; }
+
+/* Диалог «Абзац» */
+.modal.pd { width: 520px; }
+.pd fieldset { border: 0; border-top: 1px solid var(--line); margin: 0 0 8px; padding: 6px 0 0; }
+.pd legend { font-weight: 600; font-size: 12px; color: var(--accent); padding-right: 6px; }
+.pd-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 18px; }
+.pd-field { display: flex; align-items: center; justify-content: space-between; gap: 10px; font-size: 12.5px; }
+.pd-field select, .pd-input { width: 130px; }
+.pd-field select { font: inherit; padding: 3px 4px; border: 1px solid #bbb; border-radius: 3px; }
+.pd-input { display: flex; align-items: center; border: 1px solid #bbb; border-radius: 3px; background: #fff; }
+.pd-input input { flex: 1; min-width: 0; border: 0; outline: none; font: inherit; padding: 4px 6px; background: transparent; }
+.pd-input em { font-style: normal; color: var(--muted); padding-right: 6px; font-size: 12px; }
+.pd-input:focus-within, .pd-field select:focus { border-color: var(--accent); outline: none; }
+.pd-input input:disabled { color: #aaa; }
+.pd-error { color: #b00020; font-size: 12.5px; margin-top: 4px; }
 .page {
   width: 210mm; min-height: 297mm; margin: 0 auto; background: #fff;
   box-shadow: 0 1px 3px rgba(0,0,0,.2), 0 0 0 1px rgba(0,0,0,.04);
@@ -147,13 +198,23 @@ body { background: var(--workspace); overflow: hidden; }
 .page-content {
   outline: none; min-height: calc(297mm - 40mm);
   /* шрифт и размер документа по умолчанию задаёт App из атрибутов документа */
-  font-family: var(--doc-font, Calibri, Carlito, 'Segoe UI', sans-serif); font-size: var(--doc-size, 11pt); line-height: 1.3; color: #000;
+  font-family: var(--doc-font, Calibri, Carlito, 'Segoe UI', sans-serif); font-size: var(--doc-size, 11pt); color: #000;
+  /* межстрочный интервал документа: множитель × «одинарный» шрифта (--line-ratio меряет App) */
+  line-height: var(--p-line, calc(var(--line-ratio, 1.15) * 1.08));
   tab-size: 4; -moz-tab-size: 4;
 }
-.page-content p { margin: 0 0 8pt; }
+/* Абзац по умолчанию документа — CSS-переменные из атрибутов документа (App).
+   Интервалы до/после — padding, а не margin: в Word они складываются, а margin в CSS схлопывается. */
+.page-content p {
+  margin: 0 var(--p-right, 0) 0 var(--p-left, 0);
+  padding: var(--p-before, 0) 0 var(--p-after, 8pt);
+  text-indent: var(--p-indent, 0);
+}
 .page-content h1, .page-content h2, .page-content h3,
 .page-content h4, .page-content h5, .page-content h6 {
   font-family: 'Calibri Light', Calibri, Carlito, sans-serif; font-weight: normal; margin: 12pt 0 0; line-height: 1.2;
+  /* отступы заголовки наследуют от «Обычного», как в Word */
+  margin-left: var(--p-left, 0); margin-right: var(--p-right, 0); text-indent: var(--p-indent, 0);
 }
 .page-content h1 { font-size: 16pt; color: #2f5496; }
 .page-content h2 { font-size: 13pt; color: #2f5496; margin-top: 2pt; }
@@ -161,7 +222,7 @@ body { background: var(--workspace); overflow: hidden; }
 .page-content h4, .page-content h5, .page-content h6 { font-size: 11pt; color: #2f5496; font-style: italic; margin-top: 2pt; }
 .page-content > :first-child { margin-top: 0; }
 .page-content ul, .page-content ol { margin: 0 0 8pt; padding-left: 36pt; }
-.page-content li > p { margin: 0; }
+.page-content li > p { margin: 0; padding: 0; text-indent: 0; }
 .page-content li > ul, .page-content li > ol { margin: 0; padding-left: 24pt; }
 .page-content ul { list-style: disc; }
 .page-content ul ul { list-style: circle; }
@@ -178,7 +239,7 @@ body { background: var(--workspace); overflow: hidden; }
 .page-content td, .page-content th {
   border: 1px solid #000; padding: 0 5.4pt; vertical-align: top; position: relative; min-width: 2em;
 }
-.page-content td p, .page-content th p { margin: 0; line-height: 1.15; }
+.page-content td p, .page-content th p { padding: 0; line-height: var(--line-ratio, 1.15); } /* TableGrid: без интервалов, одинарный */
 .page-content th { font-weight: bold; text-align: left; background: #f2f2f2; }
 .page-content .selectedCell::after {
   content: ''; position: absolute; inset: 0; background: rgba(31,111,92,.18); pointer-events: none;
