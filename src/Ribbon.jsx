@@ -115,7 +115,7 @@ function TablePicker({ onPick, style }) {
   );
 }
 
-export default function Ribbon({ editor, file, onLink, onParagraph, onMargins, onHf }) {
+export default function Ribbon({ editor, file, onLink, onParagraph, onMargins, onHf, onFind }) {
   const [tab, setTab] = useState('home');
   const tablePicker = usePopover();
 
@@ -245,6 +245,13 @@ export default function Ribbon({ editor, file, onLink, onParagraph, onMargins, o
                   <Btn icon="alignJustify" title="По ширине (Ctrl+Shift+J)" active={s.align === 'justify'} onClick={() => c().setTextAlign('justify').run()} />
                   <LineSpacingButton editor={editor} para={s.para} onMore={onParagraph} />
                 </div>
+              </div>
+            </Group>
+
+            <Group title="Редактирование">
+              <div className="rb-rows">
+                <Btn icon="search" title="Найти (Ctrl+F)" onClick={() => onFind('find')}><span className="rb-inline">Найти</span></Btn>
+                <Btn icon="replace" title="Заменить (Ctrl+H)" onClick={() => onFind('replace')}><span className="rb-inline">Заменить</span></Btn>
               </div>
             </Group>
 

@@ -44,6 +44,10 @@ function buildMenu() {
         { label: 'Копировать', role: 'copy' },
         { label: 'Вставить', role: 'paste' },
         { label: 'Выделить всё', role: 'selectAll' },
+        { type: 'separator' },
+        // Ctrl+F/Ctrl+H ловит само окно (как и в браузерном режиме) — здесь только подписи
+        { label: 'Найти…', accelerator: 'CmdOrCtrl+F', registerAccelerator: false, click: () => send('find') },
+        { label: 'Заменить…', accelerator: 'CmdOrCtrl+H', registerAccelerator: false, click: () => send('replace') },
       ],
     },
     {

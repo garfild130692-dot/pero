@@ -15,6 +15,7 @@ import { insertImageFiles } from './insertImage.js';
 import { EMPTY_HF, pagePx, parseSectPr } from './editor/page.js';
 import { pageInfo } from './editor/pagination.js';
 import { HeaderFooterDialog, MarginsDialog, PageChrome, printCss } from './PageControls.jsx';
+import FindBar from './FindBar.jsx';
 
 // «Одинарный» интервал Word = естественная высота строки шрифта (ascent + descent + lineGap).
 // В CSS её даёт line-height: normal; меряем отношение к размеру шрифта и кешируем.
@@ -179,6 +180,7 @@ export default function App() {
   const source = useRef(null);
   const [zoom, setZoom] = useState(100);
   const [modal, setModal] = useState(null);
+  const [findMode, setFindMode] = useState(null); // null | 'find' | 'replace'
 
   const editor = useEditor({
     extensions,
@@ -299,6 +301,7 @@ export default function App() {
     else if (cmd === 'openData') h.load(payload);
     else if (cmd === 'saveAndClose') h.save(() => fileApi.closeNow());
     else if (cmd === 'print') h.doPrint();
+    else if (cmd === 'find' || cmd === 'replace') setFindMode(cmd);
     else if (cmd === 'pdf') h.doPdf();
     else if (cmd === 'zoom') setZoom((z) => (payload === 0 ? 100 : Math.min(200, Math.max(50, z + payload * 10))));
   }), []);
@@ -309,6 +312,8 @@ export default function App() {
       if (!(e.ctrlKey || e.metaKey)) return;
       const k = e.code;
       if (k === 'KeyK') { e.preventDefault(); setModal('link'); return; }
+      if (k === 'KeyF') { e.preventDefault(); setFindMode('find'); return; }
+      if (k === 'KeyH') { e.preventDefault(); setFindMode('replace'); return; }
       if (fileApi.isDesktop) return;
       const h = handlers.current;
       if (k === 'KeyS') { e.preventDefault(); e.shiftKey ? h.saveAs() : h.save(); }
@@ -347,12 +352,14 @@ export default function App() {
         <div className="doc-title">{doc.name}{dirty ? ' •' : ''}</div>
       </div>
       <Ribbon editor={editor} file={{ newDoc, open, save: () => save(), saveAs, print: doPrint, pdf: doPdf }} onLink={() => setModal('link')}
+        onFind={(m) => setFindMode(m)}
         onParagraph={() => setModal('para')} onMargins={() => setModal('margins')} onHf={() => setModal('hf')} />
       <div
         className="workspace"
         onMouseDown={(e) => { if (e.target === e.currentTarget) editor.commands.focus('end'); }}
         onWheel={(e) => { if (e.ctrlKey) setZoom((z) => Math.min(200, Math.max(50, z + (e.deltaY < 0 ? 10 : -10)))); }} // Ctrl+колесо — масштаб
       >
+        {findMode && <FindBar editor={editor} mode={findMode} setMode={setFindMode} />}
         <Ruler editor={editor} zoom={zoom} />
         <PageScaler scale={zoom / 100}>
           <div className="page" style={{ ...pageVars(docFont), ...pageBox(geo) }}>

@@ -17,6 +17,7 @@ import { Opaque } from './opaque.js';
 import { PeroImage } from './image.js';
 import { EMPTY_HF } from './page.js';
 import { Pagination } from './pagination.js';
+import { SearchReplace } from './search.js';
 
 // Как оформлены заголовки (совпадает со styles.css и стилями Heading1–6 в export.js)
 export const HEADING_FONT = 'Calibri Light';
@@ -190,6 +191,7 @@ export const extensions = [
   Opaque,
   PeroImage,
   Pagination,
+  SearchReplace,
   Highlight.configure({ multicolor: true }),
   Sup,
   Sub,

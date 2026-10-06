@@ -213,6 +213,25 @@ body { background: var(--workspace); overflow: hidden; }
   padding: 20mm 15mm 20mm 30mm;
 }
 
+/* Поиск и замена */
+.findbar {
+  position: sticky; top: 4px; z-index: 6; float: right; margin: 4px 16px 0 0; background: #fff; border: 1px solid #c9c9c9;
+  border-radius: 6px; box-shadow: 0 4px 16px rgba(0,0,0,.14); padding: 6px; display: flex; flex-direction: column; gap: 6px;
+}
+.fb-row { display: flex; align-items: center; gap: 4px; }
+.fb-input { width: 220px; font: inherit; padding: 4px 7px; border: 1px solid #bbb; border-radius: 3px; }
+.fb-input:focus { outline: none; border-color: var(--accent); }
+.fb-count { min-width: 92px; font-size: 12px; color: var(--muted); text-align: center; }
+.fb-count.none { color: #b00020; }
+.fb-btn { border: 1px solid transparent; background: transparent; border-radius: 3px; min-width: 26px; height: 26px; cursor: pointer; font: 12px 'Segoe UI', sans-serif; color: #333; }
+.fb-btn:hover:not(:disabled) { background: #eee; border-color: #d0d0d0; }
+.fb-btn:disabled { opacity: .35; cursor: default; }
+.fb-btn.opt.on { background: var(--accent-soft); border-color: #a9d3c6; color: var(--accent); }
+.fb-note { font-size: 12px; color: var(--accent); }
+.page-content .search-hit { background: #ffe58a; border-radius: 1px; }
+.page-content .search-hit.current { background: #ff9c3a; }
+@media print { .findbar { display: none !important; } .page-content .search-hit { background: none; } }
+
 /* Масштаб страницы (App/PageScaler): transform от левого верхнего угла, обёртка — по центру рабочей области */
 .page-scaler { margin: 0 auto; }
 .page-scaled { transform-origin: 0 0; width: max-content; }

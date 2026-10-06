@@ -517,3 +517,27 @@ print(d.sections[0].header.paragraphs[0].text, '|', d.sections[0].header.paragra
     expect(again.header).toEqual([{ text: 'Верхний колонтитул Перо', align: 'left' }]);
   });
 });
+
+describe('поиск', () => {
+  const doc = Node.fromJSON(schema, { type: 'doc', content: [
+    { type: 'paragraph', content: [
+      { type: 'text', text: 'Перо пишет. ' }, { type: 'text', text: 'пер', marks: [{ type: 'bold' }] }, { type: 'text', text: 'о и Перочинный нож.' },
+    ] },
+    { type: 'paragraph', content: [{ type: 'text', text: 'Пе' }, { type: 'image', attrs: { src: 'data:,', width: 10, height: 10 } }, { type: 'text', text: 'ро' }] },
+  ] });
+  let findAll;
+  it('без учёта регистра, через границы форматирования', async () => {
+    ({ findAll } = await import('../src/editor/search.js'));
+    const hits = findAll(doc, 'перо');
+    expect(hits.map((h) => doc.textBetween(h.from, h.to))).toEqual(['Перо', 'перо', 'Перо']); // «Пе|рисунок|ро» — не совпадение
+  });
+  it('с учётом регистра и слово целиком (кириллица)', () => {
+    expect(findAll(doc, 'Перо', { caseSensitive: true })).toHaveLength(2);
+    const whole = findAll(doc, 'перо', { wholeWord: true });
+    expect(whole.map((h) => doc.textBetween(h.from, h.to))).toEqual(['Перо', 'перо']); // «Перочинный» — нет
+  });
+  it('спецсимволы в запросе ищутся буквально', () => {
+    expect(findAll(doc, 'нож.')).toHaveLength(1);
+    expect(findAll(doc, '.')).toHaveLength(2);
+  });
+});
