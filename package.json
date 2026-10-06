@@ -2,6 +2,7 @@
   "name": "pero",
   "version": "0.1.0",
   "description": "Перо — текстовый редактор документов .docx",
+  "author": "Перо",
   "main": "electron/main.cjs",
   "scripts": {
     "dev": "concurrently -k -n vite,app \"vite\" \"wait-on tcp:127.0.0.1:5183 && cross-env VITE_DEV_SERVER_URL=http://127.0.0.1:5183 electron .\"",
@@ -10,23 +11,22 @@
     "test": "vitest run",
     "dist": "vite build && electron-builder --win"
   },
-  "dependencies": {
+  "//": "Все пакеты — в devDependencies: интерфейс целиком собирает Vite в dist/, а electron-builder упаковывает только dependencies, которых главному процессу не нужно.",
+  "devDependencies": {
     "@tiptap/extension-table": "^3.31.4",
     "@tiptap/extension-text-align": "^3.31.4",
     "@tiptap/pm": "^3.31.4",
     "@tiptap/react": "^3.31.4",
     "@tiptap/starter-kit": "^3.31.4",
-    "@xmldom/xmldom": "^0.9.12",
-    "jszip": "^3.10.2",
-    "react": "^19.3.0",
-    "react-dom": "^19.3.0"
-  },
-  "devDependencies": {
     "@vitejs/plugin-react": "^6.1.2",
+    "@xmldom/xmldom": "^0.9.12",
     "concurrently": "^10.0.5",
     "cross-env": "^10.1.0",
     "electron": "^44.5.1",
     "electron-builder": "^26.15.3",
+    "jszip": "^3.10.2",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0",
     "vite": "^8.3.3",
     "vitest": "^5.0.3",
     "wait-on": "^9.5.1"
@@ -36,27 +36,50 @@
   "build": {
     "appId": "ru.local.pero",
     "productName": "Перо",
+    "copyright": "© Перо",
     "files": [
       "dist/**",
       "electron/**",
       "package.json"
     ],
     "directories": {
-      "output": "release"
+      "output": "release",
+      "buildResources": "build"
     },
     "fileAssociations": [
       {
         "ext": "docx",
-        "name": "Документ Word",
-        "role": "Editor"
+        "name": "Pero.Document",
+        "description": "Документ DOCX",
+        "role": "Editor",
+        "icon": "build/icon.ico"
       }
     ],
     "win": {
-      "target": "nsis"
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "build/icon.ico",
+      "executableName": "Pero"
     },
     "nsis": {
+      "artifactName": "Pero-Setup-${version}.${ext}",
       "oneClick": false,
-      "allowToChangeInstallationDirectory": true
+      "perMachine": false,
+      "allowElevation": true,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Перо",
+      "uninstallDisplayName": "Перо",
+      "installerIcon": "build/icon.ico",
+      "uninstallerIcon": "build/icon.ico",
+      "deleteAppDataOnUninstall": false
     }
   }
 }

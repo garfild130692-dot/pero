@@ -13,7 +13,7 @@
 npm install
 npm run dev      # режим разработки: Vite + Electron с горячей перезагрузкой
 npm test         # тесты импорта/экспорта docx
-npm run dist     # установщик для Windows → папка release/
+npm run dist     # установщик для Windows → release/Pero-Setup-<версия>.exe (тихо: /S, на машину: /S /allusers)
 ```
 
 Тестовый файл `tests/fixtures/sample.docx` можно перетащить прямо в окно.
