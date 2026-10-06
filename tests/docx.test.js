@@ -294,7 +294,7 @@ describe('сохранность исходного файла', () => {
     const { doc, warnings, preserved } = await importDocx(readFileSync(SRC));
     Node.fromJSON(schema, doc).check();
     expect(warnings).toEqual({});
-    expect(kinds(doc)).toEqual(['footnote', 'commentRange', 'commentRange', 'comment', 'drawing', 'bookmark', 'bookmark',
+    expect(kinds(doc)).toEqual(['footnote', 'commentRange', 'commentRange', 'comment', 'bookmark', 'bookmark',
       'field', 'field', 'field', 'field', 'math', 'symbol', 'pageBreak']);
     expect(preserved.header).toBe(1);
     expect(doc.attrs.sectPr).toMatch(/^<w:sectPr\b[\s\S]*<w:pgSz\b[^>]*w:orient="landscape"/);
@@ -373,5 +373,79 @@ print('margin', round(d.sections[0].left_margin.cm, 2))
     expect(n.lastIndexOf('<w:abstractNum ')).toBeLessThan(n.search(/<w:num[\s>]/));
     const b = (await importDocx(await exportDocx(a, { source: src }))).doc;
     expect(b).toEqual(a);
+  });
+});
+
+describe('рисунки', () => {
+  const PNG = `data:image/png;base64,${readFileSync('build/icon.png').toString('base64')}`; // 512×512
+  const images = (doc) => {
+    const out = [];
+    const walk = (n) => { if (n.type === 'image') out.push(n); (n.content || []).forEach(walk); };
+    walk(doc);
+    return out;
+  };
+  const zipText = async (bytes, name) => (await JSZip.loadAsync(bytes)).file(name)?.async('string');
+
+  it('импорт: рисунок из файла Word — узел image с картинкой, размером и исходной разметкой', async () => {
+    const { doc } = await importDocx(readFileSync('tests/fixtures/preserve.docx'));
+    const [img] = images(doc);
+    expect(img.attrs.src).toMatch(/^data:image\/png;base64,iVBOR/);
+    expect([img.attrs.width, img.attrs.height]).toEqual([512, 512]);
+    expect(img.attrs.target).toBe('word/media/image1.png');
+    expect(img.attrs.xml).toContain('<w:drawing');
+    expect(img.attrs.floating).toBe(false);
+  });
+
+  it('изменение размера рисунка из файла: исходная разметка, новый размер, та же картинка', async () => {
+    const src = readFileSync('tests/fixtures/preserve.docx');
+    const { doc } = await importDocx(src);
+    const [img] = images(doc);
+    Object.assign(img.attrs, { width: 256, height: 128, alt: 'Значок Пера' });
+    const bytes = await exportDocx(doc, { source: src });
+    writeFileSync('tests/out/image-resized.docx', bytes);
+    const xml = await zipText(bytes, 'word/document.xml');
+    expect(xml).toContain(`cx="${256 * 9525}" cy="${128 * 9525}"`);
+    expect(xml).toContain('descr="Значок Пера"');
+    expect(xml).not.toContain('rIdPeroImg'); // новая картинка не создавалась
+    const [again] = images((await importDocx(bytes)).doc);
+    expect([again.attrs.width, again.attrs.height, again.attrs.alt]).toEqual([256, 128, 'Значок Пера']);
+  });
+
+  it('новый рисунок в новом документе: файл в word/media, связь, тип содержимого', async () => {
+    const doc = { type: 'doc', content: [{ type: 'paragraph', content: [
+      { type: 'text', text: 'Схема: ' }, { type: 'image', attrs: { src: PNG, width: 200, height: 200, alt: 'Схема' } },
+    ] }] };
+    const bytes = await exportDocx(doc);
+    writeFileSync('tests/out/image-new.docx', bytes);
+    const zip = await JSZip.loadAsync(bytes);
+    expect(zip.file('word/media/pero_image1.png')).toBeTruthy();
+    expect(await zip.file('[Content_Types].xml').async('string')).toContain('<Default Extension="png" ContentType="image/png"/>');
+    expect(await zip.file('word/_rels/document.xml.rels').async('string')).toContain('Target="media/pero_image1.png"');
+    const [img] = images((await importDocx(bytes)).doc);
+    expect([img.attrs.width, img.attrs.height, img.attrs.alt]).toEqual([200, 200, 'Схема']);
+    const out = execFileSync(PYTHON, ['-c', `
+import docx
+d = docx.Document('tests/out/image-new.docx')
+s = d.inline_shapes[0]
+print(len(d.inline_shapes), round(s.width.cm, 2), round(s.height.cm, 2))
+`], { env: { ...process.env, PYTHONIOENCODING: 'utf-8' } }).toString('utf8');
+    expect(out.trim()).toBe('1 5.29 5.29'); // 200 px = 5,29 см
+  });
+
+  it('рисунок из другого документа в документе с исходным пакетом — новая картинка, исходные не трогаются', async () => {
+    const [foreign] = images((await importDocx(readFileSync('tests/fixtures/preserve.docx'))).doc);
+    const src = readFileSync('tests/fixtures/sample.docx');
+    const { doc } = await importDocx(src);
+    doc.content.push({ type: 'paragraph', content: [foreign] });
+    const bytes = await exportDocx(doc, { source: src });
+    const xml = await zipText(bytes, 'word/document.xml');
+    expect(xml).toContain('r:embed="rIdPeroImg1"');
+    const [img] = images((await importDocx(bytes)).doc);
+    expect(img.attrs.target).toBe('word/media/pero_image1.png');
+    // повторное сохранение в получившийся пакет — уже «свой» рисунок, без дублей
+    const again = await exportDocx((await importDocx(bytes)).doc, { source: bytes });
+    const z = await JSZip.loadAsync(again);
+    const names = Object.keys(z.files).filter((n) => n.includes('media/') && !z.files[n].dir);
+    expect(names).toEqual(['word/media/pero_image1.png']);
   });
 });

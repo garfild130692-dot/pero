@@ -11,6 +11,7 @@ import ParagraphDialog from './ParagraphDialog.jsx';
 import { cssFontStack } from './editor/font.js';
 import { NEW_DOC_PARA } from './editor/paragraph.js';
 import { lineCss } from './editor/paraFormat.js';
+import { insertImageFiles } from './insertImage.js';
 
 // «Одинарный» интервал Word = естественная высота строки шрифта (ascent + descent + lineGap).
 // В CSS её даёт line-height: normal; меряем отношение к размеру шрифта и кешируем.
@@ -152,7 +153,24 @@ export default function App() {
     extensions,
     content: EMPTY,
     autofocus: true,
-    editorProps: { attributes: { class: 'page-content', spellcheck: 'true', lang: 'ru' } },
+    editorProps: {
+      attributes: { class: 'page-content', spellcheck: 'true', lang: 'ru' },
+      // картинки из буфера обмена и перетаскиванием — как рисунки
+      handlePaste: (view, event) => {
+        const files = [...(event.clipboardData?.files || [])].filter((f) => f.type.startsWith('image/'));
+        if (!files.length) return false;
+        insertImageFiles(view.dom.editor, files);
+        return true;
+      },
+      handleDrop: (view, event) => {
+        const files = [...(event.dataTransfer?.files || [])].filter((f) => f.type.startsWith('image/'));
+        if (!files.length) return false;
+        event.preventDefault();
+        const at = view.posAtCoords({ left: event.clientX, top: event.clientY });
+        insertImageFiles(view.dom.editor, files, at ? at.pos : null);
+        return true;
+      },
+    },
     onUpdate: ({ transaction }) => { if (transaction.docChanged) setDirtyState(true); },
   });
 

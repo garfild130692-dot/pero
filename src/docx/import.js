@@ -5,6 +5,7 @@ import { DOMParser, XMLSerializer } from '@xmldom/xmldom';
 import { HIGHLIGHTS, normalizeColor } from '../editor/font.js';
 import { WORD_FALLBACK_PARA, paraBase, paraDiff, twipsToPt } from '../editor/paragraph.js';
 import { CELL_SIDES, NO_BORDERS, TABLE_SIDES, TWIPS_PER_PX, borderFromOoxml } from '../editor/table.js';
+import { EMU_PER_PX, bytesToBase64, mimeOf } from '../editor/image.js';
 
 const W = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main';
 const R = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships';
@@ -232,6 +233,42 @@ function listInfo(numbering, numId, ilvl) {
   return { type: fmt === 'bullet' || fmt === 'none' ? 'bulletList' : 'orderedList', start: lvl ? lvl.start : 1 };
 }
 
+// Первый потомок с локальным именем name на любой глубине
+function findDeep(el, name) {
+  for (const c of children(el)) {
+    if (ln(c) === name) return c;
+    const d = findDeep(c, name);
+    if (d) return d;
+  }
+  return null;
+}
+function countDeep(el, name) {
+  let n = 0;
+  for (const c of children(el)) n += (ln(c) === name ? 1 : 0) + countDeep(c, name);
+  return n;
+}
+
+// Простой рисунок: <w:drawing> с одним wp:inline/wp:anchor, внутри — ровно одна картинка pic:pic.
+// Фигуры, диаграммы, надписи, группы — не рисунки в этом смысле (остаются значками).
+function readPicture(drawing) {
+  const frame = findDeep(drawing, 'inline') || findDeep(drawing, 'anchor');
+  if (!frame) return null;
+  const data = findDeep(frame, 'graphicData');
+  if (!data || !/\/picture$/.test(data.getAttribute('uri') || '') || countDeep(data, 'pic') !== 1) return null;
+  const blip = findDeep(data, 'blip');
+  const rid = blip && (blip.getAttributeNS(R, 'embed') || blip.getAttribute('r:embed'));
+  if (!rid) return null;
+  const ext = child(frame, 'extent');
+  const docPr = child(frame, 'docPr');
+  return {
+    rid,
+    cx: +(ext && ext.getAttribute('cx')) || 0,
+    cy: +(ext && ext.getAttribute('cy')) || 0,
+    alt: (docPr && (docPr.getAttribute('descr') || '')) || '',
+    floating: ln(frame) === 'anchor',
+  };
+}
+
 // ---------- Связи (гиперссылки) ----------
 function parseRels(doc) {
   const map = {};
@@ -322,6 +359,7 @@ class Importer {
     this.styleCache = {};
     this.numbering = ctx.numbering;
     this.rels = ctx.rels;
+    this.media = ctx.media || {}; // rId → { src: data:-URL, target: путь в пакете }
     this.warnings = {};   // что теряется при сохранении
     this.preserved = {};  // что Перо не редактирует, но сохраняет как есть
     this.bodySectPr = null;
@@ -409,7 +447,27 @@ class Importer {
           break;
         }
         case 'cr': push({ type: 'hardBreak' }); break;
-        case 'drawing': case 'AlternateContent': this.opaque(push, 'drawing', runXml(n)); break;
+        case 'drawing': {
+          const pic = readPicture(n);
+          const media = pic && this.media[pic.rid];
+          if (media) {
+            this.preserved.picture = (this.preserved.picture || 0) + 1;
+            push({
+              type: 'image',
+              attrs: {
+                src: media.src,
+                width: pic.cx ? pic.cx / EMU_PER_PX : null,
+                height: pic.cy ? pic.cy / EMU_PER_PX : null,
+                alt: pic.alt,
+                xml: runXml(n),
+                target: media.target,
+                floating: pic.floating,
+              },
+            });
+          } else this.opaque(push, 'drawing', runXml(n));
+          break;
+        }
+        case 'AlternateContent': this.opaque(push, 'drawing', runXml(n)); break;
         case 'pict': case 'object': this.opaque(push, 'object', runXml(n)); break;
         case 'footnoteReference': this.opaque(push, 'footnote', runXml(n)); break;
         case 'endnoteReference': this.opaque(push, 'endnote', runXml(n)); break;
@@ -614,14 +672,24 @@ export async function importDocx(data) {
   const docDefaults = { fontFamily: normal.fontFamily || 'Times New Roman', fontSize: normal.fontSize || 10 };
   // Абзац по умолчанию: как у Word без настроек ← pPrDefault ← стиль «Обычный»
   const docPara = { ...WORD_FALLBACK_PARA, ...defaults.para, ...resolvedStylePara(styles, defaultPara, {}) };
+  // Картинки документа: связь типа image → файл в пакете → data:-URL (для показа и пересохранения)
+  const rels = parseRels(await read('word/_rels/document.xml.rels'));
+  const media = {};
+  for (const [rid, rel] of Object.entries(rels)) {
+    if (!/\/image$/.test(rel.type || '') || !rel.target || /^[a-z]+:/i.test(rel.target)) continue; // внешние ссылки — нет
+    const target = rel.target.startsWith('/') ? rel.target.slice(1) : 'word/' + rel.target.replace(/^\.\//, '');
+    const f = zip.file(target);
+    if (f) media[rid] = { src: `data:${mimeOf(target)};base64,${bytesToBase64(await f.async('uint8array'))}`, target };
+  }
   const imp = new Importer({
+    media,
     styles,
     defaultPara,
     theme,
     docDefaults,
     docPara,
     numbering: parseNumbering(await read('word/numbering.xml')),
-    rels: parseRels(await read('word/_rels/document.xml.rels')),
+    rels,
   });
   const body = child(documentXml.documentElement, 'body');
   let content = imp.blocks(body);

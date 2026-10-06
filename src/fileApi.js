@@ -17,6 +17,21 @@ export async function openFile() {
   });
 }
 
+// Выбрать картинку: { name, data } или null
+export async function openImage() {
+  if (native && native.openImage) return native.openImage();
+  return new Promise((resolve) => {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = 'image/*';
+    input.onchange = async () => {
+      const f = input.files[0];
+      resolve(f ? { path: null, name: f.name, data: await f.arrayBuffer() } : null);
+    };
+    input.click();
+  });
+}
+
 export async function saveFile(path, name, data) {
   if (native) return path ? native.saveFile(path, data) : native.saveFileAs(name, data);
   return download(name, data);

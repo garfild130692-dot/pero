@@ -119,6 +119,14 @@ ipcMain.handle('file:open', async () => {
   return readDoc(r.filePaths[0]);
 });
 
+// Выбор картинки для «Вставка → Рисунок»
+const IMAGE_FILTER = [{ name: 'Изображения', extensions: ['png', 'jpg', 'jpeg', 'gif', 'bmp', 'webp', 'svg'] }];
+ipcMain.handle('file:openImage', async () => {
+  const r = await dialog.showOpenDialog(win, { properties: ['openFile'], filters: IMAGE_FILTER });
+  if (r.canceled || !r.filePaths[0]) return null;
+  return readDoc(r.filePaths[0]);
+});
+
 ipcMain.handle('file:save', async (_e, filePath, data) => {
   await fs.writeFile(filePath, Buffer.from(data));
   return { path: filePath, name: path.basename(filePath) };

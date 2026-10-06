@@ -275,6 +275,17 @@ body { background: var(--workspace); overflow: hidden; }
 .page-content.resize-cursor { cursor: col-resize; }
 .ProseMirror-gapcursor:after { border-top-color: #000; }
 
+/* Рисунки: рамка выделения и маркер изменения размера */
+.pero-image { position: relative; display: inline-block; line-height: 0; text-indent: 0; vertical-align: baseline; }
+.pero-image img { display: inline-block; max-width: none; }
+.pero-image.selected { outline: 1.5px solid var(--accent); outline-offset: 1px; }
+.pero-image-handle {
+  display: none; position: absolute; right: -5px; bottom: -5px; width: 10px; height: 10px; background: #fff;
+  border: 1.5px solid var(--accent); border-radius: 2px; cursor: nwse-resize; z-index: 2;
+}
+.pero-image.selected .pero-image-handle { display: block; }
+.pero-image.selected img { opacity: .92; }
+
 /* Сохраняемые без изменений фрагменты (значки). Сноски/комментарии нумеруются по порядку, как в Word. */
 .page-content { counter-reset: pero-fn pero-en pero-cm; }
 .opaque { cursor: default; user-select: none; }
@@ -327,3 +338,5 @@ p[data-section-break]::after {
 .btn:hover { background: #f0f0f0; }
 .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
 .btn.primary:hover { background: var(--accent-dark); }
+.alt-field input { width: 220px; font: inherit; padding: 4px 6px; border: 1px solid #bbb; border-radius: 3px; }
+.rb-note { font-size: 11.5px; color: var(--muted); max-width: 260px; line-height: 1.35; }

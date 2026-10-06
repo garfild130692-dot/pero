@@ -22,6 +22,7 @@ export const Icon = {
   numbers: (p) => <S {...p}><path d="M3 4h2v5M3 9h3M3 14h3l-3 4h3" strokeWidth="1.5" /><path d="M10 6h11M10 12h11M10 18h11" /></S>,
   outdent: (p) => <S {...p}><path d="M3 4h18M11 9h10M11 15h10M3 20h18" /><path d="m7 9-4 3 4 3" /></S>,
   indent: (p) => <S {...p}><path d="M3 4h18M11 9h10M11 15h10M3 20h18" /><path d="m3 9 4 3-4 3" /></S>,
+  picture: (p) => <S {...p}><rect x="3" y="4" width="18" height="16" rx="1.5" /><circle cx="9" cy="10" r="2" /><path d="m21 17-5-5-9 8" /></S>,
   lineSpacing: (p) => <S {...p}><path d="M11 5h10M11 10h10M11 15h10M11 20h10" /><path d="m3 7 3-3 3 3M6 4v16M3 17l3 3 3-3" /></S>,
   launcher: (p) => <S {...p}><path d="M5 5h9M5 5v9" /><path d="m9 9 10 10M19 12v7h-7" /></S>,
   alignLeft: (p) => <S {...p}><path d="M3 5h18M3 10h12M3 15h18M3 20h12" /></S>,

@@ -2,7 +2,9 @@
 import React, { useState } from 'react';
 import { useEditorState } from '@tiptap/react';
 import { Icon } from './icons.jsx';
-import { clipboard } from './fileApi.js';
+import { clipboard, openImage } from './fileApi.js';
+import { insertImageFiles } from './insertImage.js';
+import { PicturePanel } from './PictureControls.jsx';
 import { FontFamilyBox, FontSizeBox, HighlightButton, TextColorButton, fontState, usePopover } from './FontControls.jsx';
 import { effectivePara } from './editor/paraFormat.js';
 import { LINE_PRESETS, fmtNum } from './editor/paragraph.js';
@@ -138,13 +140,14 @@ export default function Ribbon({ editor, file, onLink, onParagraph }) {
       font: fontState(e),
       para: paraState(e),
       table: e.isActive('table') ? tableState(e) : null,
+      image: e.state.selection.node && e.state.selection.node.type.name === 'image' ? e.state.selection.node.attrs : null,
     }),
     // в состоянии есть вложенный объект — сравниваем по значению, чтобы лента не перерисовывалась зря
     equalityFn: (a, b) => JSON.stringify(a) === JSON.stringify(b),
   });
 
   const c = () => editor.chain().focus();
-  const activeTab = tab === 'table' && !s.inTable ? 'home' : tab;
+  const activeTab = (tab === 'table' && !s.inTable) || (tab === 'picture' && !s.image) ? 'home' : tab;
 
   const tabs = [
     ['file', 'Файл'],
@@ -160,6 +163,11 @@ export default function Ribbon({ editor, file, onLink, onParagraph }) {
             {label}
           </button>
         ))}
+        {s.image && (
+          <button className={`rb-tab contextual${activeTab === 'picture' ? ' active' : ''}`} onMouseDown={(e) => e.preventDefault()} onClick={() => setTab('picture')}>
+            Рисунок
+          </button>
+        )}
         {s.inTable && (
           <button className={`rb-tab contextual${activeTab === 'table' ? ' active' : ''}`} onMouseDown={(e) => e.preventDefault()} onClick={() => setTab('table')}>
             Таблица
@@ -274,11 +282,17 @@ export default function Ribbon({ editor, file, onLink, onParagraph }) {
               <Btn big icon="link" label="Ссылка" title="Вставить ссылку (Ctrl+K)" onClick={onLink} />
               <Btn big icon="unlink" label="Убрать ссылку" disabled={!s.link} onClick={() => c().extendMarkRange('link').unsetLink().run()} />
             </Group>
+            <Group title="Иллюстрации">
+              <Btn big icon="picture" label="Рисунок" title="Вставить рисунок из файла (можно и перетащить или вставить из буфера)"
+                onClick={async () => { const f = await openImage(); if (f) insertImageFiles(editor, [f]); }} />
+            </Group>
             <Group title="Текст">
               <Btn big icon="lineBreak" label="Разрыв строки" title="Разрыв строки (Shift+Enter)" onClick={() => c().setHardBreak().run()} />
             </Group>
           </>
         )}
+
+        {activeTab === 'picture' && s.image && <PicturePanel editor={editor} image={s.image} Group={Group} />}
 
         {activeTab === 'table' && (
           <>

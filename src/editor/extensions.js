@@ -14,6 +14,7 @@ import { NEW_DOC_PARA } from './paragraph.js';
 import { ParaFormat } from './paraFormat.js';
 import { PeroTable, PeroTableCell, PeroTableHeader, PeroTableRow, TableFormat } from './tableFormat.js';
 import { Opaque } from './opaque.js';
+import { PeroImage } from './image.js';
 
 // Как оформлены заголовки (совпадает со styles.css и стилями Heading1–6 в export.js)
 export const HEADING_FONT = 'Calibri Light';
@@ -184,6 +185,7 @@ export const extensions = [
   TextStyle,
   RunStyle,
   Opaque,
+  PeroImage,
   Highlight.configure({ multicolor: true }),
   Sup,
   Sub,

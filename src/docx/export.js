@@ -4,6 +4,33 @@ import { DOMParser } from '@xmldom/xmldom';
 import { DEFAULT_FONT, DEFAULT_SIZE, highlightName, normalizeColor, parseSize } from '../editor/font.js';
 import { NEW_DOC_PARA, ptToTwips } from '../editor/paragraph.js';
 import { CELL_SIDES, GRID_BORDERS, TABLE_SIDES, TWIPS_PER_PX, borderToOoxml } from '../editor/table.js';
+import { EMU_PER_PX, dataUrlToBytes, extOf } from '../editor/image.js';
+
+// Разметка нового встроенного рисунка (как пишет Word для «Вставка → Рисунок»)
+function drawingXml({ rid, cx, cy, id, name, alt }) {
+  const A = 'http://schemas.openxmlformats.org/drawingml/2006/main';
+  return `<w:r><w:drawing><wp:inline xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" distT="0" distB="0" distL="0" distR="0">` +
+    `<wp:extent cx="${cx}" cy="${cy}"/><wp:effectExtent l="0" t="0" r="0" b="0"/>` +
+    `<wp:docPr id="${id}" name="${esc(name)}" descr="${esc(alt || '')}"/>` +
+    `<wp:cNvGraphicFramePr><a:graphicFrameLocks xmlns:a="${A}" noChangeAspect="1"/></wp:cNvGraphicFramePr>` +
+    `<a:graphic xmlns:a="${A}"><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture">` +
+    `<pic:pic xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture">` +
+    `<pic:nvPicPr><pic:cNvPr id="0" name="${esc(name)}"/><pic:cNvPicPr/></pic:nvPicPr>` +
+    `<pic:blipFill><a:blip r:embed="${rid}"/><a:stretch><a:fillRect/></a:stretch></pic:blipFill>` +
+    `<pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="${cx}" cy="${cy}"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr>` +
+    '</pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r>';
+}
+
+// Исходный рисунок с новым размером и замещающим текстом (остальное — как было)
+function patchDrawing(xml, cx, cy, alt) {
+  let out = xml.replace(/(<[\w]+:extent\b[^>]*?)cx="\d+"([^>]*?)cy="\d+"/, `$1cx="${cx}"$2cy="${cy}"`);
+  out = out.replace(/(<[\w]+:xfrm\b[^>]*>\s*(?:<[\w]+:off\b[^>]*\/>\s*)?<[\w]+:ext\b[^>]*?)cx="\d+"([^>]*?)cy="\d+"/, `$1cx="${cx}"$2cy="${cy}"`);
+  out = out.replace(/(<[\w]+:docPr\b)([^>]*?)(\/?>)/, (all, tag, attrs, end) => {
+    const rest = attrs.replace(/\sdescr="[^"]*"/, '');
+    return `${tag}${rest}${alt ? ` descr="${esc(alt)}"` : ''}${end}`;
+  });
+  return out;
+}
 
 // <w:spacing> и <w:ind> из параметров абзаца (в pt); пустая строка, если задавать нечего
 function spacingXml(a) {
@@ -56,7 +83,10 @@ const DEFAULT_SECTPR = `<w:sectPr><w:pgSz w:w="${PAGE.w}" w:h="${PAGE.h}"/>` +
   '<w:cols w:space="708"/><w:docGrid w:linePitch="360"/></w:sectPr>';
 
 class Exporter {
-  constructor({ styleIds = OUR_STYLE_IDS, numBase = 1 } = {}) {
+  constructor({ styleIds = OUR_STYLE_IDS, numBase = 1, relTargets = null, imgBase = 0 } = {}) {
+    this.imgBase = imgBase;       // номера картинок Пера, уже занятые в исходном пакете
+    this.relTargets = relTargets; // rId → путь части в исходном пакете (если сохраняем в него)
+    this.images = [];             // новые картинки: { rid, path, bytes, ext }
     this.links = [];      // гиперссылки → relationships
     this.orderedNums = []; // экземпляры нумерованных списков: { start, ilvl }
     this.styleIds = styleIds;
@@ -71,6 +101,7 @@ class Exporter {
 
   run(node) {
     if (node.type === 'opaque') return node.attrs.xml || ''; // сохраняемый фрагмент — как был
+    if (node.type === 'image') return this.image(node);
     if (node.type === 'hardBreak') return '<w:r><w:br/></w:r>';
     if (node.type !== 'text') return '';
     const marks = node.marks || [];
@@ -113,6 +144,23 @@ class Exporter {
       return `<w:hyperlink r:id="${this.linkId(href)}">${r}</w:hyperlink>`;
     }
     return r;
+  }
+
+  image(node) {
+    const a = node.attrs;
+    const cx = Math.max(1, Math.round((a.width || 96) * EMU_PER_PX));
+    const cy = Math.max(1, Math.round((a.height || 96) * EMU_PER_PX));
+    // рисунок из этого же пакета: исходная разметка (обтекание, обрезка, эффекты) с новым размером
+    const rid = a.xml && (/r:embed="([^"]+)"/.exec(a.xml) || [])[1];
+    if (rid && this.relTargets && this.relTargets[rid] === a.target) return patchDrawing(a.xml, cx, cy, a.alt);
+    // новый рисунок (или пришёл из другого документа) — своя часть в word/media
+    const data = dataUrlToBytes(a.src);
+    if (!data) return '';
+    const n = this.imgBase + this.images.length + 1;
+    const ext = extOf(data.mime);
+    const img = { rid: `rIdPeroImg${n}`, path: `media/pero_image${n}.${ext}`, bytes: data.bytes, ext, mime: data.mime === 'image/jpeg' ? 'image/jpeg' : `image/${ext}` };
+    this.images.push(img);
+    return drawingXml({ rid: img.rid, cx, cy, id: 90000 + n, name: `Рисунок ${n}`, alt: a.alt });
   }
 
   inlines(content = []) {
@@ -392,10 +440,17 @@ async function readSource(zip) {
     const t = r && /Target="([^"]+)"/.exec(r[0]);
     return t ? resolvePart(dir, t[1]) : null;
   };
+  // все связи документа: rId → путь части (для проверки, что рисунок — из этого пакета)
+  const relTargets = {};
+  for (const m2 of rels.matchAll(/<Relationship\b[^>]*>/g)) {
+    const id = /Id="([^"]+)"/.exec(m2[0]);
+    const t = /Target="([^"]+)"/.exec(m2[0]);
+    if (id && t && !/TargetMode="External"/.test(m2[0])) relTargets[id[1]] = resolvePart(dir, t[1]);
+  }
   const stylesPath = partOf('styles');
   const numberingPath = partOf('numbering');
   return {
-    mainPath, dir, relsPath, rootTag, preBody, rootNs, rels, stylesPath, numberingPath,
+    mainPath, dir, relsPath, rootTag, preBody, rootNs, rels, relTargets, stylesPath, numberingPath,
     styles: stylesPath ? await text(stylesPath) : null,
     numbering: numberingPath ? await text(numberingPath) : null,
     contentTypes: (await text('[Content_Types].xml')) || CONTENT_TYPES,
@@ -456,6 +511,16 @@ function stripRootNs(xml, rootNs) {
   return out;
 }
 
+// Типы содержимого для картинок (по расширению)
+function addImageTypes(ct, images) {
+  let out = ct;
+  for (const img of images) {
+    if (new RegExp(`<Default\\b[^>]*Extension="${img.ext}"`, 'i').test(out)) continue;
+    out = out.replace('</Types>', `<Default Extension="${img.ext}" ContentType="${img.mime}"/></Types>`);
+  }
+  return out;
+}
+
 function addOverride(ct, partName, type) {
   if (ct.includes(`PartName="/${partName}"`)) return ct;
   return ct.replace('</Types>', `<Override PartName="/${partName}" ContentType="${type}"/></Types>`);
@@ -480,9 +545,11 @@ export async function exportDocx(doc, { source } = {}) {
 <Relationship Id="rId1" Type="${relType('styles')}" Target="styles.xml"/>
 <Relationship Id="rId2" Type="${relType('numbering')}" Target="numbering.xml"/>
 ${ex.links.map((href, i) => `<Relationship Id="rIdPeroL${i + 1}" Type="${relType('hyperlink')}" Target="${esc(href)}" TargetMode="External"/>`).join('\n')}
+${ex.images.map((img) => `<Relationship Id="${img.rid}" Type="${relType('image')}" Target="${img.path}"/>`).join('\n')}
 </Relationships>`;
     const zip = new JSZip();
-    zip.file('[Content_Types].xml', CONTENT_TYPES);
+    zip.file('[Content_Types].xml', addImageTypes(CONTENT_TYPES, ex.images));
+    for (const img of ex.images) zip.file('word/' + img.path, img.bytes);
     zip.file('_rels/.rels', ROOT_RELS);
     zip.file('docProps/core.xml', coreXml());
     zip.file('docProps/app.xml', APP_XML);
@@ -514,7 +581,10 @@ ${ex.links.map((href, i) => `<Relationship Id="rIdPeroL${i + 1}" Type="${relType
 
   const absBase = maxId(src.numbering, /w:abstractNumId="(\d+)"/g) + 1;
   const numBase = Math.max(1, maxId(src.numbering, /<w:num\b[^>]*w:numId="(\d+)"/g) + 1);
-  const ex = new Exporter({ styleIds, numBase });
+  // картинки, добавленные Пером при прошлых сохранениях, остаются; новые нумеруются дальше
+  const imgBase = Math.max(0, ...Object.keys(zip.files).map((n) => +((/\/media\/pero_image(\d+)\.\w+$/.exec(n) || [])[1] || 0)),
+    ...[...src.rels.matchAll(/Id="rIdPeroImg(\d+)"/g)].map((m) => +m[1]));
+  const ex = new Exporter({ styleIds, numBase, relTargets: src.relTargets, imgBase });
   let body = ex.blocks(doc.content || []);
   if (!body) body = '<w:p/>';
   body = stripRootNs(body + sectPr, src.rootNs);
@@ -537,7 +607,11 @@ ${ex.links.map((href, i) => `<Relationship Id="rIdPeroL${i + 1}" Type="${relType
 
   // гиперссылки Пера; исходные связи (картинки, колонтитулы, сноски…) не трогаем
   const linkRels = ex.links.map((href, i) => `<Relationship Id="rIdPeroL${i + 1}" Type="${relType('hyperlink')}" Target="${esc(href)}" TargetMode="External"/>`).join('');
-  rels = rels.replace(/<Relationship\b[^>]*Id="rIdPeroL\d+"[^>]*\/>/g, '').replace('</Relationships>', linkRels + '</Relationships>');
+  const imgRels = ex.images.map((img) => `<Relationship Id="${img.rid}" Type="${relType('image')}" Target="${img.path}"/>`).join('');
+  // ссылки Пера пересоздаются заново; картинки прошлых сохранений остаются (на них ссылаются рисунки)
+  rels = rels.replace(/<Relationship\b[^>]*Id="rIdPeroL\d+"[^>]*\/>/g, '').replace('</Relationships>', linkRels + imgRels + '</Relationships>');
+  for (const img of ex.images) zip.file(prefix + img.path, img.bytes);
+  ct = addImageTypes(ct, ex.images);
   zip.file(src.relsPath, rels);
   zip.file('[Content_Types].xml', ct);
   if (src.core) {
