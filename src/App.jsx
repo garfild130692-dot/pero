@@ -16,6 +16,8 @@ import { EMPTY_HF, pagePx, parseSectPr } from './editor/page.js';
 import { pageInfo } from './editor/pagination.js';
 import { HeaderFooterDialog, MarginsDialog, PageChrome, printCss } from './PageControls.jsx';
 import FindBar from './FindBar.jsx';
+import StyleDialog from './StyleDialog.jsx';
+import { styleCss } from './editor/styles.js';
 
 // «Одинарный» интервал Word = естественная высота строки шрифта (ascent + descent + lineGap).
 // В CSS её даёт line-height: normal; меряем отношение к размеру шрифта и кешируем.
@@ -338,7 +340,7 @@ export default function App() {
     editor,
     selector: ({ editor: e }) => (e ? {
       family: e.state.doc.attrs.fontFamily, size: e.state.doc.attrs.fontSize, para: e.state.doc.attrs.para,
-      sectPr: e.state.doc.attrs.sectPr, hf: e.state.doc.attrs.hf, total: pageInfo(e.state).total,
+      sectPr: e.state.doc.attrs.sectPr, hf: e.state.doc.attrs.hf, total: pageInfo(e.state).total, styles: e.state.doc.attrs.styles,
     } : null),
   });
 
@@ -353,6 +355,7 @@ export default function App() {
       </div>
       <Ribbon editor={editor} file={{ newDoc, open, save: () => save(), saveAs, print: doPrint, pdf: doPdf }} onLink={() => setModal('link')}
         onFind={(m) => setFindMode(m)}
+        onStyle={(m) => (m && m.remove ? editor.chain().focus().deleteStyle(m.remove).run() : setModal({ style: m }))}
         onParagraph={() => setModal('para')} onMargins={() => setModal('margins')} onHf={() => setModal('hf')} />
       <div
         className="workspace"
@@ -374,9 +377,12 @@ export default function App() {
       {modal === 'para' && <ParagraphDialog editor={editor} onClose={() => setModal(null)} />}
       {modal === 'margins' && <MarginsDialog editor={editor} onClose={() => setModal(null)} />}
       {modal === 'hf' && <HeaderFooterDialog editor={editor} onClose={() => setModal(null)} />}
+      {modal && modal.style && <StyleDialog editor={editor} mode={modal.style} onClose={() => setModal(null)} />}
+      {/* пользовательские стили абзацев — правила по data-pstyle */}
+      <style>{styleCss(docFont && docFont.styles)}</style>
       {/* печать/PDF: размер листа, поля и колонтитулы — правилами @page */}
       <style>{printCss(docFont && docFont.sectPr, (docFont && docFont.hf) || EMPTY_HF)}</style>
-      {modal && typeof modal === 'object' && (
+      {modal && typeof modal === 'object' && !modal.style && (
         <Modal
           title={modal.title}
           onClose={() => modal.actions[modal.actions.length - 1][2]()}

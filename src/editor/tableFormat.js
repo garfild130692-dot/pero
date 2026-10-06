@@ -2,7 +2,31 @@
 import { Extension } from '@tiptap/core';
 import { Table, TableCell, TableHeader, TableRow, TableView } from '@tiptap/extension-table';
 import { TableMap, selectedRect } from '@tiptap/pm/tables';
-import { CELL_SIDES, GRID_BORDERS, NONE, TABLE_SIDES, borderCss } from './table.js';
+import { CELL_SIDES, DEFAULT_PEN, GRID_BORDERS, NONE, NO_BORDERS, TABLE_SIDES, borderCss } from './table.js';
+
+// Стили таблиц: [ключ, название, образец] — готовые оформления (границы таблицы, заливка шапки и строк)
+export const TABLE_STYLES = [
+  ['grid', 'Сетка таблицы', '▦'],
+  ['none', 'Без границ', '⬚'],
+  ['horizontal', 'Только горизонтальные линии', '☰'],
+  ['header', 'Сетка с заливкой шапки', '▤'],
+  ['banded', 'Чередование строк', '▥'],
+  ['frame', 'Строгая рамка', '▣'],
+];
+const HEADER_BG = '#dcefe9';
+const BAND_BG = '#f2f7f5';
+const line = (width = 0.5) => ({ ...DEFAULT_PEN, width });
+function tableStyleDef(key) {
+  const H = { ...NO_BORDERS, top: line(), bottom: line(), insideH: line() };
+  switch (key) {
+    case 'none': return { borders: NO_BORDERS };
+    case 'horizontal': return { borders: H };
+    case 'header': return { borders: GRID_BORDERS, header: HEADER_BG };
+    case 'banded': return { borders: H, header: HEADER_BG, band: BAND_BG };
+    case 'frame': return { borders: { top: line(1.5), bottom: line(1.5), left: line(1.5), right: line(1.5), insideH: line(0.5), insideV: line(0.5) } };
+    default: return { borders: GRID_BORDERS };
+  }
+}
 import { normalizeColor } from './font.js';
 
 const CSS_VAR = { top: '--tb-top', left: '--tb-left', bottom: '--tb-bottom', right: '--tb-right', insideH: '--tb-ih', insideV: '--tb-iv' };
@@ -194,6 +218,28 @@ export const TableFormat = Extension.create({
       setTableAlign: (align) => ({ state, tr, dispatch }) => updateTable(state, tr, dispatch, () => ({ align: align === 'left' ? null : align })),
       // Границы таблицы по умолчанию (например, «Сетка таблицы»)
       setTableBorders: (borders) => ({ state, tr, dispatch }) => updateTable(state, tr, dispatch, () => ({ borders })),
+
+      // Стиль таблицы: границы таблицы, заливка шапки/чередующихся строк; свои границы и заливка ячеек сбрасываются
+      applyTableStyle: (key) => ({ state, tr, dispatch }) => {
+        let rect;
+        try { rect = selectedRect(state); } catch { return false; }
+        if (!dispatch) return true;
+        const def = tableStyleDef(key);
+        const { table, tableStart } = rect;
+        tr.setNodeMarkup(tableStart - 1, undefined, { ...table.attrs, borders: def.borders });
+        let rowPos = tableStart;
+        table.forEach((row, _o, r) => {
+          let cellPos = rowPos + 1;
+          row.forEach((cell) => {
+            const bg = r === 0 && def.header ? def.header : def.band && r > 0 && r % 2 === 0 ? def.band : null;
+            tr.setNodeMarkup(cellPos, undefined, { ...cell.attrs, borders: null, background: bg });
+            cellPos += cell.nodeSize;
+          });
+          rowPos += row.nodeSize;
+        });
+        dispatch(tr);
+        return true;
+      },
 
       // «Выровнять ширину столбцов»: все столбцы одинаковые, общая ширина сохраняется
       distributeColumns: () => ({ state, tr, dispatch }) => {

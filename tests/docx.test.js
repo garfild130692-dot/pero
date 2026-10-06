@@ -81,7 +81,10 @@ describe('шрифт', () => {
     expect(marksOf(doc, 'заливка')).toEqual({ highlight: { color: '#ffc000' } }); // w:shd
     expect(marksOf(doc, '10,5')).toEqual({ textStyle: ts({ fontSize: 10.5 }) });
     expect(text(doc)).toContain('O, как обычный, '); // Times New Roman 14 явно = умолчание → без меток
-    expect(marksOf(doc, 'print("Перо")')).toEqual({ textStyle: ts({ fontFamily: 'Courier New', fontSize: 10 }) }); // стиль абзаца
+    // стиль абзаца «Код»: абзац ссылается на стиль, шрифт — в определении стиля, а не в тексте
+    expect(marksOf(doc, 'print("Перо")')).toEqual({});
+    expect(doc.content.find((n) => n.content && n.content[0].text === 'print("Перо")').attrs.styleId).toBe('Код');
+    expect(doc.attrs.styles).toEqual([{ id: 'Код', name: 'Код', para: {}, run: { fontFamily: 'Courier New', fontSize: 10 }, align: null, origin: 'file', modified: false }]);
     expect(marksOf(doc, 'акцент')).toEqual({ bold: true, textStyle: ts({ color: '#1f6f5c' }) }); // символьный стиль
     const sup = doc.content[1].content.findIndex((n) => n.text === ', x') + 1;
     expect(doc.content[1].content[sup].marks).toEqual([{ type: 'superscript' }]);
@@ -162,7 +165,8 @@ describe('абзац', () => {
     expect(paraOf(doc, 'Слева 2 см, справа 1 см.')).toEqual({ indentLeft: 56.7, indentRight: 28.35 });
     expect(paraOf(doc, 'Выступ 1 см при отступе слева 1 см.')).toEqual({ indentLeft: 28.35, indentFirst: -28.35 });
     expect(paraOf(doc, 'Без отступа первой строки.')).toEqual({ indentFirst: 0 });
-    expect(paraOf(doc, 'Абзац пользовательского стиля.')).toEqual({ spaceBefore: 6, indentLeft: 85.05 });
+    expect(paraOf(doc, 'Абзац пользовательского стиля.')).toEqual({ styleId: 'ЦитатаПеро' }); // свойства — в стиле
+    expect(doc.attrs.styles[0]).toMatchObject({ id: 'ЦитатаПеро', name: 'Цитата Перо', para: { spaceBefore: 6, indentLeft: 85.05 } });
     expect(paraOf(doc, 'Пункт списка с отступом')).toEqual({}); // отступы элемента списка задаёт список
   });
 
@@ -539,5 +543,43 @@ describe('поиск', () => {
   it('спецсимволы в запросе ищутся буквально', () => {
     expect(findAll(doc, 'нож.')).toHaveLength(1);
     expect(findAll(doc, '.')).toHaveLength(2);
+  });
+});
+
+describe('стили', () => {
+  it('изменённый стиль переписывается в файле, новый — дописывается, абзацы ссылаются на стили', async () => {
+    const src = readFileSync('tests/fixtures/para.docx');
+    const { doc } = await importDocx(src);
+    const quote = doc.attrs.styles.find((s) => s.id === 'ЦитатаПеро');
+    Object.assign(quote, { run: { bold: true, color: '#1f6f5c' }, para: { indentLeft: 56.7 }, modified: true });
+    doc.attrs.styles.push({ id: 'PeroStyle1', name: 'Важно', para: { spaceBefore: 12 }, run: { fontFamily: 'Arial', fontSize: 14, italic: true }, align: 'center', origin: 'pero', modified: true });
+    doc.content.push({ type: 'paragraph', attrs: { styleId: 'PeroStyle1' }, content: [{ type: 'text', text: 'Новый стиль' }] });
+    const bytes = await exportDocx(doc, { source: src });
+    writeFileSync('tests/out/styles.docx', bytes);
+    const back = (await importDocx(bytes)).doc;
+    expect(back.attrs.styles.find((s) => s.id === 'ЦитатаПеро')).toMatchObject({ run: { bold: true, color: '#1f6f5c' }, para: { indentLeft: 56.7 } });
+    expect(back.attrs.styles.find((s) => s.id === 'PeroStyle1')).toMatchObject({ name: 'Важно', align: 'center', run: { fontFamily: 'Arial', fontSize: 14, italic: true }, para: { spaceBefore: 12 } });
+    const out = execFileSync(PYTHON, ['-c', `
+import docx
+d = docx.Document('tests/out/styles.docx')
+p = [x for x in d.paragraphs if x.text == 'Новый стиль'][0]
+s = p.style
+print(s.name, s.font.name, s.font.size.pt, s.font.italic, s.paragraph_format.alignment)
+q = d.styles['Цитата Перо']
+print(q.font.bold, q.font.color.rgb, round(q.paragraph_format.left_indent.cm, 2))
+`], { env: { ...process.env, PYTHONIOENCODING: 'utf-8' } }).toString('utf8');
+    expect(out).toContain('Важно Arial 14.0 True CENTER (1)');
+    expect(out).toContain('True 1F6F5C 2.0');
+  });
+
+  it('изменение «Обычного»: docDefaults переписываются, шрифт/размер из стиля «Обычный» убираются', async () => {
+    const src = readFileSync('tests/fixtures/fonts.docx'); // «Обычный» = Times New Roman 14 в самом стиле
+    const { doc } = await importDocx(src);
+    Object.assign(doc.attrs, { fontFamily: 'Arial', fontSize: 12, defaultsModified: true });
+    const bytes = await exportDocx(doc, { source: src });
+    const back = (await importDocx(bytes)).doc;
+    expect([back.attrs.fontFamily, back.attrs.fontSize]).toEqual(['Arial', 12]);
+    const styles = await (await JSZip.loadAsync(bytes)).file('word/styles.xml').async('string');
+    expect(styles).toMatch(/<w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:ascii="Arial"/);
   });
 });

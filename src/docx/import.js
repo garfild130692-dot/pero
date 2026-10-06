@@ -91,6 +91,7 @@ function parseStyles(doc, theme) {
     map[id] = {
       type: wAttr(st, 'type'),
       name: (wAttr(child(st, 'name'), 'val') || '').toLowerCase(),
+      displayName: wAttr(child(st, 'name'), 'val') || id,
       basedOn: wAttr(child(st, 'basedOn'), 'val'),
       jc: wAttr(child(pPr, 'jc'), 'val'),
       numPr: readNumPr(child(pPr, 'numPr')),
@@ -357,6 +358,8 @@ class Importer {
     this.theme = ctx.theme;
     this.docDefaults = ctx.docDefaults;
     this.docPara = ctx.docPara;
+    this.usedStyles = {};  // пользовательские стили абзацев, на которые ссылается документ
+    this.fontBase = null;  // шрифт/размер, от которых считается прямое форматирование в текущем абзаце
     this.styleCache = {};
     this.numbering = ctx.numbering;
     this.rels = ctx.rels;
@@ -420,10 +423,11 @@ class Importer {
     const charMarks = rStyle && this.styles[rStyle] && this.styles[rStyle].name !== 'hyperlink'
       ? resolvedStyleMarks(this.styles, rStyle, this.styleCache) : {};
     const m = { ...paraMarks, ...charMarks, ...readRunMarks(rPr, this.theme) };
-    // совпадающее с умолчаниями документа — не прямое форматирование (у заголовков свои шрифт и размер)
+    // совпадающее с умолчаниями (документа или стиля абзаца) — не прямое форматирование; у заголовков свои шрифт и размер
     if (!isHeading) {
-      if (m.fontFamily === this.docDefaults.fontFamily) delete m.fontFamily;
-      if (m.fontSize === this.docDefaults.fontSize) delete m.fontSize;
+      const base = this.fontBase || this.docDefaults;
+      if (m.fontFamily === base.fontFamily) delete m.fontFamily;
+      if (m.fontSize === base.fontSize) delete m.fontSize;
     }
     const marks = marksToArray(m, link);
     const text = (t) => t && push(marks.length ? { type: 'text', text: t, marks } : { type: 'text', text: t });
@@ -486,14 +490,28 @@ class Importer {
     }
   }
 
+  // Определение пользовательского стиля абзаца для doc.attrs.styles (свойства — с учётом basedOn, отличия от «Обычного»)
+  styleDef(id) {
+    if (this.usedStyles[id]) return this.usedStyles[id];
+    const marks = resolvedStyleMarks(this.styles, id, this.styleCache);
+    const run = {};
+    if (marks.fontFamily && marks.fontFamily !== this.docDefaults.fontFamily) run.fontFamily = marks.fontFamily;
+    if (marks.fontSize && marks.fontSize !== this.docDefaults.fontSize) run.fontSize = marks.fontSize;
+    if (marks.color) run.color = marks.color;
+    for (const k of ['bold', 'italic', 'underline']) if (marks[k]) run[k] = true;
+    const diff = paraDiff(resolvedStylePara(this.styles, id, this.styleCache), paraBase(this.docPara));
+    const para = Object.fromEntries(Object.entries(diff).filter(([, v]) => v != null));
+    const jc = styleProp(this.styles, id, 'jc');
+    const align = { center: 'center', right: 'right', end: 'right', both: 'justify', distribute: 'justify' }[jc] || null;
+    const def = { id, name: this.styles[id].displayName, para, run, align, origin: 'file', modified: false };
+    this.usedStyles[id] = def;
+    return def;
+  }
+
   paragraph(p) {
     const pPr = child(p, 'pPr');
     const styleId = wAttr(child(pPr, 'pStyle'), 'val') || this.defaultPara;
-    const jc = wAttr(child(pPr, 'jc'), 'val') || styleProp(this.styles, styleId, 'jc');
-    const textAlign = { center: 'center', right: 'right', end: 'right', both: 'justify', distribute: 'justify' }[jc] || null;
     const level = headingLevel(this.styles, styleId);
-    const styleMarks = level ? {} : resolvedStyleMarks(this.styles, styleId, this.styleCache);
-    const content = this.inlines(p, styleMarks, !!level);
     let numPr = readNumPr(child(pPr, 'numPr'));
     if (!numPr && styleId) {
       // нумерация задана стилем («Маркированный список 2» и т.п.) — уровень берём из имени стиля
@@ -503,21 +521,39 @@ class Importer {
     }
     if (level) numPr = null;
 
+    // Пользовательский стиль (не «Обычный», не заголовок, не список) — абзац ссылается на него (styleId),
+    // свойства стиля не переносятся в прямое форматирование: изменение стиля в Пере меняет все его абзацы.
+    const st = this.styles[styleId];
+    const custom = !level && !numPr && st && st.type === 'paragraph' && styleId !== this.defaultPara &&
+      !['list paragraph', 'title', 'subtitle'].includes(st.name);
+    const def = custom ? this.styleDef(styleId) : null;
+
+    const directJc = wAttr(child(pPr, 'jc'), 'val');
+    const jc = directJc || (custom ? null : styleProp(this.styles, styleId, 'jc'));
+    const textAlign = { center: 'center', right: 'right', end: 'right', both: 'justify', distribute: 'justify' }[jc] || null;
+    const styleMarks = level || custom ? {} : resolvedStyleMarks(this.styles, styleId, this.styleCache);
+    this.fontBase = def ? { fontFamily: def.run.fontFamily || this.docDefaults.fontFamily, fontSize: def.run.fontSize || this.docDefaults.fontSize } : null;
+    const content = this.inlines(p, styleMarks, !!level);
+    this.fontBase = null;
+
     // Интервалы и отступы: у заголовка — только прямые (вид заголовка задаёт наш стиль);
     // у элемента списка отступы задаёт список, интервалы стиля (List Paragraph) не переносим;
-    // у обычного абзаца — стиль (с basedOn) + прямые. В атрибуты попадают только отличия от базы.
+    // у абзаца пользовательского стиля — только прямые (отличия от стиля); у обычного — стиль (с basedOn) + прямые.
+    // В атрибуты попадают только отличия от базы.
     const direct = readParaProps(pPr);
-    const style = level ? {} : resolvedStylePara(this.styles, styleId, this.styleCache);
+    const style = level || custom ? {} : resolvedStylePara(this.styles, styleId, this.styleCache);
     let values;
     if (numPr) {
       values = { lineRule: style.lineRule, lineSpacing: style.lineSpacing, ...direct };
       delete values.indentLeft; delete values.indentRight; delete values.indentFirst;
     } else values = { ...style, ...direct };
-    const para = paraDiff(values, paraBase(this.docPara, { headingLevel: level, inList: !!numPr }));
+    const base = paraBase(this.docPara, { headingLevel: level, inList: !!numPr });
+    if (def) Object.assign(base, def.para);
+    const para = paraDiff(values, base);
 
     const node = level
       ? { type: 'heading', attrs: { level, textAlign, ...para }, content }
-      : { type: 'paragraph', attrs: { textAlign, ...para }, content };
+      : { type: 'paragraph', attrs: { textAlign, ...para, ...(custom ? { styleId } : {}) }, content };
     // разрыв раздела после абзаца — исходный XML параметров раздела
     const sect = child(pPr, 'sectPr');
     if (sect) node.attrs.sectPr = xmlOf(sect);
@@ -716,7 +752,7 @@ export async function importDocx(data) {
   }
   if (hf.header || hf.footer) imp.preserved.header = 1;
   return {
-    doc: { type: 'doc', attrs: { ...docDefaults, para: docPara, sectPr: imp.bodySectPr, hf }, content },
+    doc: { type: 'doc', attrs: { ...docDefaults, para: docPara, sectPr: imp.bodySectPr, hf, styles: Object.values(imp.usedStyles) }, content },
     warnings: imp.warnings,
     preserved: imp.preserved,
   };

@@ -6,6 +6,8 @@ import { clipboard, openImage } from './fileApi.js';
 import { insertImageFiles } from './insertImage.js';
 import { PicturePanel } from './PictureControls.jsx';
 import { LayoutPanel } from './PageControls.jsx';
+import { cssFontStack } from './editor/font.js';
+import { TABLE_STYLES } from './editor/tableFormat.js';
 import { FontFamilyBox, FontSizeBox, HighlightButton, TextColorButton, fontState, usePopover } from './FontControls.jsx';
 import { effectivePara } from './editor/paraFormat.js';
 import { LINE_PRESETS, fmtNum } from './editor/paragraph.js';
@@ -115,7 +117,61 @@ function TablePicker({ onPick, style }) {
   );
 }
 
-export default function Ribbon({ editor, file, onLink, onParagraph, onMargins, onHf, onFind }) {
+// Образец стиля в галерее — тем же шрифтом/цветом/начертанием
+const sampleStyle = (st) => {
+  const r = st.run || {};
+  return {
+    fontFamily: r.fontFamily ? cssFontStack(r.fontFamily) : undefined, color: r.color || undefined,
+    fontWeight: r.bold ? 'bold' : undefined, fontStyle: r.italic ? 'italic' : undefined, textDecoration: r.underline ? 'underline' : undefined,
+  };
+};
+
+// Меню «Стили ▾»: создать, изменить, удалить
+function StylesMenu({ s, onStyle }) {
+  const pop = usePopover();
+  const item = (label, fn, disabled) => (
+    <button type="button" className="menu-item" disabled={disabled} onMouseDown={(e) => e.preventDefault()} onClick={() => { pop.setOpen(false); fn(); }}>
+      <span className="check" />{label}
+    </button>
+  );
+  const current = s.styleId ? (s.styles.find((x) => x.id === s.styleId) || {}).name : s.heading ? null : 'Обычный';
+  return (
+    <div className="rb-popover-anchor" ref={pop.ref}>
+      <Btn title="Стили: создать, изменить, удалить" onClick={() => pop.setOpen(!pop.open)}>▾</Btn>
+      {pop.open && (
+        <div className="menu-pop" style={pop.style} role="menu">
+          {item('Создать стиль из текущего абзаца…', () => onStyle('new'))}
+          {item(current ? `Изменить стиль «${current}»…` : 'Изменить стиль…', () => onStyle(s.styleId || 'normal'), !current)}
+          {s.styleId && item(`Удалить стиль «${current}»`, () => onStyle({ remove: s.styleId }))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Стили таблиц: готовые оформления (границы, шапка, чередование строк)
+function TableStylesButton({ editor }) {
+  const pop = usePopover();
+  return (
+    <div className="rb-popover-anchor" ref={pop.ref}>
+      <button type="button" className={`rb-btn big${pop.open ? ' active' : ''}`} title="Стили таблиц" onMouseDown={(e) => e.preventDefault()} onClick={() => pop.setOpen(!pop.open)}>
+        <Icon.table size={28} /><span className="rb-label">Стили ▾</span>
+      </button>
+      {pop.open && (
+        <div className="menu-pop table-styles" style={pop.style} role="menu">
+          {TABLE_STYLES.map(([key, label, preview]) => (
+            <button key={key} type="button" className="menu-item" onMouseDown={(e) => e.preventDefault()}
+              onClick={() => { pop.setOpen(false); editor.chain().focus().applyTableStyle(key).run(); }}>
+              <span className={`ts-preview ts-${key}`}>{preview}</span>{label}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+export default function Ribbon({ editor, file, onLink, onParagraph, onMargins, onHf, onFind, onStyle }) {
   const [tab, setTab] = useState('home');
   const tablePicker = usePopover();
 
@@ -143,6 +199,8 @@ export default function Ribbon({ editor, file, onLink, onParagraph, onMargins, o
       table: e.isActive('table') ? tableState(e) : null,
       image: e.state.selection.node && e.state.selection.node.type.name === 'image' ? e.state.selection.node.attrs : null,
       page: { sectPr: e.state.doc.attrs.sectPr, hf: e.state.doc.attrs.hf }, // для вкладки «Макет»
+      styles: e.state.doc.attrs.styles || [],
+      styleId: e.state.selection.$from.parent.attrs.styleId || null,
     }),
     // в состоянии есть вложенный объект — сравниваем по значению, чтобы лента не перерисовывалась зря
     equalityFn: (a, b) => JSON.stringify(a) === JSON.stringify(b),
@@ -258,20 +316,33 @@ export default function Ribbon({ editor, file, onLink, onParagraph, onMargins, o
             <Group title="Стили">
               <div className="style-gallery">
                 {STYLES.map((st) => {
-                  const active = st.key === 'p' ? !s.heading : s.heading === st.key;
+                  const active = st.key === 'p' ? !s.heading && !s.styleId : s.heading === st.key;
                   return (
                     <button
                       key={st.key}
                       className={`style-card ${st.cls}${active ? ' active' : ''}`}
                       onMouseDown={(e) => e.preventDefault()}
-                      onClick={() => (st.key === 'p' ? c().setParagraph().run() : c().setHeading({ level: st.key }).run())}
+                      onClick={() => (st.key === 'p' ? c().setParagraphStyle(null).run() : c().setHeading({ level: st.key }).run())}
                     >
                       <span className="style-sample">АаБбВв</span>
                       <span className="style-name">{st.label}</span>
                     </button>
                   );
                 })}
+                {s.styles.map((st) => (
+                  <button
+                    key={st.id}
+                    className={`style-card${s.styleId === st.id ? ' active' : ''}`}
+                    title={st.name}
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => c().setParagraphStyle(st.id).run()}
+                  >
+                    <span className="style-sample" style={sampleStyle(st)}>АаБбВв</span>
+                    <span className="style-name">{st.name}</span>
+                  </button>
+                ))}
               </div>
+              <StylesMenu s={s} onStyle={onStyle} />
             </Group>
           </>
         )}
@@ -322,6 +393,9 @@ export default function Ribbon({ editor, file, onLink, onParagraph, onMargins, o
               <Btn big icon="delRow" label="Удалить строку" onClick={() => c().deleteRow().run()} />
               <Btn big icon="delCol" label="Удалить столбец" onClick={() => c().deleteColumn().run()} />
               <Btn big icon="delTable" label="Удалить таблицу" onClick={() => c().deleteTable().run()} />
+            </Group>
+            <Group title="Стили таблиц">
+              <TableStylesButton editor={editor} />
             </Group>
             <Group title="Объединение">
               <Btn big icon="merge" label="Объединить ячейки" disabled={!s.canMerge} onClick={() => c().mergeCells().run()} />

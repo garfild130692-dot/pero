@@ -7,6 +7,23 @@ import { CELL_SIDES, GRID_BORDERS, TABLE_SIDES, TWIPS_PER_PX, borderToOoxml } fr
 import { EMU_PER_PX, dataUrlToBytes, extOf } from '../editor/image.js';
 import { setHfRefs, writeHfPart } from '../editor/page.js';
 
+// Определение пользовательского стиля абзаца (из doc.attrs.styles); basedOn — «Обычный» файла
+function customStyleXml(st, normalId) {
+  const r = st.run || {};
+  const p = st.para || {};
+  let rPr = '';
+  if (r.fontFamily) rPr += `<w:rFonts w:ascii="${esc(r.fontFamily)}" w:hAnsi="${esc(r.fontFamily)}" w:eastAsia="${esc(r.fontFamily)}" w:cs="${esc(r.fontFamily)}"/>`;
+  if (r.bold) rPr += '<w:b/><w:bCs/>';
+  if (r.italic) rPr += '<w:i/><w:iCs/>';
+  if (r.color) rPr += `<w:color w:val="${r.color.slice(1).toUpperCase()}"/>`;
+  if (r.fontSize) rPr += `<w:sz w:val="${Math.round(r.fontSize * 2)}"/><w:szCs w:val="${Math.round(r.fontSize * 2)}"/>`;
+  if (r.underline) rPr += '<w:u w:val="single"/>';
+  const jc = { center: 'center', right: 'right', justify: 'both' }[st.align];
+  const pPr = spacingXml(p) + indXml(p) + (jc ? `<w:jc w:val="${jc}"/>` : '');
+  return `<w:style w:type="paragraph" w:customStyle="1" w:styleId="${esc(st.id)}"><w:name w:val="${esc(st.name || st.id)}"/>` +
+    `${normalId ? `<w:basedOn w:val="${esc(normalId)}"/>` : ''}<w:qFormat/>${pPr ? `<w:pPr>${pPr}</w:pPr>` : ''}${rPr ? `<w:rPr>${rPr}</w:rPr>` : ''}</w:style>`;
+}
+
 // Разметка нового встроенного рисунка (как пишет Word для «Вставка → Рисунок»)
 function drawingXml({ rid, cx, cy, id, name, alt }) {
   const A = 'http://schemas.openxmlformats.org/drawingml/2006/main';
@@ -84,8 +101,9 @@ const DEFAULT_SECTPR = `<w:sectPr><w:pgSz w:w="${PAGE.w}" w:h="${PAGE.h}"/>` +
   '<w:cols w:space="708"/><w:docGrid w:linePitch="360"/></w:sectPr>';
 
 class Exporter {
-  constructor({ styleIds = OUR_STYLE_IDS, numBase = 1, relTargets = null, imgBase = 0, sect = (x) => x } = {}) {
+  constructor({ styleIds = OUR_STYLE_IDS, numBase = 1, relTargets = null, imgBase = 0, sect = (x) => x, customStyles = [] } = {}) {
     this.sect = sect;             // преобразование XML sectPr (подстановка ссылок на свои колонтитулы)
+    this.customStyles = new Set(customStyles); // id пользовательских стилей документа
     this.imgBase = imgBase;       // номера картинок Пера, уже занятые в исходном пакете
     this.relTargets = relTargets; // rId → путь части в исходном пакете (если сохраняем в него)
     this.images = [];             // новые картинки: { rid, path, bytes, ext }
@@ -174,7 +192,8 @@ class Exporter {
   paragraph(node, { numPr, style } = {}) {
     const attrs = node.attrs || {};
     let pPr = '';
-    const pStyle = style || (node.type === 'heading' ? this.styleIds['Heading' + Math.min(Math.max(attrs.level || 1, 1), 6)] : null);
+    const pStyle = style || (node.type === 'heading' ? this.styleIds['Heading' + Math.min(Math.max(attrs.level || 1, 1), 6)]
+      : (attrs.styleId && this.customStyles.has(attrs.styleId) ? attrs.styleId : null));
     if (pStyle) pPr += `<w:pStyle w:val="${pStyle}"/>`;
     if (numPr) pPr += `<w:numPr><w:ilvl w:val="${numPr.ilvl}"/><w:numId w:val="${numPr.numId}"/></w:numPr>`;
     // порядок в pPr по схеме: pStyle, numPr, spacing, ind, jc
@@ -490,7 +509,7 @@ function mergeStyles(stylesXml, fallback) {
     xml = xml.replace(/<w:basedOn w:val="(\w+)"\/>/, (all, b) => (base[b] ? `<w:basedOn w:val="${base[b]}"/>` : ''));
     add += xml;
   }
-  return { styleIds, xml: add ? stylesXml.replace(/<\/w:styles>\s*$/, `${add}</w:styles>`) : stylesXml };
+  return { styleIds, defaults, xml: add ? stylesXml.replace(/<\/w:styles>\s*$/, `${add}</w:styles>`) : stylesXml };
 }
 
 // Наши определения стилей (из stylesXml), по ключу
@@ -552,8 +571,9 @@ export async function exportDocx(doc, { source } = {}) {
   const hfRels = hfParts.map((p) => `<Relationship Id="${p.id}" Type="${relType(p.type)}" Target="${p.file}"/>`).join('');
   const addHfTypes = (ct, prefix) => hfParts.reduce((acc, p) => addOverride(acc, prefix + p.file,
     `application/vnd.openxmlformats-officedocument.wordprocessingml.${p.type}+xml`), ct);
+  const customs = da.styles || [];
   if (!source) {
-    const ex = new Exporter({ sect });
+    const ex = new Exporter({ sect, customStyles: customs.map((s) => s.id) });
     let body = ex.blocks(doc.content || []);
     if (!body) body = '<w:p/>';
     const documentXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<w:document ${NS}><w:body>${body}${sectPr}</w:body></w:document>`;
@@ -573,7 +593,8 @@ ${hfRels}
     zip.file('docProps/core.xml', coreXml());
     zip.file('docProps/app.xml', APP_XML);
     zip.file('word/document.xml', documentXml);
-    zip.file('word/styles.xml', stylesXml(da.fontFamily || DEFAULT_FONT, parseSize(da.fontSize) || DEFAULT_SIZE, { ...NEW_DOC_PARA, ...(da.para || {}) }));
+    zip.file('word/styles.xml', stylesXml(da.fontFamily || DEFAULT_FONT, parseSize(da.fontSize) || DEFAULT_SIZE, { ...NEW_DOC_PARA, ...(da.para || {}) })
+      .replace('</w:styles>', `${customs.map((s) => customStyleXml(s, 'Normal')).join('')}</w:styles>`));
     zip.file('word/numbering.xml', numberingXml(ex.orderedNums));
     zip.file('word/_rels/document.xml.rels', docRels);
     return zip.generateAsync({ type: 'uint8array', compression: 'DEFLATE' });
@@ -591,7 +612,27 @@ ${hfRels}
   if (src.styles) {
     const merged = mergeStyles(src.styles, ourStyleDefs());
     styleIds = merged.styleIds;
-    zip.file(src.stylesPath, merged.xml);
+    let xml = merged.xml;
+    const normalId = merged.defaults.paragraph || null;
+    // пользовательские стили: изменённые в Пере — переписать определение, новые — дописать, прочие — как в файле
+    for (const st of customs) {
+      const re = new RegExp(`<w:style\\b[^>]*w:styleId="${st.id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}"[^>]*>[\\s\\S]*?</w:style>`);
+      if (re.test(xml)) { if (st.modified) xml = xml.replace(re, customStyleXml(st, normalId)); }
+      else xml = xml.replace(/<\/w:styles>\s*$/, `${customStyleXml(st, normalId)}</w:styles>`);
+    }
+    // «Обычный» изменён в Пере: умолчания документа целиком в docDefaults, из стиля «Обычный» — убрать шрифт/размер/интервалы
+    if (da.defaultsModified) {
+      const ours = stylesXml(da.fontFamily || DEFAULT_FONT, parseSize(da.fontSize) || DEFAULT_SIZE, { ...NEW_DOC_PARA, ...(da.para || {}) });
+      const dd = /<w:docDefaults>[\s\S]*?<\/w:docDefaults>/.exec(ours)[0];
+      xml = /<w:docDefaults>[\s\S]*?<\/w:docDefaults>/.test(xml) ? xml.replace(/<w:docDefaults>[\s\S]*?<\/w:docDefaults>/, dd) : xml.replace(/(<w:styles\b[^>]*>)/, `$1${dd}`);
+      if (normalId) {
+        const re = new RegExp(`(<w:style\\b[^>]*w:styleId="${normalId}"[^>]*>)([\\s\\S]*?)(</w:style>)`);
+        xml = xml.replace(re, (all, a, body, c) => a + body
+          .replace(/<w:rFonts\b[^>]*\/>|<w:sz\b[^>]*\/>|<w:szCs\b[^>]*\/>|<w:spacing\b[^>]*\/>|<w:ind\b[^>]*\/>/g, '')
+          .replace(/<w:rPr>\s*<\/w:rPr>|<w:pPr>\s*<\/w:pPr>/g, '') + c);
+      }
+    }
+    zip.file(src.stylesPath, xml);
   } else {
     zip.file(prefix + 'styles.xml', stylesXml(da.fontFamily || DEFAULT_FONT, parseSize(da.fontSize) || DEFAULT_SIZE, { ...NEW_DOC_PARA, ...(da.para || {}) }));
     rels = rels.replace('</Relationships>', `<Relationship Id="rIdPeroS" Type="${relType('styles')}" Target="styles.xml"/></Relationships>`);
@@ -603,7 +644,7 @@ ${hfRels}
   // картинки, добавленные Пером при прошлых сохранениях, остаются; новые нумеруются дальше
   const imgBase = Math.max(0, ...Object.keys(zip.files).map((n) => +((/\/media\/pero_image(\d+)\.\w+$/.exec(n) || [])[1] || 0)),
     ...[...src.rels.matchAll(/Id="rIdPeroImg(\d+)"/g)].map((m) => +m[1]));
-  const ex = new Exporter({ styleIds, numBase, relTargets: src.relTargets, imgBase, sect });
+  const ex = new Exporter({ styleIds, numBase, relTargets: src.relTargets, imgBase, sect, customStyles: customs.map((s) => s.id) });
   let body = ex.blocks(doc.content || []);
   if (!body) body = '<w:p/>';
   body = stripRootNs(body + sectPr, src.rootNs);

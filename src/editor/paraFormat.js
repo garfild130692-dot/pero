@@ -22,6 +22,9 @@ export function lineCss(rule, value) {
 // Действующие параметры абзаца: прямое форматирование → (заголовок) → умолчания документа
 export function effectivePara(node, docAttrs, inList = false) {
   const base = paraBase(docAttrs && docAttrs.para, { headingLevel: node.type.name === 'heading' ? node.attrs.level : 0, inList });
+  // стиль абзаца — между умолчаниями документа и прямым форматированием
+  const st = node.attrs.styleId && docAttrs && (docAttrs.styles || []).find((s) => s.id === node.attrs.styleId);
+  if (st && !inList) for (const [k, v] of Object.entries(st.para || {})) if (v != null) base[k] = v;
   const out = {};
   for (const k of PARA_KEYS) out[k] = node.attrs[k] ?? base[k];
   return out;
