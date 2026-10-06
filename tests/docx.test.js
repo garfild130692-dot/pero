@@ -7,6 +7,10 @@ import { importDocx } from '../src/docx/import.js';
 import { exportDocx } from '../src/docx/export.js';
 import { extensions } from '../src/editor/extensions.js';
 
+// На Windows `python3` часто ведёт на заглушку/Python из Store без пакетов — берём `python`.
+// Переопределяется переменной окружения PYTHON.
+const PYTHON = process.env.PYTHON || (process.platform === 'win32' ? 'python' : 'python3');
+
 const schema = getSchema(extensions);
 const text = (doc) => Node.fromJSON(schema, doc).textBetween(0, Node.fromJSON(schema, doc).content.size, '\n', ' ');
 
@@ -32,12 +36,12 @@ describe('docx', () => {
   });
 
   it('результат открывает сторонняя библиотека (python-docx)', async () => {
-    const out = execFileSync('python3', ['-c', `
+    const out = execFileSync(PYTHON, ['-c', `
 import docx, sys
 d = docx.Document('tests/out/roundtrip.docx')
 print('|'.join(p.text for p in d.paragraphs))
 print(len(d.tables), d.tables[0].cell(2,0).text)
-`]).toString();
+`], { env: { ...process.env, PYTHONIOENCODING: 'utf-8' } }).toString('utf8'); // на Windows stdout иначе в cp1251
     expect(out).toContain('Отчёт по продажам');
     expect(out).toContain('1 R2C0');
   });
