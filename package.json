@@ -1,6 +1,6 @@
 {
   "name": "pero",
-  "version": "0.8.0",
+  "version": "0.9.0",
   "description": "Перо — текстовый редактор документов .docx",
   "author": "Перо",
   "main": "electron/main.cjs",
@@ -56,6 +56,13 @@
         "ext": "docx",
         "name": "Pero.Document",
         "description": "Документ DOCX",
+        "role": "Editor",
+        "icon": "build/icon.ico"
+      },
+      {
+        "ext": "xlsx",
+        "name": "Pero.Workbook",
+        "description": "Книга XLSX",
         "role": "Editor",
         "icon": "build/icon.ico"
       }

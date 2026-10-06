@@ -244,6 +244,7 @@ export default function Ribbon({ editor, file, onLink, onParagraph, onMargins, o
           <>
             <Group title="Документ">
               <Btn big icon="file" label="Создать" onClick={file.newDoc} title="Создать (Ctrl+N)" />
+              <Btn big icon="table" label="Книга" onClick={file.newSheet} title="Создать электронную таблицу (.xlsx)" />
               <Btn big icon="open" label="Открыть" onClick={file.open} title="Открыть (Ctrl+O)" />
               <Btn big icon="save" label="Сохранить" onClick={file.save} title="Сохранить (Ctrl+S)" />
               <Btn big icon="saveAs" label="Сохранить как" onClick={file.saveAs} title="Сохранить как (Ctrl+Shift+S)" />

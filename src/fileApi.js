@@ -8,7 +8,7 @@ export async function openFile() {
   return new Promise((resolve) => {
     const input = document.createElement('input');
     input.type = 'file';
-    input.accept = '.docx';
+    input.accept = '.docx,.xlsx';
     input.onchange = async () => {
       const f = input.files[0];
       resolve(f ? { path: null, name: f.name, data: await f.arrayBuffer() } : null);
@@ -43,7 +43,8 @@ export async function saveFileAs(name, data) {
 }
 
 function download(name, data) {
-  const blob = new Blob([data], { type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' });
+  const type = /\.xlsx$/i.test(name || '') ? 'spreadsheetml.sheet' : 'wordprocessingml.document';
+  const blob = new Blob([data], { type: `application/vnd.openxmlformats-officedocument.${type}` });
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
   a.download = name || 'Документ.docx';

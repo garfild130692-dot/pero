@@ -4,6 +4,8 @@ const path = require('path');
 const fs = require('fs/promises');
 
 const DOCX_FILTER = [{ name: 'Документ Word', extensions: ['docx'] }];
+const XLSX_FILTER = [{ name: 'Книга Excel', extensions: ['xlsx'] }];
+const OPEN_FILTER = [{ name: 'Документы и книги', extensions: ['docx', 'xlsx'] }, ...DOCX_FILTER, ...XLSX_FILTER];
 let win;
 let dirty = false;
 let forceClose = false;
@@ -22,7 +24,8 @@ function buildMenu() {
     {
       label: 'Файл',
       submenu: [
-        { label: 'Создать', accelerator: 'CmdOrCtrl+N', click: () => send('new') },
+        { label: 'Создать документ', accelerator: 'CmdOrCtrl+N', click: () => send('new') },
+        { label: 'Создать книгу', click: () => send('newSheet') },
         { label: 'Открыть…', accelerator: 'CmdOrCtrl+O', click: () => send('open') },
         { type: 'separator' },
         { label: 'Сохранить', accelerator: 'CmdOrCtrl+S', click: () => send('save') },
@@ -97,7 +100,7 @@ function createWindow() {
 
   // Файл, переданный при запуске (двойной клик по .docx)
   win.webContents.once('did-finish-load', async () => {
-    const arg = process.argv.slice(app.isPackaged ? 1 : 2).find((a) => /\.docx$/i.test(a));
+    const arg = process.argv.slice(app.isPackaged ? 1 : 2).find((a) => /\.(docx|xlsx)$/i.test(a));
     if (arg) {
       try { send('openData', await readDoc(path.resolve(arg))); } catch (e) { dialog.showErrorBox('Не удалось открыть файл', String(e.message || e)); }
     }
@@ -121,7 +124,7 @@ function createWindow() {
 
 // ---------- IPC ----------
 ipcMain.handle('file:open', async () => {
-  const r = await dialog.showOpenDialog(win, { properties: ['openFile'], filters: DOCX_FILTER });
+  const r = await dialog.showOpenDialog(win, { properties: ['openFile'], filters: OPEN_FILTER });
   if (r.canceled || !r.filePaths[0]) return null;
   return readDoc(r.filePaths[0]);
 });
@@ -160,9 +163,11 @@ ipcMain.handle('file:save', async (_e, filePath, data) => {
 });
 
 ipcMain.handle('file:saveAs', async (_e, suggestedName, data) => {
-  const r = await dialog.showSaveDialog(win, { defaultPath: suggestedName || 'Документ.docx', filters: DOCX_FILTER });
+  // расширение — по предложенному имени: книга сохраняется в .xlsx, документ — в .docx
+  const ext = /\.xlsx$/i.test(suggestedName || '') ? 'xlsx' : 'docx';
+  const r = await dialog.showSaveDialog(win, { defaultPath: suggestedName || 'Документ.docx', filters: ext === 'xlsx' ? XLSX_FILTER : DOCX_FILTER });
   if (r.canceled || !r.filePath) return null;
-  const p = /\.docx$/i.test(r.filePath) ? r.filePath : r.filePath + '.docx';
+  const p = r.filePath.toLowerCase().endsWith(`.${ext}`) ? r.filePath : `${r.filePath}.${ext}`;
   await fs.writeFile(p, Buffer.from(data));
   return { path: p, name: path.basename(p) };
 });

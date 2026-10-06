@@ -178,7 +178,7 @@ function StatusBar({ editor, warnings, preserved, zoom, setZoom }) {
   );
 }
 
-export default function App() {
+export default function App({ initialFile, onOpenOther, onNewSheet }) {
   const [doc, setDoc] = useState({ path: null, name: DEFAULT_NAME });
   const [dirty, setDirtyState] = useState(false);
   const [warnings, setWarnings] = useState({});   // что теряется при сохранении
@@ -241,6 +241,9 @@ export default function App() {
     }
   }, [editor]);
 
+  // файл, с которым открыли окно редактора (переход из книги)
+  useEffect(() => { if (initialFile && editor) load(initialFile); }, [initialFile, editor, load]);
+
   const newDoc = useCallback(async () => {
     if (dirty && !(await fileApi.confirmDiscard())) return;
     loadDocument(editor, EMPTY);
@@ -256,8 +259,15 @@ export default function App() {
   const open = useCallback(async () => {
     if (dirty && !(await fileApi.confirmDiscard())) return;
     const f = await fileApi.openFile();
-    if (f) await load(f);
-  }, [dirty, load]);
+    if (!f) return;
+    if (/\.xlsx$/i.test(f.name)) { fileApi.setDirty(false); onOpenOther(f); } else await load(f);
+  }, [dirty, load, onOpenOther]);
+
+  const newSheet = useCallback(async () => {
+    if (dirty && !(await fileApi.confirmDiscard())) return;
+    fileApi.setDirty(false);
+    onNewSheet();
+  }, [dirty, onNewSheet]);
 
   const write = useCallback(async (asNew) => {
     try {
@@ -304,14 +314,15 @@ export default function App() {
 
   // Команды меню Electron. Держим актуальные обработчики в ref, подписку — одну.
   const handlers = useRef({});
-  handlers.current = { newDoc, open, save, saveAs, load, doPrint, doPdf };
+  handlers.current = { newDoc, newSheet, open, save, saveAs, load, doPrint, doPdf, onOpenOther };
   useEffect(() => fileApi.onMenu((cmd, payload) => {
     const h = handlers.current;
     if (cmd === 'new') h.newDoc();
     else if (cmd === 'open') h.open();
     else if (cmd === 'save') h.save();
     else if (cmd === 'saveAs') h.saveAs();
-    else if (cmd === 'openData') h.load(payload);
+    else if (cmd === 'newSheet') h.newSheet();
+    else if (cmd === 'openData') { if (/\.xlsx$/i.test(payload.name)) h.onOpenOther(payload); else h.load(payload); }
     else if (cmd === 'saveAndClose') h.save(() => fileApi.closeNow());
     else if (cmd === 'print') h.doPrint();
     else if (cmd === 'find' || cmd === 'replace') setFindMode(cmd);
@@ -339,10 +350,11 @@ export default function App() {
 
   // Перетаскивание .docx в окно
   const onDrop = async (e) => {
-    const f = [...e.dataTransfer.files].find((x) => /\.docx$/i.test(x.name));
+    const f = [...e.dataTransfer.files].find((x) => /\.(docx|xlsx)$/i.test(x.name));
     if (!f) return;
     e.preventDefault();
     if (dirty && !(await fileApi.confirmDiscard())) return;
+    if (/\.xlsx$/i.test(f.name)) { fileApi.setDirty(false); onOpenOther({ path: fileApi.pathForFile(f), name: f.name, data: await f.arrayBuffer() }); return; }
     await load({ path: fileApi.pathForFile(f), name: f.name, data: await f.arrayBuffer() });
   };
 
@@ -364,7 +376,7 @@ export default function App() {
         <QuickAccess editor={editor} onSave={() => save()} />
         <div className="doc-title">{doc.name}{dirty ? ' •' : ''}</div>
       </div>
-      <Ribbon editor={editor} file={{ newDoc, open, save: () => save(), saveAs, print: doPrint, pdf: doPdf }} onLink={() => setModal('link')}
+      <Ribbon editor={editor} file={{ newDoc, newSheet, open, save: () => save(), saveAs, print: doPrint, pdf: doPdf }} onLink={() => setModal('link')}
         onFind={(m) => setFindMode(m)}
         onStyle={(m) => (m && m.remove ? editor.chain().focus().deleteStyle(m.remove).run() : setModal({ style: m }))}
         review={{

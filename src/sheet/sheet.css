@@ -1,0 +1,75 @@
+/* ---------- Табличный редактор ---------- */
+.sheet-app { background: #fff; }
+.txt-icon { font-size: 13.5px; line-height: 1; min-width: 14px; text-align: center; }
+.rb-btn .dd { font-size: 9px; color: #666; margin-left: 1px; }
+.rb-select { height: 26px; border: 1px solid #c4c4c4; border-radius: 2px; background: #fff; font: inherit; padding: 0 2px; }
+.rb-select:focus { outline: none; border-color: var(--accent); }
+
+/* строка формул */
+.formula-bar { flex: none; display: flex; align-items: center; gap: 6px; padding: 4px 8px; border-bottom: 1px solid var(--line); background: #fff; }
+.formula-bar .name-box { width: 110px; height: 24px; border: 1px solid #c4c4c4; padding: 0 6px; font: inherit; }
+.formula-bar .fx { color: var(--muted); font-style: italic; font-family: Georgia, serif; padding: 0 4px; border-left: 1px solid var(--line); border-right: 1px solid var(--line); }
+.formula-bar .fx-input { flex: 1; height: 24px; border: 1px solid #c4c4c4; padding: 0 6px; font: inherit; }
+.formula-bar input:focus { outline: none; border-color: var(--accent); }
+
+/* сетка */
+.sheet-main { flex: 1; min-height: 0; display: flex; outline: none; }
+.grid-wrap { position: relative; flex: 1; min-width: 0; overflow: hidden; }
+.grid-scroll { position: absolute; inset: 0; overflow: auto; }
+.grid-canvas { position: relative; }
+.grid-cells { position: absolute; cursor: cell; font-family: Calibri, Carlito, 'Segoe UI', sans-serif; font-size: 11pt; }
+.grid-lines { position: absolute; pointer-events: none; }
+.grid-lines line { stroke: #e1e1e1; stroke-width: 1; }
+.gcell {
+  position: absolute; box-sizing: border-box; display: flex; padding: 0 2px 0 2px; overflow: hidden;
+  line-height: 1.25; background: transparent; pointer-events: none;
+}
+.gcell.merged { background: #fff; outline: 1px solid #e1e1e1; outline-offset: -1px; }
+.gsel { position: absolute; pointer-events: none; background: rgba(31, 111, 92, .10); border: 1px solid rgba(31, 111, 92, .55); box-sizing: border-box; }
+.gactive { position: absolute; pointer-events: none; border: 2px solid var(--accent); box-sizing: border-box; margin: -1px 0 0 -1px; padding: 1px; }
+.gedit {
+  position: absolute; z-index: 5; box-sizing: border-box; resize: none; border: 2px solid var(--accent); outline: none;
+  padding: 0 3px; font-family: Calibri, Carlito, 'Segoe UI', sans-serif; font-size: 11pt; line-height: 1.25; background: #fff;
+  box-shadow: 0 2px 6px rgba(0,0,0,.15); overflow: hidden; white-space: pre; field-sizing: content; max-width: 600px;
+}
+
+/* заголовки */
+.grid-colhead, .grid-rowhead { position: absolute; z-index: 6; background: #f3f3f3; }
+.grid-colhead { border-bottom: 1px solid #c8c8c8; }
+.grid-rowhead { border-right: 1px solid #c8c8c8; }
+.ghead {
+  position: absolute; box-sizing: border-box; height: 100%; display: flex; align-items: center; justify-content: center;
+  font-size: 12px; color: #444; border-right: 1px solid #d6d6d6; user-select: none; cursor: s-resize;
+}
+.ghead.row { width: 100%; border-right: 0; border-bottom: 1px solid #d6d6d6; cursor: e-resize; }
+.ghead.on { background: #d9ebe5; color: var(--accent); font-weight: 600; }
+.grid-colhead .ghead.on { box-shadow: inset 0 -2px 0 var(--accent); }
+.grid-rowhead .ghead.on { box-shadow: inset -2px 0 0 var(--accent); }
+.gresize { position: absolute; z-index: 1; }
+.gresize.col { top: 0; right: -3px; width: 6px; height: 100%; cursor: col-resize; }
+.gresize.row { left: 0; bottom: -3px; height: 6px; width: 100%; cursor: row-resize; }
+.grid-corner { position: absolute; z-index: 7; width: 46px; height: 22px; background: #e8e8e8; border-right: 1px solid #c8c8c8; border-bottom: 1px solid #c8c8c8; box-sizing: border-box; cursor: pointer; }
+.grid-guide { position: absolute; z-index: 8; pointer-events: none; background: var(--accent); }
+.grid-guide.col { top: 0; bottom: 0; width: 1px; }
+.grid-guide.row { left: 0; right: 0; height: 1px; }
+
+/* вкладки листов */
+.sheet-tabs { flex: none; display: flex; align-items: stretch; gap: 1px; height: 28px; padding: 0 8px; background: #f3f3f3; border-top: 1px solid var(--line); overflow-x: auto; }
+.sheet-tab {
+  border: 0; border-bottom: 3px solid transparent; background: transparent; padding: 0 14px; font: inherit; font-size: 12.5px;
+  cursor: pointer; color: #333; white-space: nowrap; display: flex; align-items: center; gap: 6px;
+}
+.sheet-tab:hover { background: #e6e6e6; }
+.sheet-tab.active { background: #fff; color: var(--accent); font-weight: 600; border-bottom-color: var(--accent); }
+.sheet-tab.add { font-size: 16px; color: var(--muted); padding: 0 10px; }
+input.sheet-tab.editing { width: 120px; background: #fff; border: 1px solid var(--accent); cursor: text; }
+.sheet-del { color: #999; font-weight: 400; font-size: 14px; padding: 0 2px; border-radius: 2px; }
+.sheet-del:hover { color: #c00000; background: #f4dede; }
+
+/* печать: только таблица использованной области */
+.sheet-print { display: none; }
+@media print {
+  .sheet-app .formula-bar, .sheet-app .sheet-main, .sheet-app .sheet-tabs { display: none !important; }
+  .sheet-print { display: table; border-collapse: collapse; font-family: Calibri, Carlito, sans-serif; font-size: 10pt; table-layout: fixed; }
+  .sheet-print td { border: 1px solid #bbb; padding: 1px 4px; white-space: pre-wrap; vertical-align: bottom; }
+}
