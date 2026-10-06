@@ -3,14 +3,18 @@ import React, { useRef, useState } from 'react';
 import { useEditorState } from '@tiptap/react';
 import { effectivePara } from './editor/paraFormat.js';
 import { PT_PER_CM, cmToPt, fmtNum, ptToCm } from './editor/paragraph.js';
+import { parseSectPr } from './editor/page.js';
 
-// Геометрия страницы — как у .page в styles.css (A4, поля 30 / 15 мм)
-const MM = 72 / 25.4;               // pt в 1 мм
-const PAGE_W = 210 * MM;
-const MARGIN_L = 30 * MM;
-const MARGIN_R = 15 * MM;
-const TEXT_W = PAGE_W - MARGIN_L - MARGIN_R;
 const SNAP = PT_PER_CM / 4;         // привязка к 0,25 см
+
+// Геометрия страницы документа (из w:sectPr) — в pt
+function geometry(sectPr) {
+  const g = parseSectPr(sectPr);
+  const PAGE_W = g.w / 20;
+  const MARGIN_L = g.left / 20;
+  const MARGIN_R = g.right / 20;
+  return { PAGE_W, MARGIN_L, MARGIN_R, TEXT_W: PAGE_W - MARGIN_L - MARGIN_R };
+}
 
 function rulerState(e) {
   const { $from } = e.state.selection;
@@ -25,6 +29,7 @@ function rulerState(e) {
   if (!['paragraph', 'heading'].includes(node.type.name)) node = null;
   const p = node ? effectivePara(node, e.state.doc.attrs, inList) : null;
   return {
+    sectPr: e.state.doc.attrs.sectPr,
     active: !!p && !inList && !inTable,
     left: p ? p.indentLeft : 0,
     right: p ? p.indentRight : 0,
@@ -33,7 +38,7 @@ function rulerState(e) {
 }
 
 // Деления: каждые 0,25 см, цифры — каждый сантиметр (от левого поля в обе стороны, как в Word)
-function Ticks() {
+function Ticks({ PAGE_W, MARGIN_L }) {
   const items = [];
   const fromCm = -Math.floor(MARGIN_L / PT_PER_CM);
   const toCm = Math.floor((PAGE_W - MARGIN_L) / PT_PER_CM);
@@ -52,6 +57,7 @@ function Ticks() {
 
 export default function Ruler({ editor, zoom }) {
   const s = useEditorState({ editor, selector: ({ editor: e }) => rulerState(e) });
+  const { PAGE_W, MARGIN_L, MARGIN_R, TEXT_W } = geometry(s.sectPr);
   const [drag, setDrag] = useState(null); // { kind, x } — x в pt от левого края текста
   const boxRef = useRef(null);
   const scale = zoom / 100;
@@ -102,12 +108,12 @@ export default function Ruler({ editor, zoom }) {
 
   return (
     <div className="ruler-bar">
-      <div className="ruler" ref={boxRef} style={{ width: `calc(210mm * ${scale})` }}>
+      <div className="ruler" ref={boxRef} style={{ width: `${(PAGE_W / 0.75) * scale}px` }}>
         <svg viewBox={`0 0 ${PAGE_W} 16`} aria-hidden="true">
           <rect x={0} y={2} width={MARGIN_L} height={12} className="ruler-margin" />
           <rect x={MARGIN_L} y={2} width={TEXT_W} height={12} className="ruler-text" />
           <rect x={PAGE_W - MARGIN_R} y={2} width={MARGIN_R} height={12} className="ruler-margin" />
-          <Ticks />
+          <Ticks PAGE_W={PAGE_W} MARGIN_L={MARGIN_L} />
         </svg>
         {s.active && (
           <>

@@ -207,13 +207,70 @@ body { background: var(--workspace); overflow: hidden; }
 .pd-input input:disabled { color: #aaa; }
 .pd-error { color: #b00020; font-size: 12.5px; margin-top: 4px; }
 .page {
-  width: 210mm; min-height: 297mm; margin: 0 auto; background: #fff;
+  /* размер листа и поля задаёт App из w:sectPr документа (по умолчанию A4, поля 2 / 1,5 / 2 / 3 см) */
+  position: relative; width: 210mm; min-height: 297mm; margin: 0 auto; background: #fff;
   box-shadow: 0 1px 3px rgba(0,0,0,.2), 0 0 0 1px rgba(0,0,0,.04);
-  /* поля как в русском Word по умолчанию: 2 см сверху/снизу, 3 см слева, 1.5 см справа */
   padding: 20mm 15mm 20mm 30mm;
 }
+
+/* Масштаб страницы (App/PageScaler): transform от левого верхнего угла, обёртка — по центру рабочей области */
+.page-scaler { margin: 0 auto; }
+.page-scaled { transform-origin: 0 0; width: max-content; }
+.page-scaled > .page { margin: 0; }
+
+/* Листы на экране: распорка разбиения рисует нижнее поле, промежуток между листами и верхнее поле следующего */
+.pero-page-spacer { position: static; user-select: none; text-indent: 0; }
+.pero-page-band {
+  position: absolute; left: calc(-1 * var(--page-ml, 113px)); right: calc(-1 * var(--page-mr, 57px));
+  display: flex; flex-direction: column; pointer-events: none;
+}
+.pero-page-gap {
+  background: var(--workspace); flex: none;
+  box-shadow: inset 0 3px 3px -2px rgba(0,0,0,.18), inset 0 -3px 3px -2px rgba(0,0,0,.18);
+}
+.pero-page-fill { user-select: none; }
+.pero-hf {
+  box-sizing: border-box; display: flex; flex-direction: column; color: #555; overflow: hidden;
+  font: 10pt Calibri, Carlito, 'Segoe UI', sans-serif; white-space: pre-wrap;
+}
+.pero-page-band .pero-hf { padding-left: var(--page-ml, 113px); padding-right: var(--page-mr, 57px); }
+.pero-header { justify-content: flex-start; }
+.pero-footer { justify-content: flex-end; }
+.hf-line { min-height: 1.2em; }
+.hf-center { text-align: center; }
+.hf-right { text-align: right; }
+.page-chrome-top, .page-chrome-bottom { position: absolute; left: 0; right: 0; pointer-events: none; }
+.page-chrome-top { top: 0; }
+.page-chrome-bottom { bottom: 0; }
+
+/* Диалог «Колонтитулы» */
+.hf-text { width: 100%; font: 13px 'Segoe UI', sans-serif; padding: 6px 8px; border: 1px solid #bbb; border-radius: 3px; resize: vertical; }
+.hf-tools { display: flex; gap: 8px; align-items: center; margin-top: 6px; }
+.hf-tools select { font: inherit; padding: 3px; }
+.btn.small { padding: 3px 10px; font-size: 12px; }
+.hf-hint { font-size: 12px; color: var(--muted); margin-top: 6px; }
+.hf-hint.warn { color: #a05a00; }
+
+/* ---------- Печать и PDF: только текст документа; листы режет Chromium по @page (App) ---------- */
+@media print {
+  :root { --gridline: transparent; }
+  html, body, #root, .app { height: auto; overflow: visible; background: #fff; }
+  .titlebar, .ribbon, .statusbar, .ruler-bar, .modal-backdrop,
+  .pero-page-spacer, .pero-page-fill, .page-chrome-top, .page-chrome-bottom { display: none !important; }
+  .workspace { overflow: visible; padding: 0; }
+  .page-scaler { width: auto !important; height: auto !important; }
+  .page-scaled { transform: none !important; width: auto; }
+  .page { zoom: 1 !important; width: auto !important; min-height: 0 !important; padding: 0 !important; margin: 0; box-shadow: none; }
+  .page-content { min-height: 0; }
+  p:has(> .opaque-pageBreak) { break-after: page; }
+  [data-section-break] { break-after: page; }
+  [data-section-break]::after, .opaque-pageBreak, .opaque-columnBreak { display: none !important; }
+  .pero-image.selected { outline: none; }
+  .pero-image-handle { display: none !important; }
+  .ProseMirror-selectednode { outline: none; }
+}
 .page-content {
-  outline: none; min-height: calc(297mm - 40mm);
+  outline: none;
   /* шрифт и размер документа по умолчанию задаёт App из атрибутов документа */
   font-family: var(--doc-font, Calibri, Carlito, 'Segoe UI', sans-serif); font-size: var(--doc-size, 11pt); color: #000;
   /* межстрочный интервал документа: множитель × «одинарный» шрифта (--line-ratio меряет App) */

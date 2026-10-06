@@ -6,6 +6,7 @@ import { HIGHLIGHTS, normalizeColor } from '../editor/font.js';
 import { WORD_FALLBACK_PARA, paraBase, paraDiff, twipsToPt } from '../editor/paragraph.js';
 import { CELL_SIDES, NO_BORDERS, TABLE_SIDES, TWIPS_PER_PX, borderFromOoxml } from '../editor/table.js';
 import { EMU_PER_PX, bytesToBase64, mimeOf } from '../editor/image.js';
+import { readHfPart } from '../editor/page.js';
 
 const W = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main';
 const R = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships';
@@ -694,10 +695,28 @@ export async function importDocx(data) {
   const body = child(documentXml.documentElement, 'body');
   let content = imp.blocks(body);
   if (!content.length) content = [{ type: 'paragraph' }];
-  // колонтитулы живут в отдельных частях пакета — сохраняются вместе с ним
-  if (Object.keys(zip.files).some((n) => /^word\/(header|footer)\d*\.xml$/.test(n))) imp.preserved.header = 1;
+  // Колонтитулы для показа: первые ссылки «по умолчанию» в порядке разделов (разделы без своих наследуют их).
+  // Сами части колонтитулов сохраняются вместе с пакетом без изменений.
+  const sects = [];
+  const walkSect = (n) => { if (n.attrs && n.attrs.sectPr) sects.push(n.attrs.sectPr); (n.content || []).forEach(walkSect); };
+  content.forEach(walkSect);
+  if (imp.bodySectPr) sects.push(imp.bodySectPr);
+  const hf = { header: null, footer: null, own: { header: false, footer: false } };
+  for (const kind of ['header', 'footer']) {
+    for (const sx of sects) {
+      const ref = new RegExp(`<w:${kind}Reference\\b[^>]*>`, 'g');
+      const tag = (sx.match(ref) || []).find((t) => /w:type="default"/.test(t));
+      const rid = tag && (/r:id="([^"]+)"/.exec(tag) || [])[1];
+      const rel = rid && rels[rid];
+      if (!rel) continue;
+      const part = await read(rel.target.startsWith('/') ? rel.target.slice(1) : 'word/' + rel.target);
+      if (part) hf[kind] = readHfPart(part);
+      break;
+    }
+  }
+  if (hf.header || hf.footer) imp.preserved.header = 1;
   return {
-    doc: { type: 'doc', attrs: { ...docDefaults, para: docPara, sectPr: imp.bodySectPr }, content },
+    doc: { type: 'doc', attrs: { ...docDefaults, para: docPara, sectPr: imp.bodySectPr, hf }, content },
     warnings: imp.warnings,
     preserved: imp.preserved,
   };

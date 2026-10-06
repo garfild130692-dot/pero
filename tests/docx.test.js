@@ -449,3 +449,71 @@ print(len(d.inline_shapes), round(s.width.cm, 2), round(s.height.cm, 2))
     expect(names).toEqual(['word/media/pero_image1.png']);
   });
 });
+
+describe('страницы и колонтитулы', () => {
+  it('геометрия из sectPr и её изменение', async () => {
+    const { parseSectPr, patchSectPr } = await import('../src/editor/page.js');
+    const { doc } = await importDocx(readFileSync('tests/fixtures/preserve.docx'));
+    // последний раздел — альбомный; при повороте Word поворачивает и поля: слева/справа — бывшие верх/низ (2,5 см)
+    const g = parseSectPr(doc.attrs.sectPr);
+    expect([g.orient, g.left, g.right]).toEqual(['landscape', 1417, 1417]);
+    expect(g.w).toBeGreaterThan(g.h);
+    const a4 = parseSectPr(null);
+    expect([a4.w, a4.h, a4.left, a4.right]).toEqual([11906, 16838, 1701, 850]);
+    const patched = patchSectPr(doc.attrs.sectPr, { w: g.h, h: g.w, orient: 'portrait', top: 567 });
+    const p = parseSectPr(patched);
+    expect([p.orient, p.w, p.h, p.top, p.left]).toEqual(['portrait', g.h, g.w, 567, 1417]);
+    expect(patched).not.toContain('w:orient');
+  });
+
+  it('импорт колонтитулов: текст, выравнивание, поле PAGE', async () => {
+    // long.docx: python-docx, Letter, верхний колонтитул — текст, нижний — поле PAGE по центру
+    const { doc } = await importDocx(readFileSync('tests/fixtures/long.docx'));
+    expect(doc.attrs.hf.header).toEqual([{ text: 'ООО «Перо» — внутренний документ', align: 'left' }]);
+    expect(doc.attrs.hf.footer).toEqual([{ text: '{PAGE}', align: 'center' }]);
+    expect(doc.attrs.hf.own).toEqual({ header: false, footer: false });
+  });
+
+  it('свои колонтитулы в новом документе: части, связи, ссылки в sectPr', async () => {
+    const doc = {
+      type: 'doc',
+      attrs: { hf: { header: [{ text: 'Отчёт', align: 'right' }], footer: [{ text: 'Стр. {PAGE} из {NUMPAGES}', align: 'center' }], own: { header: true, footer: true } } },
+      content: [{ type: 'paragraph', content: [{ type: 'text', text: 'Текст' }] }],
+    };
+    const bytes = await exportDocx(doc);
+    writeFileSync('tests/out/hf-new.docx', bytes);
+    const zip = await JSZip.loadAsync(bytes);
+    const footer = await zip.file('word/footer_pero.xml').async('string');
+    expect(footer).toContain('<w:fldSimple w:instr=" PAGE ">');
+    expect(footer).toContain('<w:fldSimple w:instr=" NUMPAGES ">');
+    expect(await zip.file('word/document.xml').async('string')).toMatch(/<w:sectPr>(<w:\w+Reference w:type="default" r:id="rIdPero[HF]"\/>){2}/);
+    expect(await zip.file('[Content_Types].xml').async('string')).toContain('PartName="/word/header_pero.xml"');
+    const back = (await importDocx(bytes)).doc.attrs.hf;
+    expect(back.header).toEqual([{ text: 'Отчёт', align: 'right' }]);
+    expect(back.footer).toEqual([{ text: 'Стр. {PAGE} из {NUMPAGES}', align: 'center' }]);
+    const out = execFileSync(PYTHON, ['-c', `
+import docx
+d = docx.Document('tests/out/hf-new.docx')
+print(d.sections[0].header.paragraphs[0].text, '|', d.sections[0].header.paragraphs[0].alignment)
+`], { env: { ...process.env, PYTHONIOENCODING: 'utf-8' } }).toString('utf8');
+    expect(out.trim()).toBe('Отчёт | RIGHT (2)');
+  });
+
+  it('в файле с колонтитулами меняется только тот, что изменён в Пере (во всех разделах)', async () => {
+    const src = readFileSync('tests/fixtures/preserve.docx'); // 2 раздела, колонтитулы в первом
+    const { doc } = await importDocx(src);
+    doc.attrs.hf = { ...doc.attrs.hf, footer: [{ text: '{PAGE}', align: 'right' }], own: { header: false, footer: true } };
+    const bytes = await exportDocx(doc, { source: src });
+    const zip = await JSZip.loadAsync(bytes);
+    const xml = await zip.file('word/document.xml').async('string');
+    const sects = xml.match(/<w:sectPr\b[\s\S]*?<\/w:sectPr>/g);
+    expect(sects).toHaveLength(2);
+    for (const sx of sects) expect(sx).toContain('<w:footerReference w:type="default" r:id="rIdPeroF"/>');
+    expect(sects[0]).toMatch(/<w:headerReference w:type="default" r:id="rId\d+"\/>/); // шапка из файла — как была
+    // исходная часть нижнего колонтитула осталась в пакете (на неё могут ссылаться другие типы колонтитулов)
+    expect(zip.file('word/footer1.xml')).toBeTruthy();
+    const again = (await importDocx(bytes)).doc.attrs.hf;
+    expect(again.footer).toEqual([{ text: '{PAGE}', align: 'right' }]);
+    expect(again.header).toEqual([{ text: 'Верхний колонтитул Перо', align: 'left' }]);
+  });
+});

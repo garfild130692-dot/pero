@@ -52,6 +52,10 @@ function download(name, data) {
   return { path: null, name: a.download };
 }
 
+// Печать и PDF (в браузере — окно печати, PDF — через «Сохранить как PDF» в нём)
+export const print = () => (native && native.print ? native.print() : window.print());
+export const exportPdf = (name) => (native && native.exportPdf ? native.exportPdf(name) : window.print());
+
 export const confirmDiscard = async () => (native ? native.confirmDiscard() : window.confirm('Есть несохранённые изменения. Продолжить?'));
 export const showError = (title, msg) => (native ? native.showError(title, msg) : alert(`${title}\n\n${msg}`));
 export const setDirty = (v) => native && native.setDirty(v);

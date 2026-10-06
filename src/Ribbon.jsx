@@ -5,6 +5,7 @@ import { Icon } from './icons.jsx';
 import { clipboard, openImage } from './fileApi.js';
 import { insertImageFiles } from './insertImage.js';
 import { PicturePanel } from './PictureControls.jsx';
+import { LayoutPanel } from './PageControls.jsx';
 import { FontFamilyBox, FontSizeBox, HighlightButton, TextColorButton, fontState, usePopover } from './FontControls.jsx';
 import { effectivePara } from './editor/paraFormat.js';
 import { LINE_PRESETS, fmtNum } from './editor/paragraph.js';
@@ -114,7 +115,7 @@ function TablePicker({ onPick, style }) {
   );
 }
 
-export default function Ribbon({ editor, file, onLink, onParagraph }) {
+export default function Ribbon({ editor, file, onLink, onParagraph, onMargins, onHf }) {
   const [tab, setTab] = useState('home');
   const tablePicker = usePopover();
 
@@ -141,6 +142,7 @@ export default function Ribbon({ editor, file, onLink, onParagraph }) {
       para: paraState(e),
       table: e.isActive('table') ? tableState(e) : null,
       image: e.state.selection.node && e.state.selection.node.type.name === 'image' ? e.state.selection.node.attrs : null,
+      page: { sectPr: e.state.doc.attrs.sectPr, hf: e.state.doc.attrs.hf }, // для вкладки «Макет»
     }),
     // в состоянии есть вложенный объект — сравниваем по значению, чтобы лента не перерисовывалась зря
     equalityFn: (a, b) => JSON.stringify(a) === JSON.stringify(b),
@@ -153,6 +155,7 @@ export default function Ribbon({ editor, file, onLink, onParagraph }) {
     ['file', 'Файл'],
     ['home', 'Главная'],
     ['insert', 'Вставка'],
+    ['layout', 'Макет'],
   ];
 
   return (
@@ -183,6 +186,10 @@ export default function Ribbon({ editor, file, onLink, onParagraph }) {
               <Btn big icon="open" label="Открыть" onClick={file.open} title="Открыть (Ctrl+O)" />
               <Btn big icon="save" label="Сохранить" onClick={file.save} title="Сохранить (Ctrl+S)" />
               <Btn big icon="saveAs" label="Сохранить как" onClick={file.saveAs} title="Сохранить как (Ctrl+Shift+S)" />
+            </Group>
+            <Group title="Вывод">
+              <Btn big icon="print" label="Печать" onClick={file.print} title="Печать (Ctrl+P)" />
+              <Btn big icon="pdf" label="Экспорт в PDF" onClick={file.pdf} title="Сохранить как PDF" />
             </Group>
           </>
         )}
@@ -293,6 +300,8 @@ export default function Ribbon({ editor, file, onLink, onParagraph }) {
         )}
 
         {activeTab === 'picture' && s.image && <PicturePanel editor={editor} image={s.image} Group={Group} />}
+
+        {activeTab === 'layout' && <LayoutPanel editor={editor} Group={Group} onMargins={onMargins} onHf={onHf} />}
 
         {activeTab === 'table' && (
           <>

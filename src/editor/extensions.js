@@ -15,6 +15,8 @@ import { ParaFormat } from './paraFormat.js';
 import { PeroTable, PeroTableCell, PeroTableHeader, PeroTableRow, TableFormat } from './tableFormat.js';
 import { Opaque } from './opaque.js';
 import { PeroImage } from './image.js';
+import { EMPTY_HF } from './page.js';
+import { Pagination } from './pagination.js';
 
 // Как оформлены заголовки (совпадает со styles.css и стилями Heading1–6 в export.js)
 export const HEADING_FONT = 'Calibri Light';
@@ -29,6 +31,7 @@ const PeroDocument = Document.extend({
       fontSize: { default: DEFAULT_SIZE },
       para: { default: NEW_DOC_PARA }, // { spaceBefore, spaceAfter, lineRule, lineSpacing, indentLeft, indentRight, indentFirst }
       sectPr: { default: null },       // исходный XML параметров последнего раздела (страница, поля, колонтитулы)
+      hf: { default: EMPTY_HF },       // колонтитулы: { header, footer, source: 'file'|'pero' } (см. page.js)
     };
   },
 });
@@ -37,7 +40,7 @@ const PeroDocument = Document.extend({
 // остаются от прошлого документа — выставляем их отдельно; без записи в историю и без события «изменён».
 export function loadDocument(editor, json) {
   editor.commands.setContent(json, { emitUpdate: false });
-  const attrs = { fontFamily: DEFAULT_FONT, fontSize: DEFAULT_SIZE, para: NEW_DOC_PARA, sectPr: null, ...((json && json.attrs) || {}) };
+  const attrs = { fontFamily: DEFAULT_FONT, fontSize: DEFAULT_SIZE, para: NEW_DOC_PARA, sectPr: null, hf: EMPTY_HF, ...((json && json.attrs) || {}) };
   const { tr } = editor.state;
   for (const [k, v] of Object.entries(attrs)) if (editor.state.doc.attrs[k] !== v) tr.setDocAttribute(k, v);
   if (tr.docChanged) editor.view.dispatch(tr.setMeta('addToHistory', false).setMeta('preventUpdate', true));
@@ -186,6 +189,7 @@ export const extensions = [
   RunStyle,
   Opaque,
   PeroImage,
+  Pagination,
   Highlight.configure({ multicolor: true }),
   Sup,
   Sub,

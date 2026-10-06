@@ -12,6 +12,9 @@ import { cssFontStack } from './editor/font.js';
 import { NEW_DOC_PARA } from './editor/paragraph.js';
 import { lineCss } from './editor/paraFormat.js';
 import { insertImageFiles } from './insertImage.js';
+import { EMPTY_HF, pagePx, parseSectPr } from './editor/page.js';
+import { pageInfo } from './editor/pagination.js';
+import { HeaderFooterDialog, MarginsDialog, PageChrome, printCss } from './PageControls.jsx';
 
 // «Одинарный» интервал Word = естественная высота строки шрифта (ascent + descent + lineGap).
 // В CSS её даёт line-height: normal; меряем отношение к размеру шрифта и кешируем.
@@ -26,6 +29,33 @@ function lineRatio(stack) {
   const r = Math.round((el.getBoundingClientRect().height / 100) * 1000) / 1000;
   el.remove();
   return (lineRatioCache[stack] = r > 0.8 && r < 2 ? r : 1.15);
+}
+
+// Масштаб страницы — transform, а не CSS zoom: раскладка текста всегда «как на 100%», поэтому переносы строк
+// и разбиение на страницы не зависят от масштаба (как в Word). Обёртка занимает место масштабированной страницы.
+function PageScaler({ scale, children }) {
+  const inner = useRef(null);
+  const [size, setSize] = useState({ w: 0, h: 0 });
+  useEffect(() => {
+    const el = inner.current;
+    if (!el) return undefined;
+    const ro = new ResizeObserver(() => setSize({ w: el.offsetWidth, h: el.offsetHeight }));
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+  return (
+    <div className="page-scaler" style={{ width: size.w * scale, height: size.h * scale }}>
+      <div ref={inner} className="page-scaled" style={{ transform: scale === 1 ? 'none' : `scale(${scale})` }}>{children}</div>
+    </div>
+  );
+}
+
+// Геометрия листа → размеры и поля .page (на экране листы разбивает плагин pagination)
+function pageBox(g) {
+  return {
+    width: `${g.width}px`, minHeight: `${g.height}px`, padding: `${g.top}px ${g.right}px ${g.bottom}px ${g.left}px`,
+    '--page-ml': `${g.left}px`, '--page-mr': `${g.right}px`,
+  };
 }
 
 // Умолчания документа → CSS-переменные страницы
@@ -105,11 +135,11 @@ function LinkDialog({ editor, onClose }) {
 }
 
 function StatusBar({ editor, warnings, preserved, zoom, setZoom }) {
-  const { words, chars } = useEditorState({
+  const { words, chars, page, total } = useEditorState({
     editor,
     selector: ({ editor: e }) => {
       const t = e.state.doc.textBetween(0, e.state.doc.content.size, ' ', ' ');
-      return { words: (t.match(/[\p{L}\p{N}][\p{L}\p{N}'’-]*/gu) || []).length, chars: t.replace(/\s/g, '').length };
+      return { words: (t.match(/[\p{L}\p{N}][\p{L}\p{N}'’-]*/gu) || []).length, chars: t.replace(/\s/g, '').length, ...pageInfo(e.state) };
     },
   });
   const warnList = Object.entries(warnings);
@@ -117,6 +147,7 @@ function StatusBar({ editor, warnings, preserved, zoom, setZoom }) {
   const keptList = [...new Set(Object.keys(preserved).map((k) => OPAQUE_SUMMARY[k]).filter(Boolean))];
   return (
     <div className="statusbar">
+      <span>Страница {page} из {total}</span>
       <span>Слов: {words.toLocaleString('ru-RU')}</span>
       <span>Знаков: {chars.toLocaleString('ru-RU')}</span>
       <span>Русский</span>
@@ -247,9 +278,18 @@ export default function App() {
 
   const saveAs = useCallback(() => write(true), [write]);
 
+  const doPrint = useCallback(() => fileApi.print(), []);
+  const doPdf = useCallback(async () => {
+    try {
+      await fileApi.exportPdf(doc.name.replace(/\.docx$/i, '') + '.pdf');
+    } catch (e) {
+      fileApi.showError('Не удалось сохранить PDF', String(e.message || e));
+    }
+  }, [doc.name]);
+
   // Команды меню Electron. Держим актуальные обработчики в ref, подписку — одну.
   const handlers = useRef({});
-  handlers.current = { newDoc, open, save, saveAs, load };
+  handlers.current = { newDoc, open, save, saveAs, load, doPrint, doPdf };
   useEffect(() => fileApi.onMenu((cmd, payload) => {
     const h = handlers.current;
     if (cmd === 'new') h.newDoc();
@@ -258,6 +298,8 @@ export default function App() {
     else if (cmd === 'saveAs') h.saveAs();
     else if (cmd === 'openData') h.load(payload);
     else if (cmd === 'saveAndClose') h.save(() => fileApi.closeNow());
+    else if (cmd === 'print') h.doPrint();
+    else if (cmd === 'pdf') h.doPdf();
     else if (cmd === 'zoom') setZoom((z) => (payload === 0 ? 100 : Math.min(200, Math.max(50, z + payload * 10))));
   }), []);
 
@@ -271,6 +313,7 @@ export default function App() {
       const h = handlers.current;
       if (k === 'KeyS') { e.preventDefault(); e.shiftKey ? h.saveAs() : h.save(); }
       else if (k === 'KeyO') { e.preventDefault(); h.open(); }
+      else if (k === 'KeyP') { e.preventDefault(); h.doPrint(); }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
@@ -288,10 +331,14 @@ export default function App() {
   // Шрифт и размер документа по умолчанию (атрибуты документа) → CSS-переменные страницы
   const docFont = useEditorState({
     editor,
-    selector: ({ editor: e }) => (e ? { family: e.state.doc.attrs.fontFamily, size: e.state.doc.attrs.fontSize, para: e.state.doc.attrs.para } : null),
+    selector: ({ editor: e }) => (e ? {
+      family: e.state.doc.attrs.fontFamily, size: e.state.doc.attrs.fontSize, para: e.state.doc.attrs.para,
+      sectPr: e.state.doc.attrs.sectPr, hf: e.state.doc.attrs.hf, total: pageInfo(e.state).total,
+    } : null),
   });
 
   if (!editor) return null;
+  const geo = pagePx(parseSectPr(docFont && docFont.sectPr));
 
   return (
     <div className="app" onDragOver={(e) => e.preventDefault()} onDrop={onDrop}>
@@ -299,24 +346,29 @@ export default function App() {
         <QuickAccess editor={editor} onSave={() => save()} />
         <div className="doc-title">{doc.name}{dirty ? ' •' : ''}</div>
       </div>
-      <Ribbon editor={editor} file={{ newDoc, open, save: () => save(), saveAs }} onLink={() => setModal('link')} onParagraph={() => setModal('para')} />
+      <Ribbon editor={editor} file={{ newDoc, open, save: () => save(), saveAs, print: doPrint, pdf: doPdf }} onLink={() => setModal('link')}
+        onParagraph={() => setModal('para')} onMargins={() => setModal('margins')} onHf={() => setModal('hf')} />
       <div
         className="workspace"
         onMouseDown={(e) => { if (e.target === e.currentTarget) editor.commands.focus('end'); }}
         onWheel={(e) => { if (e.ctrlKey) setZoom((z) => Math.min(200, Math.max(50, z + (e.deltaY < 0 ? 10 : -10)))); }} // Ctrl+колесо — масштаб
       >
         <Ruler editor={editor} zoom={zoom} />
-        <div
-          className="page"
-          style={{ zoom: zoom / 100, ...pageVars(docFont) }}
-        >
-          <EditorContent editor={editor} />
-        </div>
+        <PageScaler scale={zoom / 100}>
+          <div className="page" style={{ ...pageVars(docFont), ...pageBox(geo) }}>
+            <PageChrome geo={geo} hf={(docFont && docFont.hf) || EMPTY_HF} total={(docFont && docFont.total) || 1} />
+            <EditorContent editor={editor} />
+          </div>
+        </PageScaler>
       </div>
       <StatusBar editor={editor} warnings={warnings} preserved={preserved} zoom={zoom} setZoom={setZoom} />
 
       {modal === 'link' && <LinkDialog editor={editor} onClose={() => setModal(null)} />}
       {modal === 'para' && <ParagraphDialog editor={editor} onClose={() => setModal(null)} />}
+      {modal === 'margins' && <MarginsDialog editor={editor} onClose={() => setModal(null)} />}
+      {modal === 'hf' && <HeaderFooterDialog editor={editor} onClose={() => setModal(null)} />}
+      {/* печать/PDF: размер листа, поля и колонтитулы — правилами @page */}
+      <style>{printCss(docFont && docFont.sectPr, (docFont && docFont.hf) || EMPTY_HF)}</style>
       {modal && typeof modal === 'object' && (
         <Modal
           title={modal.title}

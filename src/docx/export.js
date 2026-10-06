@@ -5,6 +5,7 @@ import { DEFAULT_FONT, DEFAULT_SIZE, highlightName, normalizeColor, parseSize } 
 import { NEW_DOC_PARA, ptToTwips } from '../editor/paragraph.js';
 import { CELL_SIDES, GRID_BORDERS, TABLE_SIDES, TWIPS_PER_PX, borderToOoxml } from '../editor/table.js';
 import { EMU_PER_PX, dataUrlToBytes, extOf } from '../editor/image.js';
+import { setHfRefs, writeHfPart } from '../editor/page.js';
 
 // Разметка нового встроенного рисунка (как пишет Word для «Вставка → Рисунок»)
 function drawingXml({ rid, cx, cy, id, name, alt }) {
@@ -83,7 +84,8 @@ const DEFAULT_SECTPR = `<w:sectPr><w:pgSz w:w="${PAGE.w}" w:h="${PAGE.h}"/>` +
   '<w:cols w:space="708"/><w:docGrid w:linePitch="360"/></w:sectPr>';
 
 class Exporter {
-  constructor({ styleIds = OUR_STYLE_IDS, numBase = 1, relTargets = null, imgBase = 0 } = {}) {
+  constructor({ styleIds = OUR_STYLE_IDS, numBase = 1, relTargets = null, imgBase = 0, sect = (x) => x } = {}) {
+    this.sect = sect;             // преобразование XML sectPr (подстановка ссылок на свои колонтитулы)
     this.imgBase = imgBase;       // номера картинок Пера, уже занятые в исходном пакете
     this.relTargets = relTargets; // rId → путь части в исходном пакете (если сохраняем в него)
     this.images = [];             // новые картинки: { rid, path, bytes, ext }
@@ -179,7 +181,7 @@ class Exporter {
     pPr += spacingXml(attrs) + indXml(attrs);
     const jc = { center: 'center', right: 'right', justify: 'both' }[attrs.textAlign];
     if (jc) pPr += `<w:jc w:val="${jc}"/>`;
-    if (attrs.sectPr) pPr += attrs.sectPr; // разрыв раздела — в конце pPr по схеме
+    if (attrs.sectPr) pPr += this.sect(attrs.sectPr); // разрыв раздела — в конце pPr по схеме
     return `<w:p>${pPr ? `<w:pPr>${pPr}</w:pPr>` : ''}${this.inlines(node.content)}</w:p>`;
   }
 
@@ -534,9 +536,24 @@ function addOverride(ct, partName, type) {
  */
 export async function exportDocx(doc, { source } = {}) {
   const da = doc.attrs || {};
-  const sectPr = da.sectPr || DEFAULT_SECTPR;
+  // Свои колонтитулы (созданы в Пере): части header_pero.xml/footer_pero.xml и ссылки на них во всех разделах.
+  // Колонтитулы из файла (own = false) не трогаем — они уже в пакете.
+  const hf = da.hf || {};
+  const own = hf.own || {};
+  const hfIds = {};
+  if (own.header) hfIds.header = hf.header && hf.header.length ? 'rIdPeroH' : null;
+  if (own.footer) hfIds.footer = hf.footer && hf.footer.length ? 'rIdPeroF' : null;
+  const sect = (x) => (own.header || own.footer ? setHfRefs(x, hfIds) : x);
+  const sectPr = sect(da.sectPr || DEFAULT_SECTPR);
+  const hfParts = [
+    hfIds.header && { id: 'rIdPeroH', file: 'header_pero.xml', xml: writeHfPart('hdr', hf.header, NS), type: 'header' },
+    hfIds.footer && { id: 'rIdPeroF', file: 'footer_pero.xml', xml: writeHfPart('ftr', hf.footer, NS), type: 'footer' },
+  ].filter(Boolean);
+  const hfRels = hfParts.map((p) => `<Relationship Id="${p.id}" Type="${relType(p.type)}" Target="${p.file}"/>`).join('');
+  const addHfTypes = (ct, prefix) => hfParts.reduce((acc, p) => addOverride(acc, prefix + p.file,
+    `application/vnd.openxmlformats-officedocument.wordprocessingml.${p.type}+xml`), ct);
   if (!source) {
-    const ex = new Exporter();
+    const ex = new Exporter({ sect });
     let body = ex.blocks(doc.content || []);
     if (!body) body = '<w:p/>';
     const documentXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<w:document ${NS}><w:body>${body}${sectPr}</w:body></w:document>`;
@@ -546,9 +563,11 @@ export async function exportDocx(doc, { source } = {}) {
 <Relationship Id="rId2" Type="${relType('numbering')}" Target="numbering.xml"/>
 ${ex.links.map((href, i) => `<Relationship Id="rIdPeroL${i + 1}" Type="${relType('hyperlink')}" Target="${esc(href)}" TargetMode="External"/>`).join('\n')}
 ${ex.images.map((img) => `<Relationship Id="${img.rid}" Type="${relType('image')}" Target="${img.path}"/>`).join('\n')}
+${hfRels}
 </Relationships>`;
     const zip = new JSZip();
-    zip.file('[Content_Types].xml', addImageTypes(CONTENT_TYPES, ex.images));
+    zip.file('[Content_Types].xml', addHfTypes(addImageTypes(CONTENT_TYPES, ex.images), 'word/'));
+    for (const p of hfParts) zip.file('word/' + p.file, p.xml);
     for (const img of ex.images) zip.file('word/' + img.path, img.bytes);
     zip.file('_rels/.rels', ROOT_RELS);
     zip.file('docProps/core.xml', coreXml());
@@ -584,7 +603,7 @@ ${ex.images.map((img) => `<Relationship Id="${img.rid}" Type="${relType('image')
   // картинки, добавленные Пером при прошлых сохранениях, остаются; новые нумеруются дальше
   const imgBase = Math.max(0, ...Object.keys(zip.files).map((n) => +((/\/media\/pero_image(\d+)\.\w+$/.exec(n) || [])[1] || 0)),
     ...[...src.rels.matchAll(/Id="rIdPeroImg(\d+)"/g)].map((m) => +m[1]));
-  const ex = new Exporter({ styleIds, numBase, relTargets: src.relTargets, imgBase });
+  const ex = new Exporter({ styleIds, numBase, relTargets: src.relTargets, imgBase, sect });
   let body = ex.blocks(doc.content || []);
   if (!body) body = '<w:p/>';
   body = stripRootNs(body + sectPr, src.rootNs);
@@ -609,8 +628,11 @@ ${ex.images.map((img) => `<Relationship Id="${img.rid}" Type="${relType('image')
   const linkRels = ex.links.map((href, i) => `<Relationship Id="rIdPeroL${i + 1}" Type="${relType('hyperlink')}" Target="${esc(href)}" TargetMode="External"/>`).join('');
   const imgRels = ex.images.map((img) => `<Relationship Id="${img.rid}" Type="${relType('image')}" Target="${img.path}"/>`).join('');
   // ссылки Пера пересоздаются заново; картинки прошлых сохранений остаются (на них ссылаются рисунки)
-  rels = rels.replace(/<Relationship\b[^>]*Id="rIdPeroL\d+"[^>]*\/>/g, '').replace('</Relationships>', linkRels + imgRels + '</Relationships>');
+  rels = rels.replace(/<Relationship\b[^>]*Id="rIdPero(?:L\d+|H|F)"[^>]*\/>/g, '').replace('</Relationships>', linkRels + imgRels + hfRels + '</Relationships>');
   for (const img of ex.images) zip.file(prefix + img.path, img.bytes);
+  for (const name of ['header_pero.xml', 'footer_pero.xml']) if (!hfParts.some((p) => p.file === name)) zip.remove(prefix + name);
+  for (const p of hfParts) zip.file(prefix + p.file, p.xml);
+  ct = addHfTypes(ct, prefix);
   ct = addImageTypes(ct, ex.images);
   zip.file(src.relsPath, rels);
   zip.file('[Content_Types].xml', ct);

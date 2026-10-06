@@ -28,6 +28,9 @@ function buildMenu() {
         { label: 'Сохранить', accelerator: 'CmdOrCtrl+S', click: () => send('save') },
         { label: 'Сохранить как…', accelerator: 'CmdOrCtrl+Shift+S', click: () => send('saveAs') },
         { type: 'separator' },
+        { label: 'Печать…', accelerator: 'CmdOrCtrl+P', click: () => send('print') },
+        { label: 'Экспорт в PDF…', click: () => send('pdf') },
+        { type: 'separator' },
         { label: 'Выход', role: 'quit' },
       ],
     },
@@ -117,6 +120,21 @@ ipcMain.handle('file:open', async () => {
   const r = await dialog.showOpenDialog(win, { properties: ['openFile'], filters: DOCX_FILTER });
   if (r.canceled || !r.filePaths[0]) return null;
   return readDoc(r.filePaths[0]);
+});
+
+// Печать: системный диалог; страницы режет Chromium по CSS @page (размер, поля, колонтитулы)
+ipcMain.handle('doc:print', () => new Promise((resolve) => {
+  win.webContents.print({ printBackground: true }, (ok, reason) => resolve({ ok, reason }));
+}));
+
+// Экспорт в PDF: тот же CSS печати, размер листа — из @page
+ipcMain.handle('doc:pdf', async (_e, suggestedName) => {
+  const r = await dialog.showSaveDialog(win, { defaultPath: suggestedName || 'Документ.pdf', filters: [{ name: 'PDF', extensions: ['pdf'] }] });
+  if (r.canceled || !r.filePath) return null;
+  const p = /\.pdf$/i.test(r.filePath) ? r.filePath : r.filePath + '.pdf';
+  const data = await win.webContents.printToPDF({ preferCSSPageSize: true, printBackground: true });
+  await fs.writeFile(p, data);
+  return { path: p, name: path.basename(p) };
 });
 
 // Выбор картинки для «Вставка → Рисунок»
