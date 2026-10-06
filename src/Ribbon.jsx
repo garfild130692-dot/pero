@@ -171,7 +171,7 @@ function TableStylesButton({ editor }) {
   );
 }
 
-export default function Ribbon({ editor, file, onLink, onParagraph, onMargins, onHf, onFind, onStyle }) {
+export default function Ribbon({ editor, file, onLink, onParagraph, onMargins, onHf, onFind, onStyle, review }) {
   const [tab, setTab] = useState('home');
   const tablePicker = usePopover();
 
@@ -214,6 +214,7 @@ export default function Ribbon({ editor, file, onLink, onParagraph, onMargins, o
     ['home', 'Главная'],
     ['insert', 'Вставка'],
     ['layout', 'Макет'],
+    ['review', 'Рецензирование'],
   ];
 
   return (
@@ -380,6 +381,19 @@ export default function Ribbon({ editor, file, onLink, onParagraph, onMargins, o
         {activeTab === 'picture' && s.image && <PicturePanel editor={editor} image={s.image} Group={Group} />}
 
         {activeTab === 'layout' && <LayoutPanel editor={editor} Group={Group} onMargins={onMargins} onHf={onHf} />}
+
+        {activeTab === 'review' && (
+          <>
+            <Group title="Примечания">
+              <Btn big icon="comment" label="Создать примечание" title="Примечание к выделенному фрагменту" onClick={review.addComment} />
+              <div className="rb-rows">
+                <Btn title="Предыдущее примечание" onClick={() => review.stepComment(-1)}><span className="rb-inline">◀ Предыдущее</span></Btn>
+                <Btn title="Следующее примечание" onClick={() => review.stepComment(1)}><span className="rb-inline">Следующее ▶</span></Btn>
+              </div>
+              <Btn big icon="comments" label="Показать примечания" active={review.showComments} onClick={review.toggleComments} />
+            </Group>
+          </>
+        )}
 
         {activeTab === 'table' && (
           <>

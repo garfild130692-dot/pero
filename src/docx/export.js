@@ -6,6 +6,9 @@ import { NEW_DOC_PARA, ptToTwips } from '../editor/paragraph.js';
 import { CELL_SIDES, GRID_BORDERS, TABLE_SIDES, TWIPS_PER_PX, borderToOoxml } from '../editor/table.js';
 import { EMU_PER_PX, dataUrlToBytes, extOf } from '../editor/image.js';
 import { setHfRefs, writeHfPart } from '../editor/page.js';
+import { commentsXml } from '../editor/comments.js';
+
+const COMMENTS_TYPE = 'application/vnd.openxmlformats-officedocument.wordprocessingml.comments+xml';
 
 // Определение пользовательского стиля абзаца (из doc.attrs.styles); basedOn — «Обычный» файла
 function customStyleXml(st, normalId) {
@@ -584,9 +587,13 @@ export async function exportDocx(doc, { source } = {}) {
 ${ex.links.map((href, i) => `<Relationship Id="rIdPeroL${i + 1}" Type="${relType('hyperlink')}" Target="${esc(href)}" TargetMode="External"/>`).join('\n')}
 ${ex.images.map((img) => `<Relationship Id="${img.rid}" Type="${relType('image')}" Target="${img.path}"/>`).join('\n')}
 ${hfRels}
+${(da.comments || []).length ? `<Relationship Id="rIdPeroC" Type="${relType('comments')}" Target="comments.xml"/>` : ''}
 </Relationships>`;
     const zip = new JSZip();
-    zip.file('[Content_Types].xml', addHfTypes(addImageTypes(CONTENT_TYPES, ex.images), 'word/'));
+    if ((da.comments || []).length) zip.file('word/comments.xml', commentsXml(da.comments, NS));
+    let ct0 = addHfTypes(addImageTypes(CONTENT_TYPES, ex.images), 'word/');
+    if ((da.comments || []).length) ct0 = addOverride(ct0, 'word/comments.xml', COMMENTS_TYPE);
+    zip.file('[Content_Types].xml', ct0);
     for (const p of hfParts) zip.file('word/' + p.file, p.xml);
     for (const img of ex.images) zip.file('word/' + img.path, img.bytes);
     zip.file('_rels/.rels', ROOT_RELS);
@@ -674,6 +681,31 @@ ${hfRels}
   for (const name of ['header_pero.xml', 'footer_pero.xml']) if (!hfParts.some((p) => p.file === name)) zip.remove(prefix + name);
   for (const p of hfParts) zip.file(prefix + p.file, p.xml);
   ct = addHfTypes(ct, prefix);
+
+  // Примечания менялись в Пере: comments.xml — заново (простой текст); расширенные части примечаний
+  // (ответы, отметки «решено», id абзацев) больше не соответствуют — убираем их вместе со связями и типами
+  if (da.commentsEdited) {
+    const list = da.comments || [];
+    const cm = /<Relationship\b[^>]*Type="[^"]*\/comments"[^>]*Target="([^"]+)"[^>]*\/>|<Relationship\b[^>]*Target="([^"]+)"[^>]*Type="[^"]*\/comments"[^>]*\/>/.exec(rels);
+    const cPath = cm ? resolvePart(src.dir, cm[1] || cm[2]) : prefix + 'comments.xml';
+    for (const kind of ['commentsExtended', 'commentsIds', 'commentsExtensible']) {
+      const re = new RegExp(`<Relationship\\b[^>]*Type="[^"]*/${kind}"[^>]*/>`, 'g');
+      for (const m of rels.match(re) || []) {
+        const t = /Target="([^"]+)"/.exec(m);
+        if (t) { const part = resolvePart(src.dir, t[1]); zip.remove(part); ct = ct.replace(new RegExp(`<Override\\b[^>]*PartName="/${part.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&')}"[^>]*/>`), ''); }
+      }
+      rels = rels.replace(re, '');
+    }
+    if (list.length) {
+      zip.file(cPath, commentsXml(list, NS));
+      if (!cm) rels = rels.replace('</Relationships>', `<Relationship Id="rIdPeroC" Type="${relType('comments')}" Target="comments.xml"/></Relationships>`);
+      ct = addOverride(ct, cPath, COMMENTS_TYPE);
+    } else if (cm) {
+      zip.remove(cPath);
+      rels = rels.replace(cm[0], '');
+      ct = ct.replace(new RegExp(`<Override\\b[^>]*PartName="/${cPath.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&')}"[^>]*/>`), '');
+    }
+  }
   ct = addImageTypes(ct, ex.images);
   zip.file(src.relsPath, rels);
   zip.file('[Content_Types].xml', ct);

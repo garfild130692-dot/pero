@@ -11,6 +11,13 @@ $img = [IO.Path]::GetFullPath('build/icon.png')
 $w = New-Object -ComObject Word.Application
 $w.Visible = $false
 $w.DisplayAlerts = 0
+# Нейтральный автор (примечание, свойства документа) вместо имени владельца Office; после — вернуть как было
+$oldName = $w.UserName
+$oldInitials = $w.UserInitials
+$oldLocal = $w.Options.UseLocalUserInfo   # «всегда использовать эти значения» — иначе Word берёт имя из учётной записи Office
+$w.Options.UseLocalUserInfo = $true
+$w.UserName = 'Перо Тест'
+$w.UserInitials = 'ПТ'
 try {
   $d = $w.Documents.Add()
   $s = $d.Sections.Item(1)
@@ -77,5 +84,8 @@ try {
   $d.Close(0)
   "ok: $path"
 } finally {
+  $w.UserName = $oldName
+  $w.UserInitials = $oldInitials
+  $w.Options.UseLocalUserInfo = $oldLocal
   $w.Quit()
 }

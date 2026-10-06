@@ -141,6 +141,11 @@ ipcMain.handle('doc:pdf', async (_e, suggestedName) => {
   return { path: p, name: path.basename(p) };
 });
 
+// Имя пользователя Windows — автор примечаний и исправлений
+ipcMain.handle('app:userName', () => {
+  try { return require('os').userInfo().username || 'Пользователь'; } catch { return 'Пользователь'; }
+});
+
 // Выбор картинки для «Вставка → Рисунок»
 const IMAGE_FILTER = [{ name: 'Изображения', extensions: ['png', 'jpg', 'jpeg', 'gif', 'bmp', 'webp', 'svg'] }];
 ipcMain.handle('file:openImage', async () => {

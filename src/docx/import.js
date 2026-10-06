@@ -7,6 +7,7 @@ import { WORD_FALLBACK_PARA, paraBase, paraDiff, twipsToPt } from '../editor/par
 import { CELL_SIDES, NO_BORDERS, TABLE_SIDES, TWIPS_PER_PX, borderFromOoxml } from '../editor/table.js';
 import { EMU_PER_PX, bytesToBase64, mimeOf } from '../editor/image.js';
 import { readHfPart } from '../editor/page.js';
+import { readComments } from '../editor/comments.js';
 
 const W = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main';
 const R = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships';
@@ -751,8 +752,16 @@ export async function importDocx(data) {
     }
   }
   if (hf.header || hf.footer) imp.preserved.header = 1;
+  // тексты примечаний (связь типа comments)
+  const cRel = Object.values(rels).find((r) => /\/comments$/.test(r.type || ''));
+  const cPart = cRel && await read(cRel.target.startsWith('/') ? cRel.target.slice(1) : 'word/' + cRel.target);
+  const commentList = cPart ? readComments(cPart) : [];
   return {
-    doc: { type: 'doc', attrs: { ...docDefaults, para: docPara, sectPr: imp.bodySectPr, hf, styles: Object.values(imp.usedStyles) }, content },
+    doc: {
+      type: 'doc',
+      attrs: { ...docDefaults, para: docPara, sectPr: imp.bodySectPr, hf, styles: Object.values(imp.usedStyles), comments: commentList },
+      content,
+    },
     warnings: imp.warnings,
     preserved: imp.preserved,
   };

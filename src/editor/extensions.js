@@ -19,6 +19,7 @@ import { EMPTY_HF } from './page.js';
 import { Pagination } from './pagination.js';
 import { SearchReplace } from './search.js';
 import { ParagraphStyles, styleOf } from './styles.js';
+import { Comments } from './comments.js';
 
 // Как оформлены заголовки (совпадает со styles.css и стилями Heading1–6 в export.js)
 export const HEADING_FONT = 'Calibri Light';
@@ -36,6 +37,8 @@ const PeroDocument = Document.extend({
       hf: { default: EMPTY_HF },       // колонтитулы: { header, footer, own } (см. page.js)
       styles: { default: [] },         // пользовательские стили абзацев (см. styles.js)
       defaultsModified: { default: false }, // «Обычный» изменён в Пере — при сохранении переписать docDefaults
+      comments: { default: [] },       // примечания: [{ id, author, initials, date, text }] (см. comments.js)
+      commentsEdited: { default: false }, // примечания менялись — при сохранении comments.xml пишется заново
     };
   },
 });
@@ -46,6 +49,7 @@ export function loadDocument(editor, json) {
   editor.commands.setContent(json, { emitUpdate: false });
   const attrs = {
     fontFamily: DEFAULT_FONT, fontSize: DEFAULT_SIZE, para: NEW_DOC_PARA, sectPr: null, hf: EMPTY_HF, styles: [], defaultsModified: false,
+    comments: [], commentsEdited: false,
     ...((json && json.attrs) || {}),
   };
   const { tr } = editor.state;
@@ -189,6 +193,7 @@ export const extensions = [
   TextAlign.configure({ types: ['heading', 'paragraph'] }),
   ParaFormat,
   ParagraphStyles,
+  Comments,
   PeroTable.configure({ resizable: true }),
   PeroTableRow,
   PeroTableCell,

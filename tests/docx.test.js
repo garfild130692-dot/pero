@@ -583,3 +583,64 @@ print(q.font.bold, q.font.color.rgb, round(q.paragraph_format.left_indent.cm, 2)
     expect(styles).toMatch(/<w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:ascii="Arial"/);
   });
 });
+
+describe('примечания', () => {
+  // команды примечаний работают через редактор — здесь эмулируем их результат в JSON
+  const addComment = (doc, paraIdx, id, text) => {
+    const p = doc.content[paraIdx];
+    p.content = [
+      { type: 'opaque', attrs: { kind: 'commentRange', xml: `<w:commentRangeStart w:id="${id}"/>`, text: '', font: null } },
+      ...(p.content || []),
+      { type: 'opaque', attrs: { kind: 'commentRange', xml: `<w:commentRangeEnd w:id="${id}"/>`, text: '', font: null } },
+      { type: 'opaque', attrs: { kind: 'comment', xml: `<w:r><w:commentReference w:id="${id}"/></w:r>`, text: '', font: null } },
+    ];
+    doc.attrs.comments = [...(doc.attrs.comments || []), { id, author: 'Тестер', initials: 'Т', date: '2026-10-06T10:00:00Z', text }];
+    doc.attrs.commentsEdited = true;
+  };
+
+  it('импорт: тексты примечаний из comments.xml', async () => {
+    const { doc } = await importDocx(readFileSync('tests/fixtures/preserve.docx'));
+    expect(doc.attrs.comments).toHaveLength(1);
+    expect(doc.attrs.comments[0]).toMatchObject({ id: '0', text: 'Комментарий рецензента' });
+    expect(doc.attrs.comments[0].author).toBeTruthy();
+  });
+
+  it('новое примечание в документе без примечаний: comments.xml, связь, тип', async () => {
+    const { doc } = await importDocx(readFileSync('tests/fixtures/sample.docx'));
+    addComment(doc, 2, '0', 'Проверить цифры\nи источник');
+    const bytes = await exportDocx(doc, { source: readFileSync('tests/fixtures/sample.docx') });
+    writeFileSync('tests/out/comments-new.docx', bytes);
+    const zip = await JSZip.loadAsync(bytes);
+    expect(await zip.file('word/comments.xml').async('string')).toContain('w:author="Тестер"');
+    expect(await zip.file('word/_rels/document.xml.rels').async('string')).toContain('Target="comments.xml"');
+    expect(await zip.file('[Content_Types].xml').async('string')).toContain('PartName="/word/comments.xml"');
+    const back = (await importDocx(bytes)).doc.attrs.comments;
+    expect(back).toEqual([{ id: '0', author: 'Тестер', initials: 'Т', date: '2026-10-06T10:00:00Z', text: 'Проверить цифры\nи источник' }]);
+  });
+
+  it('правка в файле с примечаниями Word: comments.xml заново, расширенные части убраны', async () => {
+    const src = readFileSync('tests/fixtures/preserve.docx');
+    const { doc } = await importDocx(src);
+    doc.attrs.comments[0].text = 'Исправлено в Пере';
+    doc.attrs.commentsEdited = true;
+    const bytes = await exportDocx(doc, { source: src });
+    writeFileSync('tests/out/comments-edit.docx', bytes);
+    const zip = await JSZip.loadAsync(bytes);
+    for (const p of ['word/commentsExtended.xml', 'word/commentsIds.xml', 'word/commentsExtensible.xml']) expect(zip.file(p), p).toBeNull();
+    const rels = await zip.file('word/_rels/document.xml.rels').async('string');
+    expect(rels).not.toMatch(/commentsExtended|commentsIds|commentsExtensible/);
+    expect((await importDocx(bytes)).doc.attrs.comments[0].text).toBe('Исправлено в Пере');
+  });
+
+  it('удаление последнего примечания убирает comments.xml', async () => {
+    const src = readFileSync('tests/fixtures/preserve.docx');
+    const { doc } = await importDocx(src);
+    const strip = (n) => { if (n.content) n.content = n.content.filter((c) => !(c.type === 'opaque' && /comment/.test(c.attrs.kind))).map(strip); return n; };
+    strip(doc);
+    doc.attrs.comments = [];
+    doc.attrs.commentsEdited = true;
+    const zip = await JSZip.loadAsync(await exportDocx(doc, { source: src }));
+    expect(zip.file('word/comments.xml')).toBeNull();
+    expect(await zip.file('word/_rels/document.xml.rels').async('string')).not.toContain('/comments"');
+  });
+});

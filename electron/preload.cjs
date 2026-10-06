@@ -5,6 +5,7 @@ contextBridge.exposeInMainWorld('pero', {
   openFile: () => ipcRenderer.invoke('file:open'),
   openImage: () => ipcRenderer.invoke('file:openImage'),
   print: () => ipcRenderer.invoke('doc:print'),
+  userName: () => ipcRenderer.invoke('app:userName'),
   exportPdf: (name) => ipcRenderer.invoke('doc:pdf', name),
   saveFile: (path, data) => ipcRenderer.invoke('file:save', path, data),
   saveFileAs: (name, data) => ipcRenderer.invoke('file:saveAs', name, data),

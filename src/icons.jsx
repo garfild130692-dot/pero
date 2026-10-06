@@ -24,6 +24,8 @@ export const Icon = {
   indent: (p) => <S {...p}><path d="M3 4h18M11 9h10M11 15h10M3 20h18" /><path d="m3 9 4 3-4 3" /></S>,
   search: (p) => <S {...p}><circle cx="10.5" cy="10.5" r="6" /><path d="m15 15 6 6" /></S>,
   replace: (p) => <S {...p}><path d="M4 7h11l-3-3M20 17H9l3 3" /><path d="M4 7v3M20 17v-3" /></S>,
+  comment: (p) => <S {...p}><path d="M4 5h16v11H9l-5 4z" /><path d="M12 8v5M9.5 10.5h5" /></S>,
+  comments: (p) => <S {...p}><path d="M3 4h13v9H7l-4 3z" /><path d="M8 15v2h9l4 3V9h-3" /></S>,
   print: (p) => <S {...p}><path d="M7 9V3h10v6" /><rect x="3" y="9" width="18" height="8" rx="1.5" /><path d="M7 14h10v7H7z" /></S>,
   pdf: (p) => <S {...p}><path d="M6 2h8l5 5v15H6z" /><path d="M14 2v5h5" /><path d="M8.5 17v-4h1.3a1.2 1.2 0 0 1 0 2.4H8.5M12.5 13v4h1a2 2 0 0 0 0-4zM17 13h-1.8v4M15.2 15h1.4" strokeWidth="1.1" /></S>,
   picture: (p) => <S {...p}><rect x="3" y="4" width="18" height="16" rx="1.5" /><circle cx="9" cy="10" r="2" /><path d="m21 17-5-5-9 8" /></S>,

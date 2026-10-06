@@ -18,6 +18,8 @@ import { HeaderFooterDialog, MarginsDialog, PageChrome, printCss } from './PageC
 import FindBar from './FindBar.jsx';
 import StyleDialog from './StyleDialog.jsx';
 import { styleCss } from './editor/styles.js';
+import CommentsPanel from './CommentsPanel.jsx';
+import { orderedComments, commentsKey } from './editor/comments.js';
 
 // «Одинарный» интервал Word = естественная высота строки шрифта (ascent + descent + lineGap).
 // В CSS её даёт line-height: normal; меряем отношение к размеру шрифта и кешируем.
@@ -183,6 +185,9 @@ export default function App() {
   const [zoom, setZoom] = useState(100);
   const [modal, setModal] = useState(null);
   const [findMode, setFindMode] = useState(null); // null | 'find' | 'replace'
+  const [showComments, setShowComments] = useState(false);
+  const [userName, setUserName] = useState('Пользователь');
+  useEffect(() => { fileApi.userName().then((n) => n && setUserName(n)).catch(() => {}); }, []);
 
   const editor = useEditor({
     extensions,
@@ -223,6 +228,7 @@ export default function App() {
       setDoc({ path: file.path, name: file.name });
       setWarnings(w);
       setPreserved(kept);
+      setShowComments((json.attrs.comments || []).length > 0);
       source.current = file.data;
       setDirtyState(false);
     } catch (e) {
@@ -356,7 +362,25 @@ export default function App() {
       <Ribbon editor={editor} file={{ newDoc, open, save: () => save(), saveAs, print: doPrint, pdf: doPdf }} onLink={() => setModal('link')}
         onFind={(m) => setFindMode(m)}
         onStyle={(m) => (m && m.remove ? editor.chain().focus().deleteStyle(m.remove).run() : setModal({ style: m }))}
+        review={{
+          showComments,
+          toggleComments: () => setShowComments((v) => !v),
+          addComment: () => {
+            const initials = userName.split(/\s+/).map((x) => x[0] || '').join('').slice(0, 3).toUpperCase();
+            editor.chain().focus().addComment({ author: userName, initials }).run();
+            setShowComments(true);
+          },
+          stepComment: (dir) => {
+            const list = orderedComments(editor.state);
+            if (!list.length) return;
+            const cur = list.findIndex((c) => c.id === (commentsKey.getState(editor.state) || {}).active);
+            const next = list[(cur + dir + list.length) % list.length] || list[0];
+            editor.commands.goToComment(next.id);
+            setShowComments(true);
+          },
+        }}
         onParagraph={() => setModal('para')} onMargins={() => setModal('margins')} onHf={() => setModal('hf')} />
+      <div className="main-row">
       <div
         className="workspace"
         onMouseDown={(e) => { if (e.target === e.currentTarget) editor.commands.focus('end'); }}
@@ -370,6 +394,8 @@ export default function App() {
             <EditorContent editor={editor} />
           </div>
         </PageScaler>
+      </div>
+      {showComments && <CommentsPanel editor={editor} onClose={() => setShowComments(false)} />}
       </div>
       <StatusBar editor={editor} warnings={warnings} preserved={preserved} zoom={zoom} setZoom={setZoom} />
 
