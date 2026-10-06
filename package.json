@@ -1,0 +1,62 @@
+{
+  "name": "pero",
+  "version": "0.1.0",
+  "description": "Перо — текстовый редактор документов .docx",
+  "main": "electron/main.cjs",
+  "scripts": {
+    "dev": "concurrently -k -n vite,app \"vite\" \"wait-on tcp:5173 && cross-env VITE_DEV_SERVER_URL=http://localhost:5173 electron .\"",
+    "build": "vite build",
+    "start": "electron .",
+    "test": "vitest run",
+    "dist": "vite build && electron-builder --win"
+  },
+  "dependencies": {
+    "@tiptap/extension-table": "^3.31.4",
+    "@tiptap/extension-text-align": "^3.31.4",
+    "@tiptap/pm": "^3.31.4",
+    "@tiptap/react": "^3.31.4",
+    "@tiptap/starter-kit": "^3.31.4",
+    "@xmldom/xmldom": "^0.9.12",
+    "jszip": "^3.10.2",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^6.1.2",
+    "concurrently": "^10.0.5",
+    "cross-env": "^10.1.0",
+    "electron": "^44.5.1",
+    "electron-builder": "^26.15.3",
+    "vite": "^8.3.3",
+    "vitest": "^5.0.3",
+    "wait-on": "^9.5.1"
+  },
+  "productName": "Перо",
+  "type": "module",
+  "build": {
+    "appId": "ru.local.pero",
+    "productName": "Перо",
+    "files": [
+      "dist/**",
+      "electron/**",
+      "package.json"
+    ],
+    "directories": {
+      "output": "release"
+    },
+    "fileAssociations": [
+      {
+        "ext": "docx",
+        "name": "Документ Word",
+        "role": "Editor"
+      }
+    ],
+    "win": {
+      "target": "nsis"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    }
+  }
+}
