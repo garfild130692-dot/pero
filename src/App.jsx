@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useEditor, EditorContent, useEditorState } from '@tiptap/react';
 import { EditorState } from '@tiptap/pm/state';
 import { extensions, loadDocument } from './editor/extensions.js';
+import TitleBar from './TitleBar.jsx';
 import { importDocx } from './docx/import.js';
 import { exportDocx } from './docx/export.js';
 import { OPAQUE_SUMMARY } from './editor/opaque.js';
@@ -399,10 +400,9 @@ export default function App({ initialFile, onOpenOther, onNewSheet, autosaveSec 
 
   return (
     <div className="app" onDragOver={(e) => e.preventDefault()} onDrop={onDrop}>
-      <div className="titlebar">
+      <TitleBar name={doc.name} dirty={dirty}>
         <QuickAccess editor={editor} onSave={() => save()} />
-        <div className="doc-title">{doc.name}{dirty ? ' •' : ''}</div>
-      </div>
+      </TitleBar>
       <Ribbon editor={editor} file={{ newDoc, newSheet, open, openHere, save: () => save(), saveAs, print: doPrint, pdf: doPdf }} onLink={() => setModal('link')}
         onFind={(m) => setFindMode(m)}
         onStyle={(m) => (m && m.remove ? editor.chain().focus().deleteStyle(m.remove).run() : setModal({ style: m }))}

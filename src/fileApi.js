@@ -58,6 +58,8 @@ export const print = () => (native && native.print ? native.print() : window.pri
 export const exportPdf = (name) => (native && native.exportPdf ? native.exportPdf(name) : window.print());
 
 // Имя пользователя: в Electron — из Windows, в браузере — «Пользователь»
+export const about = () => (native && native.about ? native.about() : alert('Перо'));
+export const openLogs = () => native && native.openLogs && native.openLogs();
 export const userName = async () => (native && native.userName ? native.userName() : 'Пользователь');
 
 export const confirmDiscard = async () => (native ? native.confirmDiscard() : window.confirm('Есть несохранённые изменения. Продолжить?'));

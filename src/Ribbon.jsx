@@ -2,7 +2,8 @@
 import React, { useState } from 'react';
 import { useEditorState } from '@tiptap/react';
 import { Icon } from './icons.jsx';
-import { clipboard, openImage, reportProblem } from './fileApi.js';
+import { about, clipboard, openImage, openLogs, reportProblem } from './fileApi.js';
+import { QuickButton } from './TitleBar.jsx';
 import RecentButton from './RecentButton.jsx';
 import { insertImageFiles } from './insertImage.js';
 import { PicturePanel } from './PictureControls.jsx';
@@ -261,6 +262,8 @@ export default function Ribbon({ editor, file, onLink, onParagraph, onMargins, o
             </Group>
             <Group title="Справка">
               <Btn big icon="report" label="Сообщить о проблеме" onClick={() => reportProblem()} title="Собрать сведения о проблеме для администратора" />
+              <Btn big icon="open" label="Папка журналов" onClick={() => openLogs()} title="Открыть папку с журналом ошибок" />
+              <Btn big icon="info" label="О программе" onClick={() => about()} title="Версия Перо" />
             </Group>
           </>
         )}
@@ -499,11 +502,10 @@ export function QuickAccess({ editor, onSave }) {
     selector: ({ editor: e }) => ({ canUndo: e.can().undo(), canRedo: e.can().redo() }),
   });
   return (
-    <div className="quick-access">
-      <span className="app-mark">П</span>
-      <Btn icon="save" title="Сохранить (Ctrl+S)" onClick={onSave} />
-      <Btn icon="undo" title="Отменить (Ctrl+Z)" disabled={!s.canUndo} onClick={() => editor.chain().focus().undo().run()} />
-      <Btn icon="redo" title="Повторить (Ctrl+Y)" disabled={!s.canRedo} onClick={() => editor.chain().focus().redo().run()} />
-    </div>
+    <>
+      <QuickButton icon="save" title="Сохранить (Ctrl+S)" onClick={onSave} />
+      <QuickButton icon="undo" title="Отменить (Ctrl+Z)" disabled={!s.canUndo} onClick={() => editor.chain().focus().undo().run()} />
+      <QuickButton icon="redo" title="Повторить (Ctrl+Y)" disabled={!s.canRedo} onClick={() => editor.chain().focus().redo().run()} />
+    </>
   );
 }

@@ -2,7 +2,7 @@
 // Разметка страницы (параметры печати) / Формулы (имена) / Данные (структура) / Рецензирование (защита листа) / Вид (закрепление областей).
 import React, { useState } from 'react';
 import { Icon } from '../icons.jsx';
-import { clipboard, reportProblem } from '../fileApi.js';
+import { about, clipboard, openLogs, reportProblem } from '../fileApi.js';
 import RecentButton from '../RecentButton.jsx';
 import { ColorPalette, SplitColor, usePopover } from '../FontControls.jsx';
 import { FORMAT_PRESETS, changeDecimals } from './format.js';
@@ -159,6 +159,8 @@ export default function SheetRibbon({ api }) {
             </Group>
             <Group title="Справка">
               <Btn big icon="report" label="Сообщить о проблеме" onClick={() => reportProblem()} title="Собрать сведения о проблеме для администратора" />
+              <Btn big icon="open" label="Папка журналов" onClick={() => openLogs()} title="Открыть папку с журналом ошибок" />
+              <Btn big icon="info" label="О программе" onClick={() => about()} title="Версия Перо" />
             </Group>
           </>
         )}

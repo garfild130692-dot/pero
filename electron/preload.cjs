@@ -26,6 +26,8 @@ contextBridge.exposeInMainWorld('pero', {
   recoveryDiscard: (id) => ipcRenderer.invoke('recovery:discard', id),
   logError: (msg) => ipcRenderer.send('log:error', String(msg).slice(0, 4000)),
   reportProblem: () => ipcRenderer.invoke('app:report'),
+  about: () => ipcRenderer.send('app:about'),
+  openLogs: () => ipcRenderer.send('app:logs'),
   pathForFile: (f) => { try { return webUtils.getPathForFile(f) || null; } catch { return null; } },
   edit: (cmd) => ipcRenderer.send('edit', cmd),
   closeNow: () => ipcRenderer.send('app:closeNow'),

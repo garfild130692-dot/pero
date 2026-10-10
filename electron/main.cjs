@@ -97,6 +97,8 @@ function focus(win) {
 }
 
 // ---------- Меню ----------
+// Строки меню в окне нет (заголовок как в Word, titleBarStyle 'hidden'), меню остаётся источником команд,
+// а его горячие клавиши окно ловит само (fileShortcuts) — так они не зависят от видимости меню.
 function buildMenu() {
   const to = (cmd, payload) => (_item, bw) => send(stateOfWindow(bw), cmd, payload);
   const recentItems = recent.list().map((r, i) => ({
@@ -108,9 +110,9 @@ function buildMenu() {
     {
       label: 'Файл',
       submenu: [
-        { label: 'Создать документ', accelerator: 'CmdOrCtrl+N', click: () => createWindow({ kind: 'doc' }) },
+        { label: 'Создать документ', accelerator: 'CmdOrCtrl+N', registerAccelerator: false, click: () => createWindow({ kind: 'doc' }) },
         { label: 'Создать книгу', click: () => createWindow({ kind: 'sheet' }) },
-        { label: 'Открыть…', accelerator: 'CmdOrCtrl+O', click: to('open') },
+        { label: 'Открыть…', accelerator: 'CmdOrCtrl+O', registerAccelerator: false, click: to('open') },
         {
           label: 'Последние файлы',
           submenu: recentItems.length
@@ -118,13 +120,13 @@ function buildMenu() {
             : [{ label: 'Список пуст', enabled: false }],
         },
         { type: 'separator' },
-        { label: 'Сохранить', accelerator: 'CmdOrCtrl+S', click: to('save') },
-        { label: 'Сохранить как…', accelerator: 'CmdOrCtrl+Shift+S', click: to('saveAs') },
+        { label: 'Сохранить', accelerator: 'CmdOrCtrl+S', registerAccelerator: false, click: to('save') },
+        { label: 'Сохранить как…', accelerator: 'CmdOrCtrl+Shift+S', registerAccelerator: false, click: to('saveAs') },
         { type: 'separator' },
-        { label: 'Печать…', accelerator: 'CmdOrCtrl+P', click: to('print') },
+        { label: 'Печать…', accelerator: 'CmdOrCtrl+P', registerAccelerator: false, click: to('print') },
         { label: 'Экспорт в PDF…', click: to('pdf') },
         { type: 'separator' },
-        { label: 'Закрыть окно', accelerator: 'CmdOrCtrl+W', role: 'close' },
+        { label: 'Закрыть окно', accelerator: 'CmdOrCtrl+W', registerAccelerator: false, role: 'close' },
         { label: 'Выход', role: 'quit' },
       ],
     },
@@ -209,6 +211,22 @@ async function reportProblem(bw) {
   return file;
 }
 
+// Горячие клавиши файла (как в Word): Ctrl+N, Ctrl+O, Ctrl+S, Ctrl+Shift+S, Ctrl+P, Ctrl+W.
+// По коду клавиши — работают и в русской раскладке.
+function fileShortcuts(e, input, s) {
+  if (input.type !== 'keyDown' || !(input.control || input.meta) || input.alt) return;
+  const k = input.code;
+  let act = null;
+  if (k === 'KeyN' && !input.shift) act = () => createWindow({ kind: 'doc' });
+  else if (k === 'KeyO' && !input.shift) act = () => send(s, 'open');
+  else if (k === 'KeyS') act = () => send(s, input.shift ? 'saveAs' : 'save');
+  else if (k === 'KeyP' && !input.shift) act = () => send(s, 'print');
+  else if (k === 'KeyW' && !input.shift) act = () => s.win.close();
+  if (!act) return;
+  e.preventDefault();
+  act();
+}
+
 // ---------- Окна ----------
 // kind: 'doc' | 'sheet' — что создать в пустом окне; file — открыть файл; recovered — данные восстановления
 function createWindow({ kind = 'doc', file = null } = {}) {
@@ -222,6 +240,10 @@ function createWindow({ kind = 'doc', file = null } = {}) {
     minHeight: 500,
     title: 'Перо',
     backgroundColor: '#f3f3f3',
+    // одна полоса заголовка, как в Word: без системной рамки и строки меню; кнопки окна Windows рисует поверх
+    // зелёной полосы интерфейса (высота — как у .titlebar). Горячие клавиши меню при этом работают.
+    titleBarStyle: 'hidden',
+    titleBarOverlay: { color: '#1f6f5c', symbolColor: '#ffffff', height: 34 },
     webPreferences: {
       preload: path.join(__dirname, 'preload.cjs'),
       contextIsolation: true,
@@ -254,6 +276,7 @@ function createWindow({ kind = 'doc', file = null } = {}) {
     return { action: 'deny' };
   });
   win.webContents.on('will-navigate', (e) => e.preventDefault());
+  win.webContents.on('before-input-event', (e, input) => fileShortcuts(e, input, s));
 
   win.on('close', (e) => {
     if (!s.dirty || s.forceClose) return;
@@ -328,6 +351,8 @@ ipcMain.handle('app:ready', (e) => {
 
 const toArrayBuffer = (buf) => buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength);
 
+ipcMain.on('app:about', (e) => { const s = stateOf(e); about(s && s.win); });
+ipcMain.on('app:logs', () => { shell.openPath(log.dir); });
 ipcMain.on('app:newWindow', (_e, kind) => createWindow({ kind: kind === 'sheet' ? 'sheet' : 'doc' }));
 
 // Открыть: диалог; файл вернётся окну, если оно пустое и нетронутое, иначе откроется в новом окне

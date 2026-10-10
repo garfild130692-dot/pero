@@ -21,6 +21,7 @@ import { pageOf, printGeometry, printScale } from './pageSetup.js';
 import { isLocked, isProtected, protectionViolation, setProtection } from './protect.js';
 import ProtectDialog from './ProtectDialog.jsx';
 import NamesDialog from './NamesDialog.jsx';
+import TitleBar, { QuickButton } from '../TitleBar.jsx';
 
 const PROTECTED_MSG = 'Ячейка на защищённом листе. Чтобы изменить её, снимите защиту: «Рецензирование → Снять защиту листа».';
 import * as fileApi from '../fileApi.js';
@@ -335,15 +336,11 @@ export default function SheetApp({ initialFile, onOpenOther, onNewDoc, autosaveS
 
   return (
     <div className="app sheet-app" onDragOver={(e) => e.preventDefault()} onDrop={onDrop}>
-      <div className="titlebar">
-        <div className="quick-access">
-          <span className="app-mark">П</span>
-          <button type="button" className="rb-btn" title="Сохранить (Ctrl+S)" onClick={() => save()}>💾</button>
-          <button type="button" className="rb-btn" title="Отменить (Ctrl+Z)" disabled={!history.current.undo.length} onClick={undo}>↶</button>
-          <button type="button" className="rb-btn" title="Повторить (Ctrl+Y)" disabled={!history.current.redo.length} onClick={redo}>↷</button>
-        </div>
-        <div className="doc-title">{doc.name}{dirty ? ' •' : ''}</div>
-      </div>
+      <TitleBar name={doc.name} dirty={dirty}>
+        <QuickButton icon="save" title="Сохранить (Ctrl+S)" onClick={() => save()} />
+        <QuickButton icon="undo" title="Отменить (Ctrl+Z)" disabled={!history.current.undo.length} onClick={undo} />
+        <QuickButton icon="redo" title="Повторить (Ctrl+Y)" disabled={!history.current.redo.length} onClick={redo} />
+      </TitleBar>
       <SheetRibbon api={ribbonApi} />
       <div className="formula-bar">
         <input className="name-box" aria-label="Адрес" value={rangeName(rg).replace(/^(\w+):\1$/, '$1')} onChange={() => {}}

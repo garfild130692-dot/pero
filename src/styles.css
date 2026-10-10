@@ -23,9 +23,13 @@ body { background: var(--workspace); overflow: hidden; }
 
 /* ---------- Заголовок окна / панель быстрого доступа ---------- */
 .titlebar {
-  display: flex; align-items: center; height: 34px; padding: 0 8px;
-  background: var(--accent); color: #fff; flex: none;
+  display: grid; grid-template-columns: 1fr minmax(0, auto) 1fr; align-items: center; height: 34px; padding: 0 0 0 8px;
+  background: var(--accent); color: #fff; flex: none; user-select: none;
+  -webkit-app-region: drag; /* перетаскивание окна за полосу */
 }
+.titlebar button, .titlebar input { -webkit-app-region: no-drag; }
+/* место под системные кнопки окна (Window Controls Overlay); в браузере — 0 */
+.titlebar-right { justify-self: end; width: calc(100vw - env(titlebar-area-x, 0px) - env(titlebar-area-width, 100vw)); }
 .quick-access { display: flex; align-items: center; gap: 2px; }
 .app-mark {
   width: 22px; height: 22px; border-radius: 4px; background: #fff; color: var(--accent);
@@ -34,7 +38,7 @@ body { background: var(--workspace); overflow: hidden; }
 .titlebar .rb-btn { color: #fff; }
 .titlebar .rb-btn:hover:not(:disabled) { background: rgba(255,255,255,.18); }
 .titlebar .rb-btn:disabled { opacity: .45; }
-.doc-title { flex: 1; text-align: center; margin-right: 120px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.doc-title { padding: 0 16px; font-size: 12.5px; text-align: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
 /* ---------- Лента ---------- */
 .ribbon { background: var(--ribbon-bg); border-bottom: 1px solid var(--line); flex: none; }
