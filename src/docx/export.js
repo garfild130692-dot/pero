@@ -7,6 +7,7 @@ import { CELL_SIDES, GRID_BORDERS, TABLE_SIDES, TWIPS_PER_PX, borderToOoxml } fr
 import { EMU_PER_PX, dataUrlToBytes, extOf } from '../editor/image.js';
 import { setHfRefs, writeHfPart } from '../editor/page.js';
 import { commentsXml } from '../editor/comments.js';
+import { layoutXmlHead, layoutXmlTail } from '../editor/paraLayout.js';
 
 const COMMENTS_TYPE = 'application/vnd.openxmlformats-officedocument.wordprocessingml.comments+xml';
 
@@ -213,8 +214,10 @@ class Exporter {
     const pStyle = style || (node.type === 'heading' ? this.styleIds['Heading' + Math.min(Math.max(attrs.level || 1, 1), 6)]
       : (attrs.styleId && this.customStyles.has(attrs.styleId) ? attrs.styleId : null));
     if (pStyle) pPr += `<w:pStyle w:val="${pStyle}"/>`;
+    // порядок в pPr по схеме: pStyle, keepNext, keepLines, pageBreakBefore, widowControl, numPr, pBdr, shd, spacing, ind, jc
+    pPr += layoutXmlHead(attrs);
     if (numPr) pPr += `<w:numPr><w:ilvl w:val="${numPr.ilvl}"/><w:numId w:val="${numPr.numId}"/></w:numPr>`;
-    // порядок в pPr по схеме: pStyle, numPr, spacing, ind, jc
+    pPr += layoutXmlTail(attrs);
     pPr += spacingXml(attrs) + indXml(attrs);
     const jc = { center: 'center', right: 'right', justify: 'both' }[attrs.textAlign];
     if (jc) pPr += `<w:jc w:val="${jc}"/>`;

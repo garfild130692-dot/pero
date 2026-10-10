@@ -12,6 +12,7 @@ import {
 } from './font.js';
 import { NEW_DOC_PARA } from './paragraph.js';
 import { ParaFormat } from './paraFormat.js';
+import { ParaLayout } from './paraLayout.js';
 import { PeroTable, PeroTableCell, PeroTableHeader, PeroTableRow, TableFormat } from './tableFormat.js';
 import { Opaque } from './opaque.js';
 import { PeroImage } from './image.js';
@@ -193,6 +194,7 @@ export const extensions = [
   PeroDocument,
   TextAlign.configure({ types: ['heading', 'paragraph'] }),
   ParaFormat,
+  ParaLayout,
   ParagraphStyles,
   Comments,
   Insertion,

@@ -8,6 +8,7 @@ import { CELL_SIDES, NO_BORDERS, TABLE_SIDES, TWIPS_PER_PX, borderFromOoxml } fr
 import { EMU_PER_PX, bytesToBase64, mimeOf } from '../editor/image.js';
 import { readHfPart } from '../editor/page.js';
 import { readComments } from '../editor/comments.js';
+import { layoutAttrs, readLayoutProps } from '../editor/paraLayout.js';
 
 const W = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main';
 const R = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships';
@@ -99,6 +100,7 @@ function parseStyles(doc, theme) {
       outlineLvl: wAttr(child(pPr, 'outlineLvl'), 'val'),
       marks: readRunMarks(rPr, theme),
       para: readParaProps(pPr),
+      layout: readLayoutProps(pPr, child, wAttr), // «не отрывать», границы, заливка…
       tblBorders: readBorders(child(child(st, 'tblPr'), 'tblBorders'), TABLE_SIDES), // у стилей таблиц
     };
     const isDefault = ['1', 'true', 'on'].includes(String(wAttr(st, 'default')).toLowerCase());
@@ -107,6 +109,7 @@ function parseStyles(doc, theme) {
   const rPrDefault = child(child(child(root, 'docDefaults'), 'rPrDefault'), 'rPr');
   defaults.marks = readRunMarks(rPrDefault, theme);
   defaults.para = readParaProps(child(child(child(root, 'docDefaults'), 'pPrDefault'), 'pPr'));
+  defaults.layout = readLayoutProps(child(child(child(root, 'docDefaults'), 'pPrDefault'), 'pPr'), child, wAttr);
   return { map, defaults, defaultPara };
 }
 
@@ -124,6 +127,7 @@ function resolvedStyle(styles, styleId, cache, key) {
 }
 const resolvedStyleMarks = (styles, id, cache) => resolvedStyle(styles, id, cache, 'marks');
 const resolvedStylePara = (styles, id, cache) => resolvedStyle(styles, id, cache, 'para');
+const resolvedStyleLayout = (styles, id, cache) => resolvedStyle(styles, id, cache, 'layout');
 
 // ---------- Границы таблиц и ячеек ----------
 // <w:tblBorders>/<w:tcBorders> → { сторона: граница } только для заданных сторон (start/end = left/right)
@@ -359,6 +363,7 @@ class Importer {
     this.theme = ctx.theme;
     this.docDefaults = ctx.docDefaults;
     this.docPara = ctx.docPara;
+    this.docLayout = ctx.docLayout;
     this.usedStyles = {};  // пользовательские стили абзацев, на которые ссылается документ
     this.rev = null;       // текущая правка (внутри w:ins / w:del)
     this.fontBase = null;  // шрифт/размер, от которых считается прямое форматирование в текущем абзаце
@@ -561,9 +566,11 @@ class Importer {
     if (def) Object.assign(base, def.para);
     const para = paraDiff(values, base);
 
+    // Положение на странице, границы, заливка: умолчания документа ← стиль (с basedOn) ← прямые
+    const layout = layoutAttrs({ ...(this.docLayout || {}), ...resolvedStyleLayout(this.styles, styleId, this.styleCache), ...readLayoutProps(pPr, child, wAttr) }, !!level);
     const node = level
-      ? { type: 'heading', attrs: { level, textAlign, ...para }, content }
-      : { type: 'paragraph', attrs: { textAlign, ...para, ...(custom ? { styleId } : {}) }, content };
+      ? { type: 'heading', attrs: { level, textAlign, ...para, ...layout }, content }
+      : { type: 'paragraph', attrs: { textAlign, ...para, ...layout, ...(custom ? { styleId } : {}) }, content };
     // разрыв раздела после абзаца — исходный XML параметров раздела
     const sect = child(pPr, 'sectPr');
     if (sect) node.attrs.sectPr = xmlOf(sect);
@@ -735,6 +742,7 @@ export async function importDocx(data) {
     theme,
     docDefaults,
     docPara,
+    docLayout: defaults.layout,
     numbering: parseNumbering(await read('word/numbering.xml')),
     rels,
   });

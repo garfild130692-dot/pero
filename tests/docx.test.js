@@ -137,6 +137,17 @@ for p in d.paragraphs:
 });
 
 // Атрибуты абзаца с указанным текстом (только заданные)
+function paraNode(doc, text) {
+  let found = null;
+  const walk = (n) => {
+    if (found) return;
+    if ((n.type === 'paragraph' || n.type === 'heading') && (n.content || []).map((t) => t.text).join('') === text) found = n;
+    (n.content || []).forEach(walk);
+  };
+  walk(doc);
+  if (!found) throw new Error(`нет абзаца «${text}»`);
+  return found;
+}
 function paraOf(doc, text) {
   let found = null;
   const walk = (n) => {
@@ -673,5 +684,60 @@ describe('исправления', () => {
     const node = Node.fromJSON(schema, doc);
     const revs = allRevisions(node);
     expect(revs.map((r) => [r.type, node.textBetween(r.from, r.to)])).toEqual([['insertion', 'срочной '], ['deletion', ' сегодня']]);
+  });
+});
+
+describe('положение абзаца на странице, границы и заливка', () => {
+  const layoutOf = (doc, t) => {
+    const a = paraNode(doc, t).attrs;
+    return Object.fromEntries(['keepNext', 'keepLines', 'pageBreakBefore', 'widowControl', 'pBorders', 'shading'].filter((k) => a[k] != null).map((k) => [k, a[k]]));
+  };
+  it('импорт: прямые свойства, свойство стиля, умолчания заголовка, рамки и заливка', async () => {
+    const { doc } = await importDocx(readFileSync('tests/fixtures/layout.docx'));
+    Node.fromJSON(schema, doc).check();
+    expect(layoutOf(doc, 'Положение на странице')).toEqual({}); // у заголовка «не отрывать» — по умолчанию
+    expect(layoutOf(doc, 'Обычный абзац.')).toEqual({});
+    expect(layoutOf(doc, 'Не отрывать от следующего.')).toEqual({ keepNext: true });
+    expect(layoutOf(doc, 'Не разрывать абзац.')).toEqual({ keepLines: true });
+    expect(layoutOf(doc, 'С новой страницы.')).toEqual({ pageBreakBefore: true });
+    expect(layoutOf(doc, 'Без запрета висячих строк.')).toEqual({ widowControl: false });
+    expect(layoutOf(doc, 'Заголовок, который можно отрывать')).toEqual({ keepNext: false });
+    expect(layoutOf(doc, 'Абзац стиля с «не отрывать».')).toEqual({ keepNext: true });
+    const line = { style: 'single', width: 0.5, color: null, space: 1 };
+    expect(layoutOf(doc, 'Рамка вокруг абзаца.')).toEqual({ pBorders: { top: line, left: line, bottom: line, right: line } });
+    expect(layoutOf(doc, 'Нижняя граница двойная красная.')).toEqual({ pBorders: { bottom: { style: 'double', width: 0.75, color: '#c00000', space: 1 } } });
+    expect(layoutOf(doc, 'Заливка жёлтым.')).toEqual({ shading: '#ffff00' });
+    expect(layoutOf(doc, 'Второй абзац группы.').pBorders.between).toEqual(line);
+  });
+
+  it('round-trip сохраняет свойства; Word-порядок элементов pPr', async () => {
+    const a = (await importDocx(readFileSync('tests/fixtures/layout.docx'))).doc;
+    const bytes = await exportDocx(a);
+    mkdirSync('tests/out', { recursive: true });
+    writeFileSync('tests/out/layout.docx', bytes);
+    const b = (await importDocx(bytes)).doc;
+    expect(b).toEqual(a);
+    const xml = await (await JSZip.loadAsync(bytes)).file('word/document.xml').async('string');
+    // keepNext раньше pBdr/shd, они — раньше spacing/ind/jc
+    for (const m of xml.matchAll(/<w:pPr>(.*?)<\/w:pPr>/g)) {
+      const order = [...m[1].matchAll(/<w:(\w+)/g)].map((x) => x[1]).filter((t) => ['pStyle', 'keepNext', 'keepLines', 'pageBreakBefore', 'widowControl', 'numPr', 'pBdr', 'shd', 'spacing', 'ind', 'jc'].includes(t));
+      const rank = ['pStyle', 'keepNext', 'keepLines', 'pageBreakBefore', 'widowControl', 'numPr', 'pBdr', 'shd', 'spacing', 'ind', 'jc'];
+      expect(order.map((t) => rank.indexOf(t))).toEqual([...order.map((t) => rank.indexOf(t))].sort((x, y) => x - y));
+    }
+  });
+
+  it('python-docx видит положение на странице', () => {
+    const out = execFileSync(PYTHON, ['-c', `
+import docx
+d = docx.Document('tests/out/layout.docx')
+for p in d.paragraphs:
+    f = p.paragraph_format
+    print(repr(p.text), f.keep_with_next, f.keep_together, f.page_break_before, f.widow_control)
+`], { env: { ...process.env, PYTHONIOENCODING: 'utf-8' } }).toString('utf8');
+    expect(out).toContain("'Не отрывать от следующего.' True None None None");
+    expect(out).toContain("'Не разрывать абзац.' None True None None");
+    expect(out).toContain("'С новой страницы.' None None True None");
+    expect(out).toContain("'Без запрета висячих строк.' None None None False");
+    expect(out).toContain("'Заголовок, который можно отрывать' False None None None");
   });
 });

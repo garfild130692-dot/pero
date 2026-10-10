@@ -1,8 +1,9 @@
-// Диалог «Абзац»: выравнивание, отступы (см), интервалы (pt), межстрочный интервал.
+// Диалог «Абзац»: выравнивание, отступы (см), интервалы (pt), межстрочный интервал; вкладка «Положение на странице».
 // Начальные значения — действующие параметры первого абзаца выделения; применяются только изменённые поля.
 import React, { useEffect, useState } from 'react';
 import { effectivePara } from './editor/paraFormat.js';
 import { cmToPt, fmtNum, ptToCm } from './editor/paragraph.js';
+import { LAYOUT_KEYS, effectiveLayout } from './editor/paraLayout.js';
 
 const LINE_TYPES = [
   ['single', 'Одинарный'], ['1.5', '1,5 строки'], ['double', 'Двойной'],
@@ -71,8 +72,10 @@ export default function ParagraphDialog({ editor, onClose }) {
       after: fmtNum(p.spaceAfter, 1),
       lineType: line.type,
       lineValue: line.value,
+      ...effectiveLayout(node), // widowControl, keepNext, keepLines, pageBreakBefore
     };
   });
+  const [tab, setTab] = useState('indent');
   const [f, setF] = useState(init);
   const set = (k) => (v) => setF((s) => ({ ...s, [k]: v }));
   const [error, setError] = useState('');
@@ -108,8 +111,11 @@ export default function ParagraphDialog({ editor, onClose }) {
         Object.assign(patch, { lineRule: t === 'multiple' ? 'auto' : t, lineSpacing: v });
       }
     }
+    const layout = {};
+    for (const k of LAYOUT_KEYS) if (changed(k)) layout[k] = f[k];
     const chain = editor.chain().focus();
     if (Object.keys(patch).length) chain.setParagraphFormat(patch);
+    if (Object.keys(layout).length) chain.setParagraphLayout(layout);
     if (changed('align')) chain.setTextAlign(f.align);
     chain.run();
     onClose();
@@ -129,7 +135,29 @@ export default function ParagraphDialog({ editor, onClose }) {
       <div className="modal pd" role="dialog" aria-label="Абзац" onMouseDown={(e) => e.stopPropagation()}
         onKeyDown={(e) => { if (e.key === 'Escape') onClose(); if (e.key === 'Enter' && e.target.tagName !== 'SELECT') { e.preventDefault(); apply(); } }}>
         <div className="modal-title">Абзац</div>
+        <div className="pd-tabs" role="tablist">
+          <button type="button" role="tab" className={tab === 'indent' ? 'active' : ''} onClick={() => setTab('indent')}>Отступы и интервалы</button>
+          <button type="button" role="tab" className={tab === 'position' ? 'active' : ''} onClick={() => setTab('position')}>Положение на странице</button>
+        </div>
         <div className="modal-body">
+          {tab === 'position' && (
+            <fieldset>
+              <legend>Разбивка на страницы</legend>
+              <div className="pd-checks">
+                {[
+                  ['widowControl', 'Запрет висячих строк', 'Первая и последняя строки абзаца не остаются на странице поодиночке'],
+                  ['keepNext', 'Не отрывать от следующего', 'Абзац и следующий за ним — на одной странице'],
+                  ['keepLines', 'Не разрывать абзац', 'Все строки абзаца — на одной странице'],
+                  ['pageBreakBefore', 'С новой страницы', 'Абзац начинается с новой страницы'],
+                ].map(([k, label, hint]) => (
+                  <label key={k} className="pd-check" title={hint}>
+                    <input type="checkbox" checked={!!f[k]} onChange={(e) => set(k)(e.target.checked)} /> {label}
+                  </label>
+                ))}
+              </div>
+            </fieldset>
+          )}
+          {tab === 'indent' && (<>
           <fieldset>
             <legend>Общие</legend>
             <label className="pd-field">
@@ -170,6 +198,7 @@ export default function ParagraphDialog({ editor, onClose }) {
                 step={f.lineType === 'multiple' ? 0.5 : 1} min={0} max={1584} disabled={!['multiple', 'exact', 'atLeast'].includes(f.lineType)} />
             </div>
           </fieldset>
+          </>)}
           {error && <div className="pd-error" role="alert">{error}</div>}
         </div>
         <div className="modal-actions">

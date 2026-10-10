@@ -13,6 +13,7 @@ import { trackInfo } from './editor/track.js';
 import { FontFamilyBox, FontSizeBox, HighlightButton, TextColorButton, fontState, usePopover } from './FontControls.jsx';
 import { effectivePara } from './editor/paraFormat.js';
 import { LINE_PRESETS, fmtNum } from './editor/paragraph.js';
+import { ParaBordersButton, ParaShadingButton } from './ParaLayoutControls.jsx';
 import { BordersButton, RowHeightField, ShadingButton, TableIcons, tableState } from './TableControls.jsx';
 
 function Btn({ icon, label, title, onClick, active, disabled, big, children }) {
@@ -313,6 +314,8 @@ export default function Ribbon({ editor, file, onLink, onParagraph, onMargins, o
                   <Btn icon="alignRight" title="По правому краю (Ctrl+Shift+R)" active={s.align === 'right'} onClick={() => c().setTextAlign('right').run()} />
                   <Btn icon="alignJustify" title="По ширине (Ctrl+Shift+J)" active={s.align === 'justify'} onClick={() => c().setTextAlign('justify').run()} />
                   <LineSpacingButton editor={editor} para={s.para} onMore={onParagraph} />
+                  <ParaShadingButton editor={editor} />
+                  <ParaBordersButton editor={editor} />
                 </div>
               </div>
             </Group>

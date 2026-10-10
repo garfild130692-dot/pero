@@ -29,7 +29,7 @@ function collectUnits(doc) {
     }
     let forceAfter = !!node.attrs.sectPr; // разрыв раздела — со следующей страницы
     if (node.isTextblock) node.forEach((c) => { if (c.type.name === 'opaque' && c.attrs.kind === 'pageBreak') forceAfter = true; });
-    units.push({ pos, node, forceAfter });
+    units.push({ pos, node, forceAfter, forceBefore: !!node.attrs.pageBreakBefore }); // «с новой страницы»
   };
   doc.forEach((node, off) => visit(node, off));
   return units;
@@ -114,7 +114,7 @@ function measure(view) {
   let force = false;
   for (const u of units) {
     const overflow = u.bottom > pageStart + contentH + 0.5 && u.top > pageStart + 0.5;
-    if (force || overflow) {
+    if (force || overflow || (u.forceBefore && u.top > pageStart + 0.5)) {
       breaks.push({ pos: u.pos, fill: Math.max(0, pageStart + contentH - prevBottom) });
       pageStart = u.top;
     }

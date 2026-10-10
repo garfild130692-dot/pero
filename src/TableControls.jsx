@@ -32,8 +32,9 @@ const MODE_LINES = {
   all: ['top', 'bottom', 'left', 'right', 'insideH', 'insideV'], outer: ['top', 'bottom', 'left', 'right'],
   inner: ['insideH', 'insideV'], none: [], top: ['top'], bottom: ['bottom'], left: ['left'], right: ['right'],
   insideH: ['insideH'], insideV: ['insideV'],
+  between: ['insideH'], paraAll: ['top', 'bottom', 'left', 'right', 'insideH'], // для границ абзаца
 };
-function BorderIcon({ mode, size = 18 }) {
+export function BorderIcon({ mode, size = 18 }) {
   const on = MODE_LINES[mode];
   return (
     <S size={size}>
@@ -42,7 +43,7 @@ function BorderIcon({ mode, size = 18 }) {
     </S>
   );
 }
-const BucketIcon = () => (
+export const BucketIcon = () => (
   <svg width="16" height="14" viewBox="0 0 24 20" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" aria-hidden="true">
     <path d="m4 9 7-7 8 8-7 7z" /><path d="M8 5 4 1" /><path d="M20 12s2 2.5 2 4a2 2 0 0 1-4 0c0-1.5 2-4 2-4z" />
   </svg>

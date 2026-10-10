@@ -482,3 +482,35 @@ p[data-section-break]::after {
 .recent-item .recent-name { display: block; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .recent-item .recent-dir { display: block; font-size: 11.5px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .recent-empty { padding: 8px 10px; color: var(--muted); }
+
+/* ---------- Рамка и заливка абзаца (paraLayout.js) ----------
+   Рисуются псевдоэлементом вокруг текста: интервалы до/после остаются снаружи рамки, как в Word.
+   Соседние абзацы с одной рамкой — один блок: pb-next (продолжается вниз), pb-prev (продолжение сверху). */
+.page-content [data-pbox] { position: relative; isolation: isolate; }
+.page-content [data-pbox]::before {
+  content: ''; position: absolute; z-index: -1; pointer-events: none; box-sizing: border-box;
+  top: var(--pbx-t); bottom: var(--pbx-b); left: var(--pbx-l); right: var(--pbx-r);
+  border-top: var(--pbx-top); border-bottom: var(--pbx-bottom); border-left: var(--pbx-left); border-right: var(--pbx-right);
+  background: var(--pbx-bg);
+  -webkit-print-color-adjust: exact; print-color-adjust: exact;
+}
+.page-content [data-pbox].pb-prev::before { top: 0; border-top: var(--pbx-between); }
+.page-content [data-pbox].pb-next::before { bottom: 0; border-bottom: none; }
+
+/* Положение на странице: при печати страницы режет Chromium — подсказываем ему правила Word */
+@media print {
+  .page-content p, .page-content h1, .page-content h2, .page-content h3, .page-content h4, .page-content h5, .page-content h6 { orphans: 2; widows: 2; }
+  .page-content h1, .page-content h2, .page-content h3, .page-content h4, .page-content h5, .page-content h6 { break-after: avoid; break-inside: avoid; }
+  .page-content [data-keep-next="true"] { break-after: avoid; }
+  .page-content [data-keep-next="false"] { break-after: auto; }
+  .page-content [data-keep-lines="true"] { break-inside: avoid; }
+  .page-content [data-keep-lines="false"] { break-inside: auto; }
+  .page-content [data-page-break-before="true"] { break-before: page; }
+  .page-content [data-widow-control="false"] { orphans: 1; widows: 1; }
+}
+/* Диалог «Абзац»: вкладки и флажки «Положение на странице» */
+.pd-tabs { display: flex; gap: 2px; padding: 0 18px; border-bottom: 1px solid var(--line); }
+.pd-tabs button { border: 0; background: transparent; font: inherit; padding: 6px 12px; cursor: pointer; border-bottom: 2px solid transparent; color: #444; }
+.pd-tabs button.active { color: var(--accent); border-bottom-color: var(--accent); font-weight: 600; }
+.pd-checks { display: grid; gap: 8px; padding: 4px 0; }
+.pd-check { display: flex; align-items: center; gap: 8px; cursor: pointer; }
