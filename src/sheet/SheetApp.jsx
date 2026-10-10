@@ -24,6 +24,8 @@ export default function SheetApp({ initialFile, onOpenOther, onNewDoc, autosaveS
   const [doc, setDoc] = useState({ path: null, name: DEFAULT_NAME });
   const [dirty, setDirty] = useState(false);
   const [warnings, setWarnings] = useState({});
+  const [kept, setKept] = useState({}); // что Перо не редактирует, но сохраняет как есть
+  const source = useRef(null); // байты открытого .xlsx — экспорт строится поверх них
   const [renaming, setRenaming] = useState(null);
   const gridRef = useRef(null);
   const clip = useRef(null); // { block, text } — последний скопированный блок (с формулами и стилями)
@@ -55,7 +57,9 @@ export default function SheetApp({ initialFile, onOpenOther, onNewDoc, autosaveS
   // ---------- Файлы ----------
   const load = useCallback(async (file) => {
     try {
-      const { wb: book, warnings: w } = await importXlsx(file.data);
+      const { wb: book, warnings: w, kept: k } = await importXlsx(file.data);
+      source.current = file.data;
+      setKept(k || {});
       setWb(book);
       history.current = { undo: [], redo: [] };
       setSelState({ r: 0, c: 0, r2: 0, c2: 0 });
@@ -70,16 +74,16 @@ export default function SheetApp({ initialFile, onOpenOther, onNewDoc, autosaveS
   useEffect(() => { if (initialFile) load(initialFile); }, [initialFile, load]);
 
   // только для отладки (npm run dev): выгрузить текущую книгу без диалога сохранения
-  useEffect(() => { if (import.meta.env.DEV) window.__peroSheet = { wb, exportXlsx: () => exportXlsx(wb) }; }, [wb]);
+  useEffect(() => { if (import.meta.env.DEV) window.__peroSheet = { wb, exportXlsx: () => exportXlsx(wb, { source: source.current }) }; }, [wb]);
 
   useEffect(() => { fileApi.setDirty(dirty); fileApi.setTitle(`${doc.name}${dirty ? ' •' : ''} — Перо`); }, [dirty, doc.name]);
   useEffect(() => { fileApi.setDoc({ path: doc.path, kind: 'sheet' }); }, [doc.path]);
   // книга неизменяема: новая книга после каждой правки — сама и есть «номер версии» для автосохранения
-  useAutosave({ intervalSec: autosaveSec, dirty, revision: wb, kind: 'sheet', name: doc.name, path: doc.path, getBytes: () => exportXlsx(wb) });
+  useAutosave({ intervalSec: autosaveSec, dirty, revision: wb, kind: 'sheet', name: doc.name, path: doc.path, getBytes: () => exportXlsx(wb, { source: source.current }) });
 
   const write = async (asNew) => {
     try {
-      const bytes = await exportXlsx(wb);
+      const bytes = await exportXlsx(wb, { source: source.current });
       const r = asNew || !doc.path ? await fileApi.saveFileAs(doc.name, bytes) : await fileApi.saveFile(doc.path, doc.name, bytes);
       if (!r) return false;
       setDoc({ path: r.path, name: r.name });
@@ -113,7 +117,7 @@ export default function SheetApp({ initialFile, onOpenOther, onNewDoc, autosaveS
   const newBook = async () => {
     if (fileApi.newWindow('sheet')) return; // в программе — новое окно
     if (dirty && !(await fileApi.confirmDiscard())) return;
-    setWb(newWorkbook()); history.current = { undo: [], redo: [] }; setDoc({ path: null, name: DEFAULT_NAME }); setDirty(false); setWarnings({});
+    setWb(newWorkbook()); history.current = { undo: [], redo: [] }; setDoc({ path: null, name: DEFAULT_NAME }); setDirty(false); setWarnings({}); setKept({}); source.current = null;
     setSelState({ r: 0, c: 0, r2: 0, c2: 0 });
   };
   const newDocument = async () => {
@@ -335,6 +339,11 @@ export default function SheetApp({ initialFile, onOpenOther, onNewDoc, autosaveS
       </div>
       <div className="statusbar">
         <span>{Object.keys(warnings).length ? <span className="warn" title="Не сохранится при перезаписи">⚠ Не поддерживается: {Object.keys(warnings).join(', ')}</span> : 'Готово'}</span>
+        {Object.keys(kept).length > 0 && (
+          <span className="kept" title={'Перо пока не редактирует эти элементы, но сохраняет их без изменений:\n' + Object.keys(kept).map((k) => `• ${k}`).join('\n')}>
+            Сохраняются без изменений: {Object.keys(kept).join(', ')}
+          </span>
+        )}
         <span className="spacer" />
         {stats.count > 1 && (
           <>

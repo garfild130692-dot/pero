@@ -217,6 +217,85 @@ print(v['Продажи']['D6'].value, v['Свод']['B1'].value)
     expect(out).toContain('1120 2240');
   });
 
+  it('сохранение поверх исходного файла: всё непонятное — байт в байт, правка — только в своём листе', async () => {
+    const JSZip = (await import('jszip')).default;
+    const src = readFileSync('tests/fixtures/preserve.xlsx');
+    const { wb, warnings, kept } = await importXlsx(src);
+    expect(warnings).toEqual({});
+    expect(Object.keys(kept)).toEqual(expect.arrayContaining(['условное форматирование', 'проверка данных', 'рисунки и диаграммы',
+      'примечания к ячейкам', 'гиперссылки', '«умные» таблицы', 'сводные таблицы', 'именованные диапазоны']));
+    // скрытые и сгруппированные строки/столбцы, стиль столбца
+    expect(wb.sheets[0].rowInfo[14]).toEqual({ hidden: true });
+    expect(wb.sheets[0].rowInfo[15]).toEqual({ hidden: true, level: 1 });
+    expect(wb.sheets[0].rowInfo[18]).toEqual({ collapsed: true });
+    expect(wb.sheets[0].colInfo[6]).toEqual({ hidden: true });
+    expect(wb.sheets[0].colInfo[9]).toEqual({ level: 1 });
+    expect(wb.sheets[0].colInfo[7].xf).toBeGreaterThan(0);
+    const edited = setInput(wb, 0, 2, 1, '115'); // B3
+    const out = await exportXlsx(edited, { source: src });
+    mkdirSync('tests/out', { recursive: true });
+    writeFileSync('tests/out/preserve.xlsx', out);
+    const a = await JSZip.loadAsync(src); const b = await JSZip.loadAsync(out);
+    const changed = [];
+    for (const p of Object.keys(a.files)) {
+      if (a.files[p].dir) continue;
+      if (!b.file(p)) { changed.push(`-${p}`); continue; }
+      if (await a.file(p).async('string') !== await b.file(p).async('string')) changed.push(p);
+    }
+    expect(changed.sort()).toEqual(['-xl/calcChain.xml', '[Content_Types].xml', 'docProps/core.xml', 'xl/_rels/workbook.xml.rels', 'xl/workbook.xml', 'xl/worksheets/sheet1.xml']);
+    const s1 = await b.file('xl/worksheets/sheet1.xml').async('string');
+    for (const t of ['<pane ', '<conditionalFormatting', '<dataValidations', '<hyperlinks>', '<drawing ', '<legacyDrawing ', '<pageSetup ', 'hidden="1" outlineLevel="1"'])
+      expect(s1).toContain(t);
+    expect(s1).toContain('<c r="F3" s="1" t="s"><v>18</v></c>'); // неизменённые ячейки — исходной разметкой
+    expect(await b.file('xl/workbook.xml').async('string')).toContain('fullCalcOnLoad="1"');
+    const back = (await importXlsx(out)).wb;
+    expect(cell(back, 'B3').v).toBe(115);
+    expect(cell(back, 'D3')).toMatchObject({ f: 'C3-B3', v: 6 });
+    expect(back.sheets[0].rowInfo).toEqual(wb.sheets[0].rowInfo);
+    expect(back.sheets[0].colInfo).toEqual(wb.sheets[0].colInfo);
+    expect(back.sheets[0].colW).toEqual(wb.sheets[0].colW);
+  });
+
+  it('вставка строк, переименование, новый и удалённый лист поверх исходного файла', async () => {
+    const JSZip = (await import('jszip')).default;
+    const src = readFileSync('tests/fixtures/preserve.xlsx');
+    let { wb } = await importXlsx(src);
+    wb = shiftCells(wb, 0, 'row', 5, 2);
+    wb = setInput(wb, 0, 0, 4, 'Новый текст');
+    wb = setStyle(wb, 0, { r1: 0, c1: 4, r2: 0, c2: 4 }, { fill: '#ffcc00', numFmt: '0.000' });
+    wb = renameSheet(wb, 0, 'Данные 2026');
+    wb = addSheet(wb);
+    wb = setInput(wb, 3, 0, 0, "='Данные 2026'!B3*2");
+    wb = deleteSheet(wb, 1);
+    wb = { ...wb, active: 0 };
+    const out = await exportXlsx(wb, { source: src });
+    writeFileSync('tests/out/preserve_ops.xlsx', out);
+    const z = await JSZip.loadAsync(out);
+    const wbXml = await z.file('xl/workbook.xml').async('string');
+    expect(wbXml).toContain(`<definedName name="_xlnm.Print_Area" localSheetId="0">'Данные 2026'!$A$1:$D$16</definedName>`);
+    expect(wbXml).toContain(`<definedName name="План">'Данные 2026'!$B$2:$B$15</definedName>`);
+    expect(wbXml).toMatch(/<sheet name="Свод" sheetId="3" r:id="rId3"\/><sheet name="Лист4" sheetId="4" r:id="rIdPeroS1"\/><\/sheets>/);
+    expect(z.file('xl/worksheets/sheet2.xml')).toBeNull();
+    const chart = await z.file('xl/charts/chart1.xml').async('string');
+    expect(chart).toContain(`<c:f>'Данные 2026'!$C$2:$C$15</c:f>`);
+    expect(await z.file('xl/drawings/drawing1.xml').async('string')).toContain('<xdr:row>23</xdr:row>');
+    const s1 = await z.file('xl/worksheets/sheet1.xml').async('string');
+    expect(s1).toContain('<conditionalFormatting sqref="D2:D15">');
+    expect(s1).toContain('sqref="B2:B15"');
+    const back = (await importXlsx(out)).wb;
+    expect(back.sheets.map((s) => s.name)).toEqual(['Данные 2026', 'Свод', 'Лист4']);
+    expect(cell(back, 'E1').s).toMatchObject({ fill: '#ffcc00', numFmt: '0.000' });
+    expect(cell(back, 'A1', 2).v).toBe(220);
+    expect(back.sheets[0].rowInfo[16]).toEqual({ hidden: true });
+    const py = execFileSync(PYTHON, ['-c', `
+import openpyxl
+wb = openpyxl.load_workbook('tests/out/preserve_ops.xlsx')
+s = wb['Данные 2026']
+print(wb.sheetnames, s['E1'].value, s.freeze_panes, s.row_dimensions[17].hidden, len(s.conditional_formatting), s.data_validations.dataValidation[0].sqref)
+`], { env: { ...process.env, PYTHONIOENCODING: 'utf-8' } }).toString('utf8');
+    expect(py).toContain("['Данные 2026', 'Свод', 'Лист4'] Новый текст B2 True 2 B2:B15");
+  });
+
   it('новая книга из модели: русские функции → английские, кэшированные значения', async () => {
     let wb = put(newWorkbook(), { A1: '2', A2: '3', A3: '=СУММ(A1:A2)*10', B1: 'текст', B2: '=ЕСЛИ(A3>40;"да";"нет")' });
     wb = setStyle(wb, 0, { r1: 0, c1: 0, r2: 0, c2: 0 }, { bold: true, numFmt: '0.00' });

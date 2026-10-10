@@ -2,7 +2,9 @@
 // поэтому отмена — просто стек предыдущих книг.
 //
 // Книга: { sheets: Sheet[], active }
-// Лист:  { name, cells: Map<"r,c", Cell>, colW: { c: px }, rowH: { r: px }, merges: Range[] }
+// Лист:  { name, cells: Map<"r,c", Cell>, colW: { c: px }, rowH: { r: px }, merges: Range[],
+//          rowInfo/colInfo: { n: { hidden, level, collapsed, xf } } — скрытие, группировка, стиль строки/столбца (xf файла),
+//          src: { part, rid, name, shifts } — лист из файла (экспорт переписывает его поверх исходного XML) }
 // Ячейка: { v — значение (у формулы — вычисленное), f — формула без «=» (хранимый вид), s — стиль }
 // Стиль: { bold, italic, underline, strike, color, fill, fontSize, fontFamily, align, valign, wrap, numFmt }
 import { key, unkey } from './address.js';
@@ -13,7 +15,7 @@ export const DEFAULT_COL_W = 72;  // px (≈ 8,43 символа Calibri 11, к�
 export const DEFAULT_ROW_H = 20;  // px (15 pt)
 
 export function newSheet(name) {
-  return { name, cells: new Map(), colW: {}, rowH: {}, merges: [] };
+  return { name, cells: new Map(), colW: {}, rowH: {}, merges: [], rowInfo: {}, colInfo: {} };
 }
 export function newWorkbook() {
   return { sheets: [newSheet('Лист1')], active: 0 };
@@ -176,15 +178,18 @@ export function shiftCells(wb, si, axis, at, count) {
     if (!changed) return sheet;
     const next = { ...sheet, cells: out };
     if (i === si) {
-      const dim = axis === 'row' ? 'rowH' : 'colW';
-      const sizes = {};
-      for (const [n, px] of Object.entries(sheet[dim])) {
-        const v = +n;
-        if (count < 0 && v >= at && v < at - count) continue;
-        sizes[v >= at ? v + count : v] = px;
+      for (const dim of axis === 'row' ? ['rowH', 'rowInfo'] : ['colW', 'colInfo']) {
+        const sizes = {};
+        for (const [n, x] of Object.entries(sheet[dim] || {})) {
+          const v = +n;
+          if (count < 0 && v >= at && v < at - count) continue;
+          sizes[v >= at ? v + count : v] = x;
+        }
+        next[dim] = sizes;
       }
-      next[dim] = sizes;
       next.merges = sheet.merges.map((m) => shiftMerge(m, axis, at, count)).filter(Boolean);
+      // лист из файла: сдвиг запоминается — экспорт сдвинет диапазоны условного форматирования, проверки, ссылок
+      if (sheet.src) next.src = { ...sheet.src, shifts: [...(sheet.src.shifts || []), { axis, at, count }] };
     }
     return next;
   });

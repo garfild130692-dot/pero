@@ -1,8 +1,8 @@
 // Импорт/экспорт .xlsx — собственный код (JSZip + xmldom), как и для .docx.
 import JSZip from 'jszip';
 import { DOMParser } from '@xmldom/xmldom';
-import { addr, colIndex, key, parseRange, unkey } from './address.js';
-import { canonical, isErr, offsetFormula } from './formula.js';
+import { addr, colIndex, key, MAX_COLS, parseRange, rangeName, unkey } from './address.js';
+import { canonical, isErr, offsetFormula, shiftFormula } from './formula.js';
 import { BUILTIN_FMT } from './format.js';
 import { newSheet, recalc, DEFAULT_COL_W, DEFAULT_ROW_H } from './model.js';
 
@@ -130,11 +130,10 @@ function parseStyles(doc, theme) {
   });
 }
 
-// ---------- Импорт ----------
-/** @returns {Promise<{ wb, warnings }>} */
-export async function importXlsx(data) {
-  const zip = await JSZip.loadAsync(data);
-  const read = async (p) => { const f = zip.file(p); return f ? parseXml(await f.async('string')) : null; };
+// ---------- Чтение пакета (общее для импорта и экспорта поверх исходного файла) ----------
+async function readBook(zip) {
+  const text = async (p) => { const f = zip.file(p); return f ? f.async('string') : null; };
+  const read = async (p) => { const t = await text(p); return t != null ? parseXml(t) : null; };
   const rootRels = await read('_rels/.rels');
   let wbPath = 'xl/workbook.xml';
   for (const rel of kids(rootRels && rootRels.documentElement, 'Relationship')) {
@@ -143,124 +142,207 @@ export async function importXlsx(data) {
   const wbDoc = await read(wbPath);
   if (!wbDoc) throw new Error('Это не книга Excel: нет xl/workbook.xml');
   const dir = wbPath.slice(0, wbPath.lastIndexOf('/'));
-  const relsDoc = await read(`${dir}/_rels/${wbPath.slice(dir.length + 1)}.rels`);
+  const relsPath = `${dir}/_rels/${wbPath.slice(dir.length + 1)}.rels`;
+  const relsDoc = await read(relsPath);
   const rels = {};
   for (const rel of kids(relsDoc && relsDoc.documentElement, 'Relationship')) rels[rel.getAttribute('Id')] = { type: rel.getAttribute('Type'), target: resolve(dir, rel.getAttribute('Target')) };
   const relOf = (type) => Object.values(rels).find((r) => r.type.endsWith(`/${type}`));
 
   const theme = parseTheme(relOf('theme') ? await read(relOf('theme').target) : null);
-  const styles = parseStyles(relOf('styles') ? await read(relOf('styles').target) : null, theme);
-  const sstDoc = relOf('sharedStrings') ? await read(relOf('sharedStrings').target) : null;
-  const sst = sstDoc ? kids(sstDoc.documentElement, 'si').map((si) => {
+  const stylesPath = relOf('styles') ? relOf('styles').target : null;
+  const stylesDoc = stylesPath ? await read(stylesPath) : null;
+  const styles = parseStyles(stylesDoc, theme);
+  const sstPath = relOf('sharedStrings') ? relOf('sharedStrings').target : null;
+  const sstDoc = sstPath ? await read(sstPath) : null;
+  const sstEls = sstDoc ? kids(sstDoc.documentElement, 'si') : [];
+  const sst = sstEls.map((si) => {
     const t = kid(si, 't');
     if (t) return t.textContent;
     return kids(si, 'r').map((r) => (kid(r, 't') || {}).textContent || '').join('');
-  }) : [];
+  });
+  // строки без оформления — их можно переиспользовать для новых значений
+  const sstPlain = sstEls.map((si) => !!kid(si, 't') && !kid(si, 'r'));
   const date1904 = (() => { const p = kid(wbDoc.documentElement, 'workbookPr'); return !!p && ['1', 'true'].includes(p.getAttribute('date1904')); })();
-
-  const warnings = {};
-  const warn = (k) => { warnings[k] = (warnings[k] || 0) + 1; };
-  const sheets = [];
-  const sheetEls = kids(kid(wbDoc.documentElement, 'sheets'), 'sheet');
-  for (const se of sheetEls) {
+  const sheets = kids(kid(wbDoc.documentElement, 'sheets'), 'sheet').map((se) => {
     const rid = se.getAttributeNS(R, 'id') || se.getAttribute('r:id');
     const rel = rels[rid];
-    const sheet = newSheet(se.getAttribute('name'));
-    if (!rel || !/\/worksheet$/.test(rel.type)) { warn('листы диаграмм'); continue; }
-    const doc = await read(rel.target);
+    return { name: se.getAttribute('name'), rid, target: rel ? rel.target : null, worksheet: !!rel && /\/worksheet$/.test(rel.type) };
+  });
+  return { text, read, wbPath, wbDoc, dir, relsPath, rels, stylesPath, stylesDoc, styles, sstPath, sst, sstPlain, date1904, sheets };
+}
+
+// Ячейки листа: on.cell(r, c, cell, el, shared) — для каждой непустой <c>; on.row(r, el) — для каждой <row>
+function readSheetData(root, ctx, on) {
+  const { sst, styles, date1904 } = ctx;
+  const shared = {}; // si → { f, r, c }
+  for (const row of kids(kid(root, 'sheetData'), 'row')) {
+    const ri = +row.getAttribute('r') - 1;
+    if (on.row) on.row(ri, row);
+    let cAuto = 0;
+    for (const c of kids(row, 'c')) {
+      const ref = c.getAttribute('r');
+      let r = ri; let ci = cAuto;
+      if (ref) { const m = /^([A-Z]+)(\d+)$/.exec(ref); ci = colIndex(m[1]); r = +m[2] - 1; }
+      cAuto = ci + 1;
+      const t = c.getAttribute('t') || 'n';
+      const sIdx = +(c.getAttribute('s') || 0);
+      const v = kid(c, 'v');
+      const fEl = kid(c, 'f');
+      const cell = {};
+      const st = styles[sIdx];
+      if (st) cell.s = st;
+      // значение
+      const vt = v ? v.textContent : null;
+      if (t === 's') cell.v = sst[+vt] ?? '';
+      else if (t === 'inlineStr') cell.v = kids(kid(c, 'is'), 't').map((x) => x.textContent).join('') || (kid(c, 'is') ? kid(c, 'is').textContent : '');
+      else if (t === 'str') cell.v = vt ?? '';
+      else if (t === 'b') cell.v = vt === '1';
+      else if (t === 'e') cell.v = { error: vt || '#N/A' };
+      else if (t === 'd') { const d = new Date(vt); cell.v = isNaN(d) ? vt : (Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()) - Date.UTC(1899, 11, 30)) / 86400000; }
+      else if (vt != null && vt !== '') {
+        cell.v = +vt;
+        if (date1904 && st && st.numFmt && /[dy]/i.test(st.numFmt)) cell.v += 1462;
+      } else cell.v = null;
+      // формула (общие формулы — развернуть со смещением от главной ячейки)
+      let isShared = false;
+      if (fEl) {
+        const ft = fEl.getAttribute('t');
+        const text = fEl.textContent;
+        if (ft === 'shared') {
+          isShared = true;
+          const si = fEl.getAttribute('si');
+          if (text) { shared[si] = { f: text, r, c: ci }; cell.f = canonical(text); }
+          else if (shared[si]) cell.f = offsetFormula(canonical(shared[si].f), r - shared[si].r, ci - shared[si].c);
+        } else if (text) cell.f = canonical(text);
+      }
+      if (cell.v == null && cell.f == null && !cell.s) continue;
+      if (cell.v === undefined) cell.v = null;
+      on.cell(r, ci, cell, c, isShared);
+    }
+  }
+}
+
+const isOn = (el, a) => ['1', 'true'].includes(el.getAttribute(a));
+// Свойства строки/столбца, которые хранит модель: скрыт, уровень группировки, свёрнут, стиль (номер xf исходного файла)
+function readLineInfo(el, styleAttr) {
+  const info = {};
+  if (isOn(el, 'hidden')) info.hidden = true;
+  const lvl = +(el.getAttribute('outlineLevel') || 0);
+  if (lvl) info.level = lvl;
+  if (isOn(el, 'collapsed')) info.collapsed = true;
+  if (styleAttr === 'style' && isOn(el, 'bestFit')) info.bestFit = true;
+  const s = el.getAttribute(styleAttr);
+  if (s && +s && (styleAttr === 'style' || isOn(el, 'customFormat'))) info.xf = +s;
+  return Object.keys(info).length ? info : null;
+}
+
+// Листы, открытые из файла и с тех пор не менявшиеся (модель неизменяема: правка — новый объект листа):
+// при сохранении поверх исходного пакета их XML остаётся байт в байт
+const pristine = new WeakSet();
+
+// ---------- Импорт ----------
+/** @returns {Promise<{ wb, warnings, kept }>} warnings — что потеряется при сохранении, kept — что сохраняется как есть */
+export async function importXlsx(data) {
+  const zip = await JSZip.loadAsync(data);
+  const book = await readBook(zip);
+  const { read, rels, wbDoc } = book;
+
+  const kept = {};
+  const keep = (k) => { kept[k] = (kept[k] || 0) + 1; };
+  const sheets = [];
+  for (const info of book.sheets) {
+    const sheet = newSheet(info.name);
+    if (!info.worksheet) { keep('листы диаграмм'); continue; }
+    const doc = await read(info.target);
     if (!doc) continue;
+    sheet.src = { part: info.target, rid: info.rid, name: info.name };
     const root = doc.documentElement;
     for (const col of kids(kid(root, 'cols'), 'col')) {
-      const w = +col.getAttribute('width');
-      if (!w || !['1', 'true'].includes(col.getAttribute('customWidth') || '1')) continue;
       const min = +col.getAttribute('min') - 1;
-      const max = Math.min(+col.getAttribute('max') - 1, min + 300);
-      for (let c = min; c <= max; c++) if (widthToPx(w) !== DEFAULT_COL_W) sheet.colW[c] = widthToPx(w);
-    }
-    const shared = {}; // si → { f, r, c }
-    for (const row of kids(kid(root, 'sheetData'), 'row')) {
-      const ri = +row.getAttribute('r') - 1;
-      const ht = row.getAttribute('ht');
-      if (ht && ['1', 'true'].includes(row.getAttribute('customHeight'))) sheet.rowH[ri] = Math.round(+ht * 4 / 3);
-      let cAuto = 0;
-      for (const c of kids(row, 'c')) {
-        const ref = c.getAttribute('r');
-        let r = ri; let ci = cAuto;
-        if (ref) { const m = /^([A-Z]+)(\d+)$/.exec(ref); ci = colIndex(m[1]); r = +m[2] - 1; }
-        cAuto = ci + 1;
-        const t = c.getAttribute('t') || 'n';
-        const sIdx = +(c.getAttribute('s') || 0);
-        const v = kid(c, 'v');
-        const fEl = kid(c, 'f');
-        const cell = {};
-        const st = styles[sIdx];
-        if (st) cell.s = st;
-        // значение
-        const vt = v ? v.textContent : null;
-        if (t === 's') cell.v = sst[+vt] ?? '';
-        else if (t === 'inlineStr') cell.v = kids(kid(c, 'is'), 't').map((x) => x.textContent).join('') || (kid(c, 'is') ? kid(c, 'is').textContent : '');
-        else if (t === 'str') cell.v = vt ?? '';
-        else if (t === 'b') cell.v = vt === '1';
-        else if (t === 'e') cell.v = { error: vt || '#N/A' };
-        else if (t === 'd') { const d = new Date(vt); cell.v = isNaN(d) ? vt : (Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()) - Date.UTC(1899, 11, 30)) / 86400000; }
-        else if (vt != null && vt !== '') {
-          cell.v = +vt;
-          if (date1904 && st && st.numFmt && /[dy]/i.test(st.numFmt)) cell.v += 1462;
-        } else cell.v = null;
-        // формула (общие формулы — развернуть со смещением от главной ячейки)
-        if (fEl) {
-          const ft = fEl.getAttribute('t');
-          const text = fEl.textContent;
-          if (ft === 'shared') {
-            const si = fEl.getAttribute('si');
-            if (text) { shared[si] = { f: text, r, c: ci }; cell.f = canonical(text); }
-            else if (shared[si]) cell.f = offsetFormula(canonical(shared[si].f), r - shared[si].r, ci - shared[si].c);
-          } else if (text) cell.f = canonical(text);
-        }
-        if (cell.v == null && cell.f == null && !cell.s) continue;
-        if (cell.v === undefined) cell.v = null;
-        sheet.cells.set(key(r, ci), cell);
+      const max = Math.min(+col.getAttribute('max') - 1, MAX_COLS - 1);
+      const w = +col.getAttribute('width');
+      const px = w && ['1', 'true'].includes(col.getAttribute('customWidth') || '1') ? widthToPx(w) : null;
+      const li = readLineInfo(col, 'style');
+      for (let c = min; c <= max; c++) {
+        if (px != null && px !== DEFAULT_COL_W) sheet.colW[c] = px;
+        if (li) sheet.colInfo[c] = li;
       }
     }
+    readSheetData(root, book, {
+      row: (ri, row) => {
+        const ht = row.getAttribute('ht');
+        if (ht && isOn(row, 'customHeight')) sheet.rowH[ri] = Math.round(+ht * 4 / 3);
+        const li = readLineInfo(row, 's');
+        if (li) sheet.rowInfo[ri] = li;
+      },
+      cell: (r, c, cell) => sheet.cells.set(key(r, c), cell),
+    });
     for (const m of kids(kid(root, 'mergeCells'), 'mergeCell')) {
       const rg = parseRange(m.getAttribute('ref'));
       if (rg) sheet.merges.push(rg);
     }
-    if (kid(root, 'conditionalFormatting')) warn('условное форматирование');
-    if (kid(root, 'dataValidations')) warn('проверка данных');
-    if (kid(root, 'drawing')) warn('рисунки и диаграммы');
-    if (kid(root, 'tableParts')) warn('«умные» таблицы');
-    if (kid(root, 'legacyDrawing')) warn('примечания к ячейкам');
-    if (kid(root, 'autoFilter')) warn('фильтры');
+    if (kid(root, 'conditionalFormatting')) keep('условное форматирование');
+    if (kid(root, 'dataValidations')) keep('проверка данных');
+    if (kid(root, 'drawing')) keep('рисунки и диаграммы');
+    if (kid(root, 'tableParts')) keep('«умные» таблицы');
+    if (kid(root, 'legacyDrawing')) keep('примечания к ячейкам');
+    if (kid(root, 'autoFilter')) keep('фильтры');
+    if (kid(root, 'hyperlinks')) keep('гиперссылки');
     sheets.push(sheet);
   }
-  if (Object.values(rels).some((r) => /pivotCacheDefinition$/.test(r.type))) warn('сводные таблицы');
+  if (Object.values(rels).some((r) => /pivotCacheDefinition$/.test(r.type))) keep('сводные таблицы');
   // именованные диапазоны (служебные _xlnm.* — область печати, фильтр — не считаем)
   const names = kid(wbDoc.documentElement, 'definedNames');
-  if (names && kids(names, 'definedName').some((n) => !/^_xlnm\./.test(n.getAttribute('name') || ''))) warn('именованные диапазоны');
+  if (names && kids(names, 'definedName').some((n) => !/^_xlnm\./.test(n.getAttribute('name') || ''))) keep('именованные диапазоны');
   if (!sheets.length) sheets.push(newSheet('Лист1'));
   const view = kid(kid(wbDoc.documentElement, 'bookViews'), 'workbookView');
   const active = Math.min(+(view && view.getAttribute('activeTab')) || 0, sheets.length - 1);
-  return { wb: recalc({ sheets, active }), warnings };
+  const wb = recalc({ sheets, active });
+  for (const sh of wb.sheets) if (sh.src) pristine.add(sh);
+  return { wb, warnings: {}, kept };
 }
 
 // ---------- Экспорт ----------
-// Таблица стилей: уникальные шрифты/заливки/границы/форматы → cellXfs
-function buildStyles(wb) {
-  const fonts = ['<font><sz val="11"/><color theme="1"/><name val="Calibri"/><family val="2"/><scheme val="minor"/></font>'];
-  const fills = ['<fill><patternFill patternType="none"/></fill>', '<fill><patternFill patternType="gray125"/></fill>'];
-  const borders = ['<border><left/><right/><top/><bottom/><diagonal/></border>'];
-  const numFmts = [];
-  const xfs = ['<xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>'];
+const BUILTIN_BY_CODE = Object.fromEntries(Object.entries(BUILTIN_FMT).map(([id, code]) => [code, +id]));
+const DEFAULT_FONT = '<font><sz val="11"/><color theme="1"/><name val="Calibri"/><family val="2"/><scheme val="minor"/></font>';
+
+// Равенство стилей ячеек (порядок ключей не важен)
+function sameStyle(a, b) {
+  if (a === b) return true;
+  if (!a || !b) return false;
+  const ka = Object.keys(a); const kb = Object.keys(b);
+  if (ka.length !== kb.length) return false;
+  return ka.every((k) => (typeof a[k] === 'object' && a[k] ? JSON.stringify(a[k]) === JSON.stringify(b[k]) : a[k] === b[k]));
+}
+const sameValue = (a, b) => (isErr(a) || isErr(b) ? isErr(a) && isErr(b) && a.error === b.error : a === b);
+
+// Таблица стилей: уникальные шрифты/заливки/границы/форматы → cellXfs.
+// base (книга из файла) — стили файла остаются на своих местах, новые дописываются в конец:
+// { styles: разобранные cellXfs, counts: { fonts, fills, borders, xfs }, fmts: { код: id } }
+function buildStyles(wb, base = null) {
+  const fonts = base ? Array(base.counts.fonts).fill(null) : [DEFAULT_FONT];
+  const fills = base ? Array(base.counts.fills).fill(null) : ['<fill><patternFill patternType="none"/></fill>', '<fill><patternFill patternType="gray125"/></fill>'];
+  const borders = base ? Array(base.counts.borders).fill(null) : ['<border><left/><right/><top/><bottom/><diagonal/></border>'];
+  const xfs = base ? Array(base.counts.xfs).fill(null) : ['<xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>'];
+  const fmtIds = base ? { ...base.fmts } : {};
+  let nextFmt = Math.max(163, ...Object.values(fmtIds)) + 1;
+  const numFmts = []; // новые { id, code }
   const index = new Map(); // JSON стиля → номер xf
+  const srcIndex = new Map(); // стиль файла (объект) → его номер xf
+  if (base) base.styles.forEach((s, i) => { if (s && !srcIndex.has(s)) srcIndex.set(s, i); });
   const idxOf = (arr, xml) => { let i = arr.indexOf(xml); if (i < 0) { arr.push(xml); i = arr.length - 1; } return i; };
-  const BUILTIN_BY_CODE = Object.fromEntries(Object.entries(BUILTIN_FMT).map(([id, code]) => [code, +id]));
   const color = (c) => (c ? `<color rgb="FF${c.slice(1).toUpperCase()}"/>` : '');
   const xfOf = (s) => {
     if (!s) return 0;
+    if (srcIndex.has(s)) return srcIndex.get(s);
     const k = JSON.stringify(s);
     if (index.has(k)) return index.get(k);
-    const font = (s.bold || s.italic || s.underline || s.strike || s.color || s.fontSize || s.fontFamily)
+    // такой же стиль уже есть в файле (ячейка скопирована, стиль собран заново)
+    if (base) {
+      const i = base.styles.findIndex((x) => x && sameStyle(x, s));
+      if (i >= 0) { index.set(k, i); return i; }
+    }
+    const font = (s.bold || s.italic || s.underline || s.strike || s.color || s.fontSize || s.fontFamily || base)
       ? idxOf(fonts, `<font>${s.bold ? '<b/>' : ''}${s.italic ? '<i/>' : ''}${s.strike ? '<strike/>' : ''}${s.underline ? '<u/>' : ''}<sz val="${s.fontSize || 11}"/>${s.color ? color(s.color) : '<color theme="1"/>'}<name val="${esc(s.fontFamily || 'Calibri')}"/><family val="2"/></font>`)
       : 0;
     const fill = s.fill ? idxOf(fills, `<fill><patternFill patternType="solid"><fgColor rgb="FF${s.fill.slice(1).toUpperCase()}"/><bgColor indexed="64"/></patternFill></fill>`) : 0;
@@ -272,11 +354,8 @@ function buildStyles(wb) {
     let numFmtId = 0;
     if (s.numFmt && s.numFmt !== 'General') {
       if (BUILTIN_BY_CODE[s.numFmt] != null && s.numFmt !== 'dd.mm.yyyy') numFmtId = BUILTIN_BY_CODE[s.numFmt];
-      else {
-        let i = numFmts.findIndex((x) => x === s.numFmt);
-        if (i < 0) { numFmts.push(s.numFmt); i = numFmts.length - 1; }
-        numFmtId = 164 + i;
-      }
+      else if (fmtIds[s.numFmt] != null) numFmtId = fmtIds[s.numFmt];
+      else { numFmtId = nextFmt++; fmtIds[s.numFmt] = numFmtId; numFmts.push({ id: numFmtId, code: s.numFmt }); }
     }
     const al = (s.align || s.valign || s.wrap)
       ? `<alignment${s.align ? ` horizontal="${s.align}"` : ''}${s.valign ? ` vertical="${s.valign}"` : ''}${s.wrap ? ' wrapText="1"' : ''}/>` : '';
@@ -285,10 +364,21 @@ function buildStyles(wb) {
     index.set(k, xfs.length - 1);
     return xfs.length - 1;
   };
-  // проходим все ячейки заранее, чтобы xml стилей был полным
+  // проходим все ячейки заранее, чтобы таблица стилей была полной
   for (const sh of wb.sheets) for (const cell of sh.cells.values()) xfOf(cell.s);
+  const added = (arr, n) => arr.slice(n);
+  if (base) {
+    return {
+      xfOf,
+      added: {
+        numFmts: numFmts.map((f) => `<numFmt numFmtId="${f.id}" formatCode="${esc(f.code)}"/>`),
+        fonts: added(fonts, base.counts.fonts), fills: added(fills, base.counts.fills),
+        borders: added(borders, base.counts.borders), cellXfs: added(xfs, base.counts.xfs),
+      },
+    };
+  }
   const xml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<styleSheet xmlns="${NS}">` +
-    (numFmts.length ? `<numFmts count="${numFmts.length}">${numFmts.map((f, i) => `<numFmt numFmtId="${164 + i}" formatCode="${esc(f)}"/>`).join('')}</numFmts>` : '') +
+    (numFmts.length ? `<numFmts count="${numFmts.length}">${numFmts.map((f) => `<numFmt numFmtId="${f.id}" formatCode="${esc(f.code)}"/>`).join('')}</numFmts>` : '') +
     `<fonts count="${fonts.length}">${fonts.join('')}</fonts><fills count="${fills.length}">${fills.join('')}</fills>` +
     `<borders count="${borders.length}">${borders.join('')}</borders>` +
     '<cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>' +
@@ -297,53 +387,462 @@ function buildStyles(wb) {
   return { xml, xfOf };
 }
 
-export async function exportXlsx(wb) {
+// Дописать элементы в конец списка <tag count="n">…</tag> исходного XML (count увеличивается)
+function appendToList(xml, tag, items, insertAfterRoot = null) {
+  if (!items.length) return xml;
+  const m = new RegExp(`<${tag}\\b([^>]*?)(/?)>`).exec(xml);
+  if (!m) {
+    if (!insertAfterRoot) return xml;
+    const root = new RegExp(`<${insertAfterRoot}\\b[^>]*>`).exec(xml);
+    const at = root.index + root[0].length;
+    return `${xml.slice(0, at)}<${tag} count="${items.length}">${items.join('')}</${tag}>${xml.slice(at)}`;
+  }
+  const n = +((/\bcount="(\d+)"/.exec(m[1]) || [])[1] || 0) + items.length;
+  const attrs = /\bcount="/.test(m[1]) ? m[1].replace(/\bcount="\d+"/, `count="${n}"`) : `${m[1]} count="${n}"`;
+  if (m[2]) return `${xml.slice(0, m.index)}<${tag}${attrs}>${items.join('')}</${tag}>${xml.slice(m.index + m[0].length)}`;
+  const close = xml.indexOf(`</${tag}>`, m.index);
+  return `${xml.slice(0, m.index)}<${tag}${attrs}>${xml.slice(m.index + m[0].length, close)}${items.join('')}${xml.slice(close)}`;
+}
+
+// ---------- Разметка листа ----------
+// Порядок дочерних элементов <worksheet> по схеме — для вставки отсутствующих
+const SHEET_ORDER = ['sheetPr', 'dimension', 'sheetViews', 'sheetFormatPr', 'cols', 'sheetData', 'sheetCalcPr', 'sheetProtection',
+  'protectedRanges', 'scenarios', 'autoFilter', 'sortState', 'dataConsolidate', 'customSheetViews', 'mergeCells', 'phoneticPr',
+  'conditionalFormatting', 'dataValidations', 'hyperlinks', 'printOptions', 'pageMargins', 'pageSetup', 'headerFooter', 'rowBreaks',
+  'colBreaks', 'customProperties', 'cellWatches', 'ignoredErrors', 'smartTags', 'drawing', 'legacyDrawing', 'legacyDrawingHF',
+  'drawingHF', 'picture', 'oleObjects', 'controls', 'webPublishItems', 'tableParts', 'extLst'];
+// Первый элемент <name> верхнего уровня: { start, end } (end — после закрывающего тега)
+function findEl(xml, name, from = 0) {
+  const re = new RegExp(`<${name}(?=[\\s/>])`, 'g');
+  re.lastIndex = from;
+  const m = re.exec(xml);
+  if (!m) return null;
+  const gt = xml.indexOf('>', m.index);
+  if (xml[gt - 1] === '/') return { start: m.index, end: gt + 1 };
+  const close = xml.indexOf(`</${name}>`, gt);
+  return { start: m.index, end: close + name.length + 3 };
+}
+// Заменить элемент листа (content '' — удалить); отсутствующий — вставить на место по схеме
+export function setSheetEl(xml, name, content) {
+  const at = findEl(xml, name);
+  if (at) return xml.slice(0, at.start) + content + xml.slice(at.end);
+  if (!content) return xml;
+  for (const next of SHEET_ORDER.slice(SHEET_ORDER.indexOf(name) + 1)) {
+    const n = findEl(xml, next);
+    if (n) return xml.slice(0, n.start) + content + xml.slice(n.start);
+  }
+  const end = xml.lastIndexOf('</worksheet>');
+  return xml.slice(0, end) + content + xml.slice(end);
+}
+
+// XML ячейки
+function cellXml(cell, ref, xfOf, str) {
+  const s = xfOf(cell.s);
+  const sAttr = s ? ` s="${s}"` : '';
+  const v = cell.v;
+  if (cell.f != null) {
+    const f = `<f>${esc(cell.f)}</f>`;
+    if (isErr(v)) return `<c r="${ref}"${sAttr} t="e">${f}<v>${esc(v.error)}</v></c>`;
+    if (typeof v === 'string') return `<c r="${ref}"${sAttr} t="str">${f}<v>${esc(v)}</v></c>`;
+    if (typeof v === 'boolean') return `<c r="${ref}"${sAttr} t="b">${f}<v>${v ? 1 : 0}</v></c>`;
+    return `<c r="${ref}"${sAttr}>${f}${typeof v === 'number' && isFinite(v) ? `<v>${v}</v>` : ''}</c>`;
+  }
+  if (v == null) return `<c r="${ref}"${sAttr}/>`;
+  if (typeof v === 'number') return `<c r="${ref}"${sAttr}><v>${v}</v></c>`;
+  if (typeof v === 'boolean') return `<c r="${ref}"${sAttr} t="b"><v>${v ? 1 : 0}</v></c>`;
+  if (isErr(v)) return `<c r="${ref}"${sAttr} t="e"><v>${esc(v.error)}</v></c>`;
+  return `<c r="${ref}"${sAttr} t="s"><v>${str(String(v))}</v></c>`;
+}
+const lineAttrs = (info, withXf, styleAttr) => (info
+  ? `${withXf && info.xf ? (styleAttr === 's' ? ` s="${info.xf}" customFormat="1"` : ` style="${info.xf}"`) : ''}${info.hidden ? ' hidden="1"' : ''}${info.level ? ` outlineLevel="${info.level}"` : ''}${info.collapsed ? ' collapsed="1"' : ''}${info.bestFit ? ' bestFit="1"' : ''}`
+  : '');
+// <sheetData>: raw(r, c, cell) — исходный XML неизменённой ячейки или null
+function sheetDataXml(sheet, cellOf, withXf) {
+  const rows = new Map(); // r → [[c, xml]]
+  for (const [k, cell] of sheet.cells) {
+    const [r, c] = unkey(k);
+    if (!rows.has(r)) rows.set(r, []);
+    rows.get(r).push([c, cellOf(r, c, cell)]);
+  }
+  for (const r of Object.keys(sheet.rowH)) if (!rows.has(+r)) rows.set(+r, []);
+  for (const r of Object.keys(sheet.rowInfo || {})) if (!rows.has(+r)) rows.set(+r, []);
+  const data = [...rows.keys()].sort((a, b) => a - b).map((r) => {
+    const cells = rows.get(r).sort((a, b) => a[0] - b[0]).map((x) => x[1]).join('');
+    const h = sheet.rowH[r];
+    return `<row r="${r + 1}"${lineAttrs((sheet.rowInfo || {})[r], withXf, 's')}${h ? ` ht="${Math.round(h * 0.75 * 100) / 100}" customHeight="1"` : ''}>${cells}</row>`;
+  }).join('');
+  return `<sheetData>${data}</sheetData>`;
+}
+// <cols>: соседние столбцы с одинаковыми свойствами — одним диапазоном
+function colsXml(sheet, withXf) {
+  const info = sheet.colInfo || {};
+  const idx = [...new Set([...Object.keys(sheet.colW), ...Object.keys(info)].map(Number))].sort((a, b) => a - b);
+  const out = [];
+  for (let i = 0; i < idx.length;) {
+    const c = idx[i];
+    const sig = (x) => `${sheet.colW[x] ?? ''}|${lineAttrs(info[x], withXf, 'style')}`;
+    let j = i;
+    while (j + 1 < idx.length && idx[j + 1] === idx[j] + 1 && sig(idx[j + 1]) === sig(c)) j++;
+    const w = sheet.colW[c];
+    // без своей ширины: скрытый — 0 (как пишет Excel), иначе ширина по умолчанию Пера
+    const width = w != null ? pxToWidth(w) : info[c] && info[c].hidden ? 0 : pxToWidth(DEFAULT_COL_W);
+    out.push(`<col min="${c + 1}" max="${idx[j] + 1}" width="${width}"${lineAttrs(info[c], withXf, 'style')} customWidth="1"/>`);
+    i = j + 1;
+  }
+  return out.length ? `<cols>${out.join('')}</cols>` : '';
+}
+const mergesXml = (sheet) => (sheet.merges.length ? `<mergeCells count="${sheet.merges.length}">${sheet.merges.map((m) => `<mergeCell ref="${addr(m.r1, m.c1)}:${addr(m.r2, m.c2)}"/>`).join('')}</mergeCells>` : '');
+function dimensionXml(sheet) {
+  let r1 = Infinity; let c1 = Infinity; let r2 = 0; let c2 = 0;
+  for (const k of sheet.cells.keys()) { const [r, c] = unkey(k); r1 = Math.min(r1, r); c1 = Math.min(c1, c); r2 = Math.max(r2, r); c2 = Math.max(c2, c); }
+  if (r1 === Infinity) return '<dimension ref="A1"/>';
+  return `<dimension ref="${rangeName({ r1, c1, r2, c2 })}"/>`;
+}
+
+// Новый лист целиком
+function newSheetXml(sheet, active, xfOf, str) {
+  const cols = colsXml(sheet, false);
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<worksheet xmlns="${NS}" xmlns:r="${R}">` +
+    `${dimensionXml(sheet)}<sheetViews><sheetView workbookViewId="0"${active ? ' tabSelected="1"' : ''}/></sheetViews>` +
+    `<sheetFormatPr defaultRowHeight="15"/>${cols}${sheetDataXml(sheet, (r, c, cell) => cellXml(cell, addr(r, c), xfOf, str), false)}${mergesXml(sheet)}` +
+    '<pageMargins left="0.7" right="0.7" top="0.75" bottom="0.75" header="0.3" footer="0.3"/></worksheet>';
+}
+
+// Сдвиг диапазонов sqref/ref после вставки/удаления строк и столбцов (удалённые целиком — пропадают)
+function shiftSqref(sqref, shifts) {
+  const out = [];
+  for (const part of sqref.split(/\s+/).filter(Boolean)) {
+    let rg = parseRange(part);
+    if (!rg) { out.push(part); continue; }
+    for (const s of shifts) { rg = shiftRange(rg, s); if (!rg) break; }
+    if (rg) out.push(rangeName(rg));
+  }
+  return out.join(' ');
+}
+function shiftRange(rg, { axis, at, count }) {
+  const [a, b] = axis === 'row' ? ['r1', 'r2'] : ['c1', 'c2'];
+  const out = { ...rg };
+  if (count > 0) {
+    if (rg[a] >= at) out[a] += count;
+    if (rg[b] >= at) out[b] += count;
+    return out;
+  }
+  const n = -count; const end = at + n - 1;
+  const map = (v) => (v > end ? v - n : v >= at ? at : v);
+  if (rg[a] >= at && rg[b] <= end) return null;
+  out[a] = map(rg[a]);
+  out[b] = rg[b] > end ? rg[b] - n : rg[b] >= at ? at - 1 : rg[b];
+  return out[b] < out[a] ? null : out;
+}
+
+// Выбранный лист — только активный (иначе Excel откроет несколько листов «группой»)
+function selectTab(xml, active) {
+  const m = /<sheetView\b[^>]*?(?=\/?>)/.exec(xml);
+  if (!m) return xml;
+  const sel = /\stabSelected="(1|true)"/.test(m[0]);
+  if (sel === active) return xml;
+  const t = m[0].replace(/\s+tabSelected="[^"]*"/, '');
+  return xml.slice(0, m.index) + (active ? `${t} tabSelected="1"` : t) + xml.slice(m.index + m[0].length);
+}
+
+// Лист поверх исходного XML: заменяются данные, столбцы, объединения, размер, выбор листа; остальное — как в файле
+function patchSheetXml(xml, sheet, active, root, book, xfOf, str) {
+  // исходные ячейки: разобранное значение + исходный XML (по порядку в документе)
+  const src = new Map();
+  const rawList = [];
+  const sd = findEl(xml, 'sheetData');
+  if (sd) {
+    const re = /<c\b[^>]*?(?:\/>|>[\s\S]*?<\/c>)/g;
+    const part = xml.slice(sd.start, sd.end);
+    let m;
+    while ((m = re.exec(part))) rawList.push(m[0]);
+  }
+  const all = [];
+  readSheetData(root, book, { cell: (r, c, cell, el, shared) => all.push({ r, c, cell, shared }) });
+  // пустые <c r="…"/> без стиля readSheetData пропускает — сопоставляем по адресу
+  const byRef = new Map();
+  for (const raw of rawList) { const m = /\br="([A-Z]+\d+)"/.exec(raw.slice(0, raw.indexOf('>'))); if (m) byRef.set(m[1], raw); }
+  for (const x of all) { const raw = byRef.get(addr(x.r, x.c)); if (raw) src.set(key(x.r, x.c), { ...x, raw }); }
+  const cellOf = (r, c, cell) => {
+    const e = src.get(key(r, c));
+    if (e && sameStyle(e.cell.s, cell.s)) {
+      if (cell.f == null && e.cell.f == null && sameValue(e.cell.v, cell.v)) return e.raw;
+      if (cell.f != null && cell.f === e.cell.f && !e.shared) return e.raw;
+    }
+    return cellXml(cell, addr(r, c), xfOf, str);
+  };
+  let out = xml;
+  out = setSheetEl(out, 'sheetData', sheetDataXml(sheet, cellOf, true));
+  out = setSheetEl(out, 'cols', colsXml(sheet, true));
+  out = setSheetEl(out, 'mergeCells', mergesXml(sheet));
+  out = setSheetEl(out, 'dimension', dimensionXml(sheet));
+  out = selectTab(out, active);
+  // вставка/удаление строк и столбцов: диапазоны условного форматирования, проверки, ссылок, фильтра
+  const shifts = (sheet.src && sheet.src.shifts) || [];
+  if (shifts.length) {
+    out = out.replace(/<(conditionalFormatting|dataValidation|hyperlink|autoFilter)\b[^>]*>/g, (tag) => tag
+      .replace(/\b(sqref|ref)="([^"]*)"/, (_, a, v) => `${a}="${shiftSqref(v, shifts)}"`));
+  }
+  return out;
+}
+
+// Номер строки/столбца после сдвигов (внутри удалённых — к началу удаления)
+function shiftIndex(v, shifts, axis) {
+  for (const s of shifts) {
+    if (s.axis !== axis) continue;
+    if (s.count > 0) { if (v >= s.at) v += s.count; } else if (v >= s.at - s.count) v += s.count; else if (v >= s.at) v = s.at;
+  }
+  return v;
+}
+// Части, привязанные к ячейкам листа (рисунки, примечания, «умные» таблицы), — после вставки/удаления строк и столбцов
+async function shiftSheetParts(zip, sheetPart, shifts) {
+  const relsPart = `${sheetPart.slice(0, sheetPart.lastIndexOf('/'))}/_rels/${sheetPart.slice(sheetPart.lastIndexOf('/') + 1)}.rels`;
+  const rels = zip.file(relsPart) ? await zip.file(relsPart).async('string') : '';
+  const dir = sheetPart.slice(0, sheetPart.lastIndexOf('/'));
+  for (const m of rels.matchAll(/<Relationship\b[^>]*>/g)) {
+    const type = (/\bType="([^"]*)"/.exec(m[0]) || [])[1] || '';
+    const target = (/\bTarget="([^"]*)"/.exec(m[0]) || [])[1];
+    if (!target || /TargetMode="External"/.test(m[0])) continue;
+    const part = resolve(dir, target);
+    const f = zip.file(part);
+    if (!f) continue;
+    let t = await f.async('string');
+    const u0 = t;
+    if (/\/drawing$/.test(type)) {
+      t = t.replace(/<xdr:(from|to)>([\s\S]*?)<\/xdr:\1>/g, (all, tag, body) => `<xdr:${tag}>${body
+        .replace(/<xdr:row>(\d+)<\/xdr:row>/, (_, v) => `<xdr:row>${shiftIndex(+v, shifts, 'row')}</xdr:row>`)
+        .replace(/<xdr:col>(\d+)<\/xdr:col>/, (_, v) => `<xdr:col>${shiftIndex(+v, shifts, 'col')}</xdr:col>`)}</xdr:${tag}>`);
+    } else if (/\/comments$/.test(type) || /\/table$/.test(type)) {
+      t = t.replace(/<(comment|table|autoFilter)\b[^>]*>/g, (tag) => tag.replace(/\bref="([^"]*)"/, (_, v) => `ref="${shiftSqref(v, shifts) || v}"`));
+    } else if (/\/vmlDrawing$/.test(type)) {
+      t = t.replace(/<x:Row>(\d+)<\/x:Row>/g, (_, v) => `<x:Row>${shiftIndex(+v, shifts, 'row')}</x:Row>`)
+        .replace(/<x:Column>(\d+)<\/x:Column>/g, (_, v) => `<x:Column>${shiftIndex(+v, shifts, 'col')}</x:Column>`)
+        .replace(/<x:Anchor>([^<]*)<\/x:Anchor>/g, (_, v) => {
+          const a = v.split(',').map((x) => +x.trim());
+          if (a.length !== 8 || a.some(isNaN)) return `<x:Anchor>${v}</x:Anchor>`;
+          a[0] = shiftIndex(a[0], shifts, 'col'); a[4] = shiftIndex(a[4], shifts, 'col');
+          a[2] = shiftIndex(a[2], shifts, 'row'); a[6] = shiftIndex(a[6], shifts, 'row');
+          return `<x:Anchor>\n    ${a.join(', ')}</x:Anchor>`;
+        });
+    }
+    if (t !== u0) zip.file(part, t);
+  }
+}
+// Ссылки на лист в формулах файла (имена, ряды диаграмм) — после вставки/удаления строк и столбцов
+function shiftRefs(text, name, shifts) {
+  let x = text;
+  try { for (const sh of shifts) x = shiftFormula(x, { sheet: name, current: null, ...sh }); } catch { return text; }
+  return x;
+}
+
+// Переименование листа в формулах файла (именованные диапазоны, ряды диаграмм): 'Старое'!A1 → 'Новое'!A1
+const quoteSheet = (name) => (/^[A-Za-zА-Яа-яЁё_][\wА-Яа-яЁё.]*$/.test(name) ? name : `'${name.replace(/'/g, "''")}'`);
+function renameRefs(text, old, name) {
+  const e = old.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const quoted = `'${e.replace(/'/g, "''")}'`;
+  return text.replace(new RegExp(`(^|[^\\wА-Яа-яЁё'.])(${quoted}|${e})!`, 'g'), (_, pre) => `${pre}${name == null ? '' : quoteSheet(name) + '!'}`);
+}
+const xmlEsc = (s) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+const xmlUnesc = (s) => s.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/&amp;/g, '&');
+
+// Книга поверх исходного пакета: переписываются листы, стили (дописываются), общие строки (дописываются), список листов;
+// диаграммы, сводные, условное форматирование, проверка, примечания, таблицы, тема, настройки — байт в байт
+async function exportWithSource(wb, source) {
+  const zip = await JSZip.loadAsync(source);
+  const book = await readBook(zip);
+  const { text } = book;
+  const CT = '[Content_Types].xml';
+  let ct = await text(CT);
+  let relsXml = await text(book.relsPath);
+  let wbXml = await text(book.wbPath);
+  const relTarget = (p) => (p.startsWith(`${book.dir}/`) ? p.slice(book.dir.length + 1) : `/${p}`);
+
+  // стили
+  const stylesRoot = book.stylesDoc && book.stylesDoc.documentElement;
+  const count = (tag, item) => kids(kid(stylesRoot, tag), item).length;
+  const fmts = {};
+  for (const f of kids(kid(stylesRoot, 'numFmts'), 'numFmt')) fmts[f.getAttribute('formatCode')] = +f.getAttribute('numFmtId');
+  const base = stylesRoot
+    ? { styles: book.styles, fmts, counts: { fonts: count('fonts', 'font'), fills: count('fills', 'fill'), borders: count('borders', 'border'), xfs: count('cellXfs', 'xf') } }
+    : null;
+  const st = buildStyles(wb, base);
+
+  // общие строки: исходные остаются на местах, новые — в конец
+  const sstIndex = new Map();
+  book.sst.forEach((s, i) => { if (book.sstPlain[i] && !sstIndex.has(s)) sstIndex.set(s, i); });
+  const newStrings = [];
+  const str = (s) => {
+    if (!sstIndex.has(s)) { sstIndex.set(s, book.sst.length + newStrings.length); newStrings.push(s); }
+    return sstIndex.get(s);
+  };
+
+  // листы
+  const removed = book.sheets.filter((s) => s.worksheet && !wb.sheets.some((x) => x.src && x.src.rid === s.rid));
+  const sheetEls = {};
+  for (const m of wbXml.matchAll(/<sheet\b[^>]*?\/>/g)) { const id = /\br:id="([^"]+)"/.exec(m[0]); if (id) sheetEls[id[1]] = m[0]; }
+  let maxSheetId = Math.max(0, ...[...wbXml.matchAll(/<sheet\b[^>]*?\bsheetId="(\d+)"/g)].map((m) => +m[1]));
+  const newRels = [];
+  const newOverrides = [];
+  const sheetTags = [];
+  let peroN = 0;
+  const renames = []; // [старое, новое|null]
+  const shifted = []; // [имя листа, сдвиги]
+  for (let i = 0; i < wb.sheets.length; i++) {
+    const sheet = wb.sheets[i];
+    const s = sheet.src && book.sheets.find((x) => x.rid === sheet.src.rid && x.worksheet);
+    if (s && sheetEls[s.rid]) {
+      const xml = await text(s.target);
+      const doc = xml != null && /^[\s\S]*?<worksheet\b/.test(xml) ? parseXml(xml) : null;
+      if (doc) {
+        zip.file(s.target, pristine.has(sheet)
+          ? selectTab(xml, i === wb.active)
+          : patchSheetXml(xml, sheet, i === wb.active, doc.documentElement, book, st.xfOf, str));
+        sheetTags.push(sheetEls[s.rid].replace(/\bname="[^"]*"/, `name="${esc(sheet.name)}"`));
+        const shifts = (!pristine.has(sheet) && sheet.src.shifts) || [];
+        if (shifts.length) { shifted.push([sheet.name, shifts, s.name]); await shiftSheetParts(zip, s.target, shifts); }
+        if (sheet.name !== s.name) renames.push([s.name, sheet.name]);
+        continue;
+      }
+    }
+    // новый лист (или лист в непривычной разметке — пишется заново)
+    let part;
+    do { peroN++; part = `${book.dir}/worksheets/sheet_pero${peroN}.xml`; } while (zip.file(part));
+    const rid = `rIdPeroS${peroN}`;
+    zip.file(part, newSheetXml(sheet, i === wb.active, st.xfOf, str));
+    newRels.push(`<Relationship Id="${rid}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="${relTarget(part)}"/>`);
+    newOverrides.push(`<Override PartName="/${part}" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>`);
+    sheetTags.push(`<sheet name="${esc(sheet.name)}" sheetId="${++maxSheetId}" r:id="${rid}"/>`);
+  }
+  // листы диаграмм (в модели их нет) остаются в книге после рабочих листов
+  for (const s of book.sheets) if (!s.worksheet && sheetEls[s.rid]) sheetTags.push(sheetEls[s.rid]);
+  for (const s of removed) {
+    renames.push([s.name, null]);
+    zip.remove(s.target);
+    const relsPart = `${s.target.slice(0, s.target.lastIndexOf('/'))}/_rels/${s.target.slice(s.target.lastIndexOf('/') + 1)}.rels`;
+    if (zip.file(relsPart)) zip.remove(relsPart);
+    relsXml = relsXml.replace(new RegExp(`<Relationship\\b[^>]*\\bId="${s.rid}"[^>]*/>`), '');
+    ct = ct.replace(new RegExp(`<Override\\b[^>]*PartName="/${s.target.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}"[^>]*/>`), '');
+  }
+  wbXml = wbXml.replace(/<sheets>[\s\S]*?<\/sheets>/, `<sheets>${sheetTags.join('')}</sheets>`);
+
+  // именованные диапазоны: номера листов (localSheetId) после удаления, имена листов после переименования
+  const oldIdx = book.sheets.map((s) => s.rid);
+  const newIdx = (old) => {
+    const rid = oldIdx[old];
+    const i = wb.sheets.findIndex((x) => x.src && x.src.rid === rid);
+    if (i >= 0) return i;
+    const nonWs = book.sheets.filter((s) => !s.worksheet).findIndex((s) => s.rid === rid);
+    return nonWs >= 0 ? wb.sheets.length + nonWs : -1;
+  };
+  const fixFormula = (t) => { let x = xmlUnesc(t); for (const [o, nn] of renames) x = nn == null ? x.replace(new RegExp(`(?:'${o.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/'/g, "''")}'|${o.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})![$A-Z0-9:]+`, 'g'), '#REF!') : renameRefs(x, o, nn); return xmlEsc(x); };
+  wbXml = wbXml.replace(/<definedName\b([^>]*)>([\s\S]*?)<\/definedName>/g, (all, attrs, body) => {
+    const m = /\blocalSheetId="(\d+)"/.exec(attrs);
+    let a = attrs;
+    if (m) {
+      const i = newIdx(+m[1]);
+      if (i < 0) return '';
+      a = attrs.replace(/\blocalSheetId="\d+"/, `localSheetId="${i}"`);
+    }
+    let b = renames.length ? fixFormula(body) : body;
+    for (const [nm, sh] of shifted) b = xmlEsc(shiftRefs(xmlUnesc(b), nm, sh));
+    return `<definedName${a}>${b}</definedName>`;
+  }).replace(/<definedNames>\s*<\/definedNames>/, '');
+  // активный лист; пересчёт при открытии (кэш формул мог устареть)
+  wbXml = wbXml.replace(/<workbookView\b[^>]*?(?=\/?>)/, (tag) => {
+    const t = tag.replace(/\s+(activeTab|firstSheet)="[^"]*"/g, '');
+    return wb.active ? `${t} activeTab="${wb.active}"` : t;
+  });
+  if (/<calcPr\b/.test(wbXml)) wbXml = wbXml.replace(/<calcPr\b([^>]*?)(\/?)>/, (_, a, sc) => `<calcPr${a.replace(/\s+fullCalcOnLoad="[^"]*"/, '')} fullCalcOnLoad="1"${sc}>`);
+  else wbXml = wbXml.replace(/(<\/definedNames>|<\/sheets>)(?![\s\S]*(<\/definedNames>|<\/sheets>))/, '$1<calcPr fullCalcOnLoad="1"/>');
+  // ряды диаграмм и источники сводных — по новым именам листов
+  if (renames.some(([, nn]) => nn != null) || shifted.length) {
+    for (const p of Object.keys(zip.files)) {
+      if (/^xl\/charts\/chart[^/]*\.xml$/.test(p)) {
+        const t = await zip.file(p).async('string');
+        const u = t.replace(/<c:f>([\s\S]*?)<\/c:f>/g, (_, f) => {
+          let x = xmlUnesc(f);
+          for (const [o, nn] of renames) if (nn != null) x = renameRefs(x, o, nn);
+          for (const [nm, sh] of shifted) x = shiftRefs(x, nm, sh);
+          return `<c:f>${xmlEsc(x)}</c:f>`;
+        });
+        if (u !== t) zip.file(p, u);
+      } else if (/^xl\/pivotCache\/pivotCacheDefinition[^/]*\.xml$/.test(p)) {
+        const t = await zip.file(p).async('string');
+        const u = t.replace(/<worksheetSource\b[^>]*>/g, (tag) => {
+          const sheetName = xmlUnesc((/\bsheet="([^"]*)"/.exec(tag) || [])[1] || '');
+          const ren = renames.find(([o, nn]) => o === sheetName && nn != null);
+          let out = ren ? tag.replace(/\bsheet="[^"]*"/, `sheet="${esc(ren[1])}"`) : tag;
+          const sh = shifted.find(([, , orig]) => orig === sheetName);
+          if (sh) out = out.replace(/\bref="([^"]*)"/, (_, v) => `ref="${shiftSqref(v, sh[1]) || v}"`);
+          return out;
+        });
+        if (u !== t) zip.file(p, u);
+      }
+    }
+  }
+
+  // цепочка вычислений устарела — Excel построит заново
+  const calc = Object.entries(book.rels).find(([, r]) => /\/calcChain$/.test(r.type));
+  if (calc) {
+    zip.remove(calc[1].target);
+    relsXml = relsXml.replace(new RegExp(`<Relationship\\b[^>]*\\bId="${calc[0]}"[^>]*/>`), '');
+    ct = ct.replace(new RegExp(`<Override\\b[^>]*PartName="/${calc[1].target}"[^>]*/>`), '');
+  }
+
+  // стили — дописать новые
+  if (base) {
+    let sx = await text(book.stylesPath);
+    const a = st.added;
+    sx = appendToList(sx, 'numFmts', a.numFmts, 'styleSheet');
+    sx = appendToList(sx, 'fonts', a.fonts);
+    sx = appendToList(sx, 'fills', a.fills);
+    sx = appendToList(sx, 'borders', a.borders);
+    sx = appendToList(sx, 'cellXfs', a.cellXfs);
+    zip.file(book.stylesPath, sx);
+  } else {
+    // в книге без стилей номера xf считались по новой таблице — она и пишется
+    zip.file(`${book.dir}/styles.xml`, st.xml);
+    newRels.push(`<Relationship Id="rIdPeroSt" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>`);
+    newOverrides.push(`<Override PartName="/${book.dir}/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>`);
+  }
+  // общие строки — дописать новые
+  if (newStrings.length) {
+    const items = newStrings.map((s) => `<si><t xml:space="preserve">${esc(s)}</t></si>`);
+    if (book.sstPath) {
+      let sx = await text(book.sstPath);
+      const total = book.sst.length + newStrings.length;
+      sx = sx.replace(/<sst\b[^>]*>/, (tag) => tag.replace(/\s+(count|uniqueCount)="\d+"/g, '').replace(/<sst\b/, `<sst count="${total}" uniqueCount="${total}"`));
+      sx = sx.includes('</sst>') ? sx.replace('</sst>', `${items.join('')}</sst>`) : sx.replace(/<sst\b([^>]*?)\/>/, `<sst$1>${items.join('')}</sst>`);
+      zip.file(book.sstPath, sx);
+    } else {
+      zip.file(`${book.dir}/sharedStrings.xml`, `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<sst xmlns="${NS}" count="${items.length}" uniqueCount="${items.length}">${items.join('')}</sst>`);
+      newRels.push('<Relationship Id="rIdPeroSst" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/sharedStrings" Target="sharedStrings.xml"/>');
+      newOverrides.push(`<Override PartName="/${book.dir}/sharedStrings.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml"/>`);
+    }
+  }
+
+  relsXml = relsXml.replace('</Relationships>', `${newRels.join('')}</Relationships>`);
+  ct = ct.replace('</Types>', `${newOverrides.join('')}</Types>`);
+  zip.file(book.relsPath, relsXml);
+  zip.file(book.wbPath, wbXml);
+  zip.file(CT, ct);
+  // дата изменения
+  const core = await text('docProps/core.xml');
+  if (core) {
+    const now = new Date().toISOString().replace(/\.\d+Z$/, 'Z');
+    zip.file('docProps/core.xml', core.replace(/(<dcterms:modified\b[^>]*>)[^<]*(<\/dcterms:modified>)/, `$1${now}$2`));
+  }
+  return zip.generateAsync({ type: 'uint8array', compression: 'DEFLATE' });
+}
+
+/** source — байты исходного .xlsx: всё, что Перо не редактирует, переносится из него */
+export async function exportXlsx(wb, { source = null } = {}) {
+  if (source) return exportWithSource(wb, source);
   const { xml: stylesXml, xfOf } = buildStyles(wb);
   const sst = [];
   const sstIndex = new Map();
   const str = (s) => { if (!sstIndex.has(s)) { sstIndex.set(s, sst.length); sst.push(s); } return sstIndex.get(s); };
-
-  const sheetXml = wb.sheets.map((sheet, si) => {
-    const rows = new Map(); // r → [[c, xml]]
-    for (const [k, cell] of sheet.cells) {
-      const [r, c] = unkey(k);
-      const ref = addr(r, c);
-      const s = xfOf(cell.s);
-      const sAttr = s ? ` s="${s}"` : '';
-      const v = cell.v;
-      let xml;
-      if (cell.f != null) {
-        const f = `<f>${esc(cell.f)}</f>`;
-        if (isErr(v)) xml = `<c r="${ref}"${sAttr} t="e">${f}<v>${esc(v.error)}</v></c>`;
-        else if (typeof v === 'string') xml = `<c r="${ref}"${sAttr} t="str">${f}<v>${esc(v)}</v></c>`;
-        else if (typeof v === 'boolean') xml = `<c r="${ref}"${sAttr} t="b">${f}<v>${v ? 1 : 0}</v></c>`;
-        else xml = `<c r="${ref}"${sAttr}>${f}${typeof v === 'number' && isFinite(v) ? `<v>${v}</v>` : ''}</c>`;
-      } else if (v == null) xml = `<c r="${ref}"${sAttr}/>`;
-      else if (typeof v === 'number') xml = `<c r="${ref}"${sAttr}><v>${v}</v></c>`;
-      else if (typeof v === 'boolean') xml = `<c r="${ref}"${sAttr} t="b"><v>${v ? 1 : 0}</v></c>`;
-      else if (isErr(v)) xml = `<c r="${ref}"${sAttr} t="e"><v>${esc(v.error)}</v></c>`;
-      else xml = `<c r="${ref}"${sAttr} t="s"><v>${str(String(v))}</v></c>`;
-      if (!rows.has(r)) rows.set(r, []);
-      rows.get(r).push([c, xml]);
-    }
-    for (const r of Object.keys(sheet.rowH)) if (!rows.has(+r)) rows.set(+r, []);
-    const rowList = [...rows.keys()].sort((a, b) => a - b);
-    let maxR = 0; let maxC = 0;
-    for (const k of sheet.cells.keys()) { const [r, c] = unkey(k); maxR = Math.max(maxR, r); maxC = Math.max(maxC, c); }
-    const cols = Object.keys(sheet.colW).map(Number).sort((a, b) => a - b)
-      .map((c) => `<col min="${c + 1}" max="${c + 1}" width="${pxToWidth(sheet.colW[c])}" customWidth="1"/>`).join('');
-    const data = rowList.map((r) => {
-      const cells = rows.get(r).sort((a, b) => a[0] - b[0]).map((x) => x[1]).join('');
-      const h = sheet.rowH[r];
-      return `<row r="${r + 1}"${h ? ` ht="${Math.round(h * 0.75 * 100) / 100}" customHeight="1"` : ''}>${cells}</row>`;
-    }).join('');
-    const merges = sheet.merges.length ? `<mergeCells count="${sheet.merges.length}">${sheet.merges.map((m) => `<mergeCell ref="${addr(m.r1, m.c1)}:${addr(m.r2, m.c2)}"/>`).join('')}</mergeCells>` : '';
-    return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<worksheet xmlns="${NS}" xmlns:r="${R}">` +
-      `<dimension ref="A1${maxR || maxC ? `:${addr(maxR, maxC)}` : ''}"/>` +
-      `<sheetViews><sheetView workbookViewId="0"${si === wb.active ? ' tabSelected="1"' : ''}/></sheetViews>` +
-      `<sheetFormatPr defaultRowHeight="15"/>${cols ? `<cols>${cols}</cols>` : ''}<sheetData>${data}</sheetData>${merges}` +
-      '<pageMargins left="0.7" right="0.7" top="0.75" bottom="0.75" header="0.3" footer="0.3"/></worksheet>';
-  });
+  const sheetXml = wb.sheets.map((sheet, si) => newSheetXml(sheet, si === wb.active, xfOf, str));
 
   const zip = new JSZip();
   const sheetsCt = wb.sheets.map((_, i) => `<Override PartName="/xl/worksheets/sheet${i + 1}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>`).join('');

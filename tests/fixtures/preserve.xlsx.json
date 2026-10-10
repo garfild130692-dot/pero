@@ -1,0 +1,8 @@
+D:\Projects\New_Office\tests\xlsx_check.ps1:25 знак:102
++ ... s.Rows.Item($r).OutlineLevel; if ($l -gt 1) { $outline += "$r:$l" } }
++                                                                ~~~
+Недопустимая ссылка на переменную. За знаком : не следует допустимый знак имени переменной. Рекомендуется использовать 
+${}, чтобы отделить имя.
+    + CategoryInfo          : ParserError: (:) [], ParentContainsErrorRecordException
+    + FullyQualifiedErrorId : InvalidVariableReferenceWithDrive
+ 
