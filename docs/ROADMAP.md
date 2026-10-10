@@ -151,7 +151,7 @@
 | Базы данных | 12 | БДСУММ, БСЧЁТ, БСРЗНАЧ, БИЗВЛЕЧЬ, ДМАКС, ДМИН… (диапазон критериев) |
 | Новые функции 365 | ~40 | LAMBDA, MAP, REDUCE, SCAN, MAKEARRAY, BYROW/BYCOL, ТЕКСТРАЗД, VSTACK/HSTACK, TOCOL/TOROW, WRAPROWS, TAKE/DROP, CHOOSECOLS, EXPAND, REGEXTEST/EXTRACT/REPLACE, GROUPBY, PIVOTBY, TRIMRANGE, PERCENTOF |
 | Прочие | ~20 | ФИЛЬТР.XML, КОДИР.URL, ЯЧЕЙКА, ИНФОРМ, ЛИСТЫ, ЕФОРМУЛА, Ф.ТЕКСТ, EUROCONVERT |
-| Требуют внешнего сервиса | ~15 | CUBE* (OLAP), WEBSERVICE, STOCKHISTORY, IMAGE, PY, COPILOT, TRANSLATE, DETECTLANGUAGE, RTD — только распознавание и ошибка как в Excel без подключения |
+| Требуют внешнего сервиса | ~15 | CUBE* (OLAP), WEBSERVICE, STOCKHISTORY, IMAGE, PY, COPILOT, TRANSLATE, DETECTLANGUAGE, RTD, CALL — только распознавание (формула сохраняется, результат — ошибка). Вычислять не будем (решение владельца 10.10.2026: ориентир — локальная работа; нужны асинхронные значения, защита от утечки данных, платные сервисы) |
 
 Эталон: установленный Excel 2021 (16.0, сборка 14332, русский) — считает через COM всё, кроме функций 365
 (LAMBDA, REGEX*, GROUPBY…); для них ожидаемые значения — вручную по документации Microsoft. Русские имена функций
