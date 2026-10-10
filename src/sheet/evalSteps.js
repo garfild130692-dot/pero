@@ -50,6 +50,7 @@ export function exprText(node, mark = null, parentPrec = 0) {
       return wrap(p < parentPrec ? `(${s})` : s);
     }
     case 'fn': return wrap(`${ruName(node.name)}(${node.args.map((a) => exprText(a, mark, 0)).join(';')})`);
+    case 'call': return wrap(`${exprText(node.fn, mark, 7)}(${node.args.map((a) => exprText(a, mark, 0)).join(';')})`);
     default: return '?';
   }
 }
@@ -57,6 +58,8 @@ export function exprText(node, mark = null, parentPrec = 0) {
 // Следующий шаг: узел, который вычисляется сейчас (или null — формула вычислена)
 function nextNode(node) {
   if (LITERAL.has(node.t) || node.t === 'name') return node.t === 'name' ? node : null;
+  // LET/LAMBDA и вызов лямбды — одним шагом (внутри имена параметров, вне их области не вычисляются)
+  if (node.t === 'call' || (node.t === 'fn' && (node.name === 'LET' || node.name === 'LAMBDA'))) return node;
   if (node.t === 'fn' && (node.name === 'IF' || node.name === 'IFERROR')) {
     const first = node.args[0];
     const inner = first ? nextNode(first) : null;

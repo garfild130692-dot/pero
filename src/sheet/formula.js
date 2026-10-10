@@ -8,6 +8,7 @@ import { functions2 } from './fnlib2.js';
 import { functions3 } from './fnlib3.js';
 import { functions4 } from './fnlib4.js';
 import { functions5 } from './fnlib5.js';
+import { functions6 } from './fnlib6.js';
 import { EXCEL_RU } from './fnnames.js';
 
 // ---------- Ошибки и значения ----------
@@ -224,7 +225,7 @@ export function parse(src) {
           return { t: 'spill', sheet: r0.sheet, r: r0.r, c: r0.c };
         }
         const args = [];
-        if (peek() && peek().type === ')') { next(); return { t: 'fn', name: t.name, args }; }
+        if (peek() && peek().type === ')') { next(); return { t: 'fn', name: t.name, text: t.text, args }; }
         for (;;) {
           if (peek() && (peek().type === 'sep' || peek().type === ')')) args.push({ t: 'empty' });
           else args.push(expr());
@@ -233,7 +234,7 @@ export function parse(src) {
           if (n.type === ')') break;
           if (n.type !== 'sep') throw new Error('syntax');
         }
-        return { t: 'fn', name: t.name, args };
+        return { t: 'fn', name: t.name, text: t.text, args };
       }
       case '(': { const e = expr(); expect(')'); return e; }
       case 'op':
@@ -245,8 +246,28 @@ export function parse(src) {
   }
   function postfix() {
     let a = primary();
-    while (isOp(peek(), ['%'])) { next(); a = { t: 'pct', a }; }
-    return a;
+    for (;;) {
+      if (isOp(peek(), ['%'])) { next(); a = { t: 'pct', a }; continue; }
+      // вызов результата выражения: LAMBDA(x;x+1)(2), МояФункция(1)(2)
+      if (peek() && peek().type === '(' && (a.t === 'fn' || a.t === 'call' || a.t === 'name')) {
+        next();
+        const args = [];
+        if (peek() && peek().type === ')') next();
+        else {
+          for (;;) {
+            if (peek() && (peek().type === 'sep' || peek().type === ')')) args.push({ t: 'empty' });
+            else args.push(expr());
+            const n = next();
+            if (!n) throw new Error('syntax');
+            if (n.type === ')') break;
+            if (n.type !== 'sep') throw new Error('syntax');
+          }
+        }
+        a = { t: 'call', fn: a, args };
+        continue;
+      }
+      return a;
+    }
   }
   function unary() {
     if (isOp(peek(), ['-', '+'])) { const op = next().text; return { t: 'un', op, a: unary() }; }
@@ -715,7 +736,7 @@ const FN = {
 // Библиотека функций (fnlib.js) — помощники движка передаются ей явно
 const HELPERS = {
   ERR, err, isErr, toNum, toText, toBool, flat, nums, firstErr, criterion, compare, exactMatcher, wildcard, dateToSerial, serialToDate,
-  toArr, numText, textToNum, round, colName, FN, approxIndex, errText,
+  toArr, numText, textToNum, round, colName, FN, approxIndex, errText, isFn: (v) => isFn(v), callFn: (...a) => callFn(...a), broadcast: (...a) => broadcast(...a),
   evaluate: (...a) => evaluate(...a), parse: (...a) => parse(...a), localize: (...a) => localize(...a), sheetPrefix: (...a) => sheetPrefix(...a),
 };
 Object.assign(FN, functions(HELPERS));
@@ -723,8 +744,9 @@ Object.assign(FN, functions2(HELPERS));
 Object.assign(FN, functions3(HELPERS));
 Object.assign(FN, functions4(HELPERS));
 Object.assign(FN, functions5(HELPERS));
+Object.assign(FN, functions6(HELPERS));
 const LAZY = lazyFunctions(HELPERS);
-export const FUNCTIONS = Object.keys(FN);
+export const FUNCTIONS = [...Object.keys(FN), 'LAMBDA', 'ISOMITTED'];
 const SCALAR_FN = new Set(['ABS', 'SIGN', 'INT', 'SQRT', 'POWER', 'MOD', 'ROUND', 'ROUNDUP', 'ROUNDDOWN', 'NOT', 'LEN', 'UPPER', 'LOWER',
   'TRIM', 'LEFT', 'RIGHT', 'MID', 'FIND', 'SUBSTITUTE', 'REPT', 'VALUE', 'ISBLANK', 'ISNUMBER', 'ISTEXT', 'ISERROR', 'DATE', 'YEAR',
   'MONTH', 'DAY']);
@@ -736,7 +758,17 @@ export function evaluate(node, ctx) {
     case 'num': case 'str': case 'bool': return node.v;
     case 'err': return err(node.v);
     case 'empty': return null;
-    case 'name': return ctx.name ? ctx.name(node.v) : err(ERR.NAME);
+    case 'name': {
+      const v = ctx.name ? ctx.name(node.v) : err(ERR.NAME);
+      // имя встроенной функции как значение (BYROW(A1:C3;СУММ)) — «функция без аргументов»
+      if (isErr(v) && v.error === ERR.NAME) {
+        const up = node.v.toUpperCase();
+        const en = RU[up] || up;
+        if (FN[en] || LAZY[en]) return { fnref: en };
+      }
+      return v;
+    }
+    case 'call': return applyFn(evaluate(node.fn, ctx), node.args, ctx);
     case 'ref': return ctx.get(node.sheet || ctx.sheet, node.r, node.c);
     case 'range': {
       // трёхмерная ссылка — те же ячейки на листах от первого до последнего (строки складываются)
@@ -791,7 +823,14 @@ export function evaluate(node, ctx) {
         if (!branch) return b;
         return evaluate(branch, ctx) ?? 0;
       }
+      if (node.name === 'LAMBDA') return makeLambda(node.args, ctx);
+      if (node.name === 'ISOMITTED') { const a = node.args[0]; return !!(a && a.t === 'name' && ctx.omitted && ctx.omitted(a.v)); }
       if (LAZY[node.name]) return fin(LAZY[node.name](node.args, ctx, evaluate));
+      // имя, определённое как LAMBDA (диспетчер имён), вызывается как функция
+      if (!FN[node.name] && ctx.name) {
+        const lv = ctx.name(node.text || node.name);
+        if (lv && (lv.lambda || lv.fnref)) return applyFn(lv, node.args, ctx);
+      }
       if (node.name === 'IFERROR') {
         const v = evaluate(node.args[0], ctx);
         const alt = () => evaluate(node.args[1] || { t: 'str', v: '' }, ctx);
@@ -812,6 +851,40 @@ export function evaluate(node, ctx) {
   }
 }
 const fin = (v) => (typeof v === 'number' && !isFinite(v) ? err(ERR.NUM) : v);
+
+// ---------- LAMBDA ----------
+// Значение-функция: { lambda: { params, body, ctx } } (контекст захватывается) или { fnref: 'SUM' } — встроенная функция
+export const isFn = (v) => !!v && typeof v === 'object' && !Array.isArray(v) && (!!v.lambda || !!v.fnref);
+function makeLambda(nodes, ctx) {
+  if (!nodes.length) return err(ERR.VALUE);
+  const params = nodes.slice(0, -1);
+  if (params.some((p) => p.t !== 'name')) return err(ERR.VALUE);
+  return { lambda: { params: params.map((p) => p.v.toLowerCase()), body: nodes[nodes.length - 1], ctx } };
+}
+let lambdaDepth = 0;
+// Вызвать функцию-значение: args — узлы (вычисляются в ctx) или готовые значения ({ t: 'value', v })
+export function applyFn(f, args, ctx) {
+  if (isErr(f)) return f;
+  if (!isFn(f)) return err(ERR.VALUE);
+  const vals = args.map((a) => (a.t === 'empty' ? undefined : evaluate(a, ctx)));
+  if (f.fnref) {
+    const lz = LAZY[f.fnref];
+    if (lz) return fin(lz(vals.map((v) => ({ t: 'value', v })), ctx, evaluate));
+    return fin(FN[f.fnref](vals.map((v) => (v === undefined ? null : v)), ctx, []));
+  }
+  const { params, body, ctx: home } = f.lambda;
+  if (vals.length > params.length) return err(ERR.VALUE);
+  const bound = new Map(); const omitted = new Set();
+  params.forEach((p, i) => { if (vals[i] === undefined) { omitted.add(p); bound.set(p, null); } else bound.set(p, vals[i]); });
+  const scope = Object.create(home);
+  scope.name = (n) => { const k = String(n).toLowerCase(); return bound.has(k) ? bound.get(k) : home.name ? home.name(n) : err(ERR.NAME); };
+  scope.omitted = (n) => omitted.has(String(n).toLowerCase());
+  if (lambdaDepth > 1000) return err(ERR.NUM);
+  lambdaDepth++;
+  try { return evaluate(body, scope); } catch { return err(ERR.NUM); } finally { lambdaDepth--; }
+}
+// вызвать с готовыми значениями
+export const callFn = (f, values, ctx) => applyFn(f, values.map((v) => ({ t: 'value', v })), ctx);
 const markArray = (ctx) => { if (ctx.markArray) ctx.markArray(); };
 
 // Бинарная операция над двумя значениями
@@ -880,14 +953,16 @@ export function fileFormula(src) {
   // имена параметров LET (нечётные аргументы, кроме последнего) — в файле с префиксом _xlpm.
   const params = new Set();
   toks.forEach((t, i) => {
-    if (t.type !== 'func' || t.name !== 'LET') return;
+    if (t.type !== 'func' || (t.name !== 'LET' && t.name !== 'LAMBDA')) return;
+    const isLambda = t.name === 'LAMBDA';
     let depth = 0; let arg = 0;
     for (let j = i + 1; j < toks.length; j++) {
       const u = toks[j];
       if (u.type === '(') { depth++; continue; }
       if (u.type === ')') { if (--depth === 0) break; continue; }
       if (depth === 1 && u.type === 'sep') { arg++; continue; }
-      if (depth === 1 && u.type === 'name' && arg % 2 === 0) params.add(u.name.toLowerCase());
+      // LET: имена — чётные аргументы; LAMBDA: все аргументы-имена (кроме тела — оно не просто имя)
+      if (depth === 1 && u.type === 'name' && (isLambda || arg % 2 === 0)) params.add(u.name.toLowerCase());
     }
   });
   return toks.map((t) => (t.type === 'func' && FUTURE.has(t.name) ? `_xlfn.${XLWS.has(t.name) ? '_xlws.' : ''}${t.name}`

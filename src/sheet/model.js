@@ -126,6 +126,7 @@ export function recalc(wb) {
     const [cr, cc] = unkey(k);
     ctx.cur = { r: cr, c: cc }; // СТРОКА(), СТОЛБЕЦ(), ЯЧЕЙКА() без ссылки — текущая ячейка
     let v = ast ? evaluate(ast, ctx) : err(ERR.NAME);
+    if (v && typeof v === 'object' && !Array.isArray(v) && (v.lambda || v.fnref)) v = err(ERR.CALC); // функция без вызова
     ctx.cur = prevCur;
     const ax = arrFlag;
     arrFlag = saved;
