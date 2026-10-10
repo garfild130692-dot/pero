@@ -36,7 +36,9 @@ try {
     $d.Cells.Item($r, 8).NumberFormat = '@'
     $d.Cells.Item($r, 8).Value2 = $texts[$i]
   }
-  $d.Range('D2:D11').NumberFormat = 'dd.mm.yyyy'
+  # код формата — в английской записи (иначе русский Excel поймёт «dd.mm.yyyy» как текст)
+  $rng = $d.Range('D2:D11')
+  [void]$rng.GetType().InvokeMember('NumberFormat', [Reflection.BindingFlags]::SetProperty, $null, $rng, @('dd.mm.yyyy'), [Globalization.CultureInfo]::GetCultureInfo('en-US'))
   # «Смесь»: число, число-текст, пусто, логическое, #Н/Д, дробь, пустая строка (формула), отрицательное, текст, ноль
   $d.Range('G2').Value2 = [double]5
   $d.Range('G3').NumberFormat = '@'

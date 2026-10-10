@@ -2,7 +2,7 @@
 import JSZip from 'jszip';
 import { DOMParser } from '@xmldom/xmldom';
 import { addr, colIndex, key, MAX_COLS, parseRange, rangeName, unkey } from './address.js';
-import { canonical, isErr, offsetFormula, shiftFormula } from './formula.js';
+import { canonical, fileFormula, isErr, offsetFormula, shiftFormula } from './formula.js';
 import { BUILTIN_FMT } from './format.js';
 import { maxLevel, newSheet, recalc, DEFAULT_COL_W, DEFAULT_ROW_H } from './model.js';
 import { parsePrintArea, parsePrintTitles, printAreaText, printTitlesText } from './pageSetup.js';
@@ -272,6 +272,25 @@ function readProtection(root) {
 }
 const protectionXml = (p) => (p ? `<sheetProtection${Object.entries(p.attrs).map(([k, v]) => ` ${k}="${esc(v)}"`).join('')}/>` : '');
 
+// Именованные диапазоны и константы книги (кроме служебных _xlnm.*): { name, text (хранимый вид), sheet (локальное — имя листа) }
+function readNames(wbDoc, bookSheets) {
+  return kids(kid(wbDoc.documentElement, 'definedNames'), 'definedName')
+    .filter((n) => !/^_xlnm\./.test(n.getAttribute('name') || ''))
+    .map((n) => {
+      const id = n.getAttribute('localSheetId');
+      const sheet = id != null && bookSheets[+id] ? bookSheets[+id].name : null;
+      return { name: n.getAttribute('name'), text: canonical(n.textContent), sheet };
+    });
+}
+// <definedName> пользовательских имён модели; номер листа — по порядку листов книги
+function namesXml(wb) {
+  return (wb.names || []).map((n) => {
+    const idx = n.sheet ? wb.sheets.findIndex((x) => x.name.toLowerCase() === n.sheet.toLowerCase()) : -1;
+    if (n.sheet && idx < 0) return '';
+    return `<definedName name="${esc(n.name)}"${idx >= 0 ? ` localSheetId="${idx}"` : ''}>${xmlEsc(fileFormula(n.text))}</definedName>`;
+  }).join('');
+}
+
 // Имена печати листа с номером idx (порядок в <sheets>): { printArea, printTitles }
 function readPrintNames(wbDoc, idx) {
   const out = { printArea: null, printTitles: null };
@@ -411,13 +430,14 @@ export async function importXlsx(data, { recalc: doRecalc = true } = {}) {
   }
   if (Object.values(rels).some((r) => /pivotCacheDefinition$/.test(r.type))) keep('сводные таблицы');
   // именованные диапазоны (служебные _xlnm.* — область печати, фильтр — не считаем)
-  const names = kid(wbDoc.documentElement, 'definedNames');
-  if (names && kids(names, 'definedName').some((n) => !/^_xlnm\./.test(n.getAttribute('name') || ''))) keep('именованные диапазоны');
+  const names = readNames(wbDoc, book.sheets);
   if (!sheets.length) sheets.push(newSheet('Лист1'));
   const view = kid(kid(wbDoc.documentElement, 'bookViews'), 'workbookView');
   const active = Math.min(+(view && view.getAttribute('activeTab')) || 0, sheets.length - 1);
-  const wb = doRecalc ? recalc({ sheets, active }) : { sheets, active };
+  const base = { sheets, active, ...(names.length ? { names } : {}) };
+  const wb = doRecalc ? recalc(base) : base;
   for (const sh of wb.sheets) if (sh.src) pristine.add(sh);
+  if (wb.names) pristine.add(wb.names);
   return { wb, warnings: {}, kept };
 }
 
@@ -562,7 +582,7 @@ function cellXml(cell, ref, xfOf, str) {
   const sAttr = s ? ` s="${s}"` : '';
   const v = cell.v;
   if (cell.f != null) {
-    const f = `<f>${esc(cell.f)}</f>`;
+    const f = `<f>${esc(fileFormula(cell.f))}</f>`;
     if (isErr(v)) return `<c r="${ref}"${sAttr} t="e">${f}<v>${esc(v.error)}</v></c>`;
     if (typeof v === 'string') return `<c r="${ref}"${sAttr} t="str">${f}<v>${esc(v)}</v></c>`;
     if (typeof v === 'boolean') return `<c r="${ref}"${sAttr} t="b">${f}<v>${v ? 1 : 0}</v></c>`;
@@ -916,6 +936,17 @@ async function exportWithSource(wb, source) {
       wbXml = wbXml.replace(after, `${after}<definedNames>${printNames.join('')}</definedNames>`);
     }
   }
+  if (wb.names && !pristine.has(wb.names)) {
+    wbXml = wbXml.replace(/<definedName\b(?![^>]*\bname="_xlnm\.)[^>]*>[\s\S]*?<\/definedName>/g, '');
+    const user = namesXml(wb);
+    if (user) {
+      if (/<definedNames>/.test(wbXml)) wbXml = wbXml.replace('</definedNames>', `${user}</definedNames>`);
+      else {
+        const after = /<\/externalReferences>/.test(wbXml) ? '</externalReferences>' : '</sheets>';
+        wbXml = wbXml.replace(after, `${after}<definedNames>${user}</definedNames>`);
+      }
+    }
+  }
   wbXml = wbXml.replace(/<definedNames>\s*<\/definedNames>/, '');
   // активный лист; пересчёт при открытии (кэш формул мог устареть)
   wbXml = wbXml.replace(/<workbookView\b[^>]*?(?=\/?>)/, (tag) => {
@@ -1011,7 +1042,8 @@ function freshPrintNames(wb) {
     if (s.printArea) out.push(`<definedName name="_xlnm.Print_Area" localSheetId="${i}">${xmlEsc(printAreaText(s.name, s.printArea))}</definedName>`);
     if (s.printTitles && (s.printTitles.rows || s.printTitles.cols)) out.push(`<definedName name="_xlnm.Print_Titles" localSheetId="${i}">${xmlEsc(printTitlesText(s.name, s.printTitles))}</definedName>`);
   });
-  return out.length ? `<definedNames>${out.join('')}</definedNames>` : '';
+  const all = out.join('') + namesXml(wb);
+  return all ? `<definedNames>${all}</definedNames>` : '';
 }
 
 /** source — байты исходного .xlsx: всё, что Перо не редактирует, переносится из него */

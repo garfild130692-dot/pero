@@ -223,7 +223,8 @@ print(v['Продажи']['D6'].value, v['Свод']['B1'].value)
     const { wb, warnings, kept } = await importXlsx(src);
     expect(warnings).toEqual({});
     expect(Object.keys(kept)).toEqual(expect.arrayContaining(['условное форматирование', 'проверка данных', 'рисунки и диаграммы',
-      'примечания к ячейкам', 'гиперссылки', '«умные» таблицы', 'сводные таблицы', 'именованные диапазоны']));
+      'примечания к ячейкам', 'гиперссылки', '«умные» таблицы', 'сводные таблицы']));
+    expect(wb.names).toEqual([{ name: 'План', text: 'Данные!$B$2:$B$13', sheet: null }, { name: 'Ставка', text: '1/5', sheet: null }]);
     // скрытые и сгруппированные строки/столбцы, стиль столбца
     expect(wb.sheets[0].rowInfo[14]).toEqual({ hidden: true });
     expect(wb.sheets[0].rowInfo[15]).toEqual({ hidden: true, level: 1 });
@@ -440,5 +441,77 @@ describe('csv', async () => {
     const back = importCsv(bytes).wb;
     expect([v(back, 'A1'), v(back, 'B1'), v(back, 'C1'), v(back, 'A2'), v(back, 'B2'), v(back, 'C2')])
       .toEqual(['Текст; с разделителем', 1234.5, 0.12, 'строка "в кавычках"', 2469, v(wb, 'C2')]);
+  });
+});
+
+describe('движок формул: столбцы и строки целиком, трёхмерные ссылки, имена, _xlfn', async () => {
+  const m = await import('../src/sheet/model.js');
+  const f = await import('../src/sheet/formula.js');
+  const { importXlsx, exportXlsx } = await import('../src/sheet/xlsx.js');
+  const { readFileSync } = await import('fs');
+
+  it('ссылки A:A и 1:1 — разбор, сдвиг, копирование, вычисление по занятой части листа', () => {
+    expect(f.shiftFormula('SUM(A:B)+SUM(3:5)+A4', { sheet: 'L', current: 'L', axis: 'row', at: 1, count: 2 })).toBe('SUM(A:B)+SUM(5:7)+A6');
+    expect(f.shiftFormula('SUM(A:B)+SUM(3:5)', { sheet: 'L', current: 'L', axis: 'col', at: 0, count: 1 })).toBe('SUM(B:C)+SUM(3:5)');
+    expect(f.shiftFormula('SUM(C:C)', { sheet: 'L', current: 'L', axis: 'col', at: 2, count: -1 })).toBe('SUM(#REF!)');
+    expect(f.offsetFormula('SUM(A:A)+SUM($B:$B)+SUM(1:1)', 3, 2)).toBe('SUM(C:C)+SUM($B:$B)+SUM(4:4)');
+    let wb = put(newWorkbook(), { A1: '1', A2: '2', A3: '3', B1: '=СУММ(A:A)', B2: '=СЧИТАТЬПУСТОТЫ(A:A)', B3: '=СУММ(1:1)' });
+    expect([val(wb, 'B1'), val(wb, 'B2'), val(wb, 'B3')]).toEqual([6, 1048573, 7]);
+    wb = put(wb, { A1000: '100' });
+    expect(val(wb, 'B1')).toBe(106);
+  });
+
+  it('трёхмерные ссылки Лист1:Лист3!A1 и переименование листа в них', () => {
+    let wb = put(newWorkbook(), { A1: '10' });
+    wb = m.addSheet(wb); wb = put(wb, { A1: '20' }, 1);
+    wb = m.addSheet(wb); wb = put(wb, { A1: '30' }, 2);
+    wb = m.addSheet(wb); wb = put(wb, { A1: '=СУММ(Лист1:Лист3!A1)', A2: '=СРЗНАЧ(Лист1:Лист3!A1:A1)' }, 3);
+    expect([val(wb, 'A1', 3), val(wb, 'A2', 3)]).toEqual([60, 20]);
+    wb = m.renameSheet(wb, 2, 'Итог года');
+    expect(formulaOf(wb, 'A1', 3)).toBe("SUM('Лист1:Итог года'!A1)");
+    expect(val(wb, 'A1', 3)).toBe(60);
+  });
+
+  it('имена: книга и лист, переименование и удаление листа, вставка строк, ошибки', () => {
+    let wb = put(newWorkbook(), { A1: '1', A2: '2', A3: '3' });
+    wb = m.addSheet(wb);
+    wb = m.setNames(wb, [
+      { name: 'Ряд', text: 'Лист1!$A$1:$A$3', sheet: null },
+      { name: 'Ставка', text: '0.2', sheet: null },
+      { name: 'Ставка', text: '0.5', sheet: 'Лист2' },
+    ]);
+    wb = put(wb, { B1: '=СУММ(Ряд)*Ставка', B2: '=Нет+1' });
+    wb = put(wb, { A1: '=СУММ(Ряд)*Ставка' }, 1);
+    expect(val(wb, 'B1')).toBeCloseTo(1.2, 12);
+    expect([val(wb, 'B2'), val(wb, 'A1', 1)]).toEqual([{ error: '#NAME?' }, 3]);
+    wb = m.shiftCells(wb, 0, 'row', 0, 1);
+    expect(wb.names[0].text).toBe('Лист1!$A$2:$A$4');
+    expect(val(wb, 'B2')).toBeCloseTo(1.2, 12);
+    wb = m.renameSheet(wb, 1, 'Свод');
+    expect(wb.names[2].sheet).toBe('Свод');
+    expect(m.nameTarget(wb, 'ряд', 'Свод')).toEqual({ sheet: 'Лист1', r1: 1, c1: 0, r2: 3, c2: 0 });
+    wb = m.deleteSheet(wb, 1);
+    expect(wb.names.map((n) => n.name)).toEqual(['Ряд', 'Ставка']);
+    expect(m.isValidName('A1')).toBe(false);
+    expect(m.isValidName('Сумма_2026')).toBe(true);
+    expect(m.isValidName('два слова')).toBe(false);
+  });
+
+  it('файл: _xlfn. снимается при чтении и ставится при записи; имена — в definedNames; правка имён поверх исходного', async () => {
+    expect(f.canonical('_xlfn._xlws.FILTER(A1:A3,A1:A3>1)')).toBe('FILTER(A1:A3,A1:A3>1)');
+    expect(f.fileFormula('SUM(FILTER(A:A,B:B="x"))+STDEV.S(A1:A3)+IFNA(1,2)')).toBe('SUM(_xlfn._xlws.FILTER(A:A,B:B="x"))+_xlfn.STDEV.S(A1:A3)+_xlfn.IFNA(1,2)');
+    expect(f.localize('IFERROR(1/0,#N/A)')).toBe('ЕСЛИОШИБКА(1/0;#Н/Д)');
+    expect(f.canonical('ЕСЛИОШИБКА(1/0;#Н/Д)')).toBe('IFERROR(1/0;#N/A)'.replace(';', ','));
+    let wb = m.setNames(put(newWorkbook(), { A1: '5', B1: '=A1*Ставка' }), [{ name: 'Ставка', text: '0.2', sheet: null }, { name: 'Мест', text: 'Лист1!$A$1', sheet: 'Лист1' }]);
+    const back = (await importXlsx(await exportXlsx(wb))).wb;
+    expect(back.names).toEqual(wb.names);
+    expect(val(back, 'B1')).toBe(1);
+    const JSZip = (await import('jszip')).default;
+    const src = readFileSync('tests/fixtures/preserve.xlsx');
+    let p = (await importXlsx(src)).wb;
+    p = m.setNames(p, [...p.names, { name: 'Новое', text: 'Данные!$C$2:$C$13', sheet: null }]);
+    const xml = await (await JSZip.loadAsync(await exportXlsx(p, { source: src }))).file('xl/workbook.xml').async('string');
+    expect(xml).toContain('<definedName name="_xlnm.Print_Area" localSheetId="0">Данные!$A$1:$D$14</definedName>');
+    expect(xml).toContain('<definedName name="План">Данные!$B$2:$B$13</definedName><definedName name="Ставка">1/5</definedName><definedName name="Новое">Данные!$C$2:$C$13</definedName>');
   });
 });

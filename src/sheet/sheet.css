@@ -95,3 +95,12 @@ input.sheet-tab.editing { width: 120px; background: #fff; border: 1px solid var(
 }
 
 .sheet-lock { font-size: 11px; margin-right: 4px; opacity: .75; }
+
+/* диспетчер имён */
+.modal.names-dlg { width: 600px; }
+.names-list { border: 1px solid #ccc; border-radius: 3px; max-height: 220px; overflow: auto; }
+.names-row { display: grid; grid-template-columns: 1.1fr 2fr .9fr; gap: 8px; width: 100%; padding: 4px 8px; border: 0; background: none; font: inherit; font-size: 12.5px; text-align: left; cursor: pointer; }
+.names-row span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.names-row.head { position: sticky; top: 0; background: #f3f3f3; font-weight: 600; cursor: default; }
+.names-row.on { background: #d9ebe5; }
+.names-edit { margin-top: 10px; padding-top: 8px; border-top: 1px solid #e3e3e3; display: grid; gap: 6px; }

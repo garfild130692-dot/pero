@@ -2,13 +2,36 @@
 //
 // Формула хранится без «=» в синтаксисе файла xlsx: английские имена функций, разделитель аргументов «,»,
 // десятичная точка. При вводе принимаются и русские имена (СУММ, ЕСЛИ…) и «;» — они приводятся к хранимому виду.
-import { colIndex, colName } from './address.js';
+import { colIndex, colName, MAX_COLS, MAX_ROWS } from './address.js';
 
 // ---------- Ошибки и значения ----------
 export const ERR = {
   DIV0: '#DIV/0!', VALUE: '#VALUE!', REF: '#REF!', NAME: '#NAME?', NA: '#N/A', NUM: '#NUM!', CIRC: '#CIRC!',
 };
 export const isErr = (v) => v != null && typeof v === 'object' && 'error' in v;
+// Ошибки по-русски (как в интерфейсе русского Excel) ↔ хранимые английские
+export const ERR_RU = {
+  '#DIV/0!': '#ДЕЛ/0!', '#VALUE!': '#ЗНАЧ!', '#REF!': '#ССЫЛКА!', '#NAME?': '#ИМЯ?', '#N/A': '#Н/Д', '#NUM!': '#ЧИСЛО!',
+  '#NULL!': '#ПУСТО!', '#SPILL!': '#ПЕРЕНОС!', '#CALC!': '#ВЫЧИСЛ!', '#CIRC!': '#ЦИКЛ!',
+};
+const ERR_EN = Object.fromEntries(Object.entries(ERR_RU).map(([en, ru]) => [ru, en]));
+export const errText = (code) => ERR_RU[code] || code;
+
+// Функции, появившиеся после Excel 2007: в файле пишутся с префиксом _xlfn. (ФИЛЬТР и СОРТ — _xlfn._xlws.),
+// иначе Excel покажет #ИМЯ?. В модели формулы хранятся без префиксов.
+const FUTURE = new Set(`ACOT ACOTH AGGREGATE ARABIC ARRAYTOTEXT BASE BETA.DIST BETA.INV BINOM.DIST BINOM.DIST.RANGE BINOM.INV BITAND
+  BITLSHIFT BITOR BITRSHIFT BITXOR BYCOL BYROW CEILING.MATH CEILING.PRECISE CHISQ.DIST CHISQ.DIST.RT CHISQ.INV CHISQ.INV.RT CHISQ.TEST
+  CHOOSECOLS CHOOSEROWS COMBINA CONCAT CONFIDENCE.NORM CONFIDENCE.T COT COTH COVARIANCE.P COVARIANCE.S CSC CSCH DAYS DECIMAL DROP
+  ECMA.CEILING ENCODEURL ERF.PRECISE ERFC.PRECISE EXPAND EXPON.DIST F.DIST F.DIST.RT F.INV F.INV.RT F.TEST FIELDVALUE FILTER FILTERXML
+  FLOOR.MATH FLOOR.PRECISE FORECAST.ETS FORECAST.ETS.CONFINT FORECAST.ETS.SEASONALITY FORECAST.ETS.STAT FORECAST.LINEAR FORMULATEXT
+  GAMMA GAMMA.DIST GAMMA.INV GAMMALN.PRECISE GAUSS GROUPBY HSTACK IFNA IFS IMAGE IMCOSH IMCOT IMCSC IMCSCH IMSEC IMSECH IMSINH IMTAN
+  ISFORMULA ISO.CEILING ISOMITTED ISOWEEKNUM LAMBDA LET LOGNORM.DIST LOGNORM.INV MAKEARRAY MAP MAXIFS MINIFS MODE.MULT MODE.SNGL MUNIT
+  NEGBINOM.DIST NETWORKDAYS.INTL NORM.DIST NORM.INV NORM.S.DIST NORM.S.INV NUMBERVALUE PDURATION PERCENTILE.EXC PERCENTILE.INC
+  PERCENTRANK.EXC PERCENTRANK.INC PERMUTATIONA PHI PIVOTBY POISSON.DIST QUARTILE.EXC QUARTILE.INC RANDARRAY RANK.AVG RANK.EQ REDUCE
+  RRI SCAN SEC SECH SEQUENCE SHEET SHEETS SKEW.P SORT SORTBY STDEV.P STDEV.S SWITCH T.DIST T.DIST.2T T.DIST.RT T.INV T.INV.2T T.TEST
+  TAKE TEXTAFTER TEXTBEFORE TEXTJOIN TEXTSPLIT TOCOL TOROW UNICHAR UNICODE UNIQUE VALUETOTEXT VAR.P VAR.S VSTACK WEBSERVICE
+  WEIBULL.DIST WORKDAY.INTL WRAPCOLS WRAPROWS XLOOKUP XMATCH XOR`.split(/\s+/));
+const XLWS = new Set(['FILTER', 'SORT']);
 export const err = (code) => ({ error: code });
 
 // ---------- Русские имена функций ----------
@@ -26,7 +49,12 @@ const RU = {
 
 // ---------- Токенизатор ----------
 // Токены: { type, text, ... }; text — исходный текст (для переписывания формулы без потери пробелов)
-const SHEET_RE = /^(?:'((?:[^']|'')+)'|([A-Za-zА-Яа-яЁё_][\wА-Яа-яЁё.]*))!/;
+// Префикс листа: Лист1!, 'Мой лист'!, трёхмерный Лист1:Лист3! или 'Лист 1:Лист 3'!
+const SHEET_RE = /^(?:'((?:[^']|'')+)'|([A-Za-zА-Яа-яЁё_][\wА-Яа-яЁё.]*(?::[A-Za-zА-Яа-яЁё_][\wА-Яа-яЁё.]*)?))!/;
+const splitSheets = (name) => {
+  const i = name.indexOf(':');
+  return i < 0 ? [name, null] : [name.slice(0, i), name.slice(i + 1)];
+};
 export function tokenize(src) {
   const out = [];
   let i = 0;
@@ -36,17 +64,34 @@ export function tokenize(src) {
     let m;
     if ((m = /^\s+/.exec(rest))) { out.push({ type: 'ws', text: m[0] }); i += m[0].length; continue; }
     if ((m = /^"((?:[^"]|"")*)"/.exec(rest))) { out.push({ type: 'str', text: m[0], value: m[1].replace(/""/g, '"') }); i += m[0].length; continue; }
-    if ((m = /^#(?:DIV\/0!|VALUE!|REF!|NAME\?|N\/A|NUM!|NULL!|CIRC!)/.exec(rest))) { out.push({ type: 'err', text: m[0] }); i += m[0].length; continue; }
-    // ссылка (возможно с листом): Лист1!A1, 'Мой лист'!$B$2
-    let sheet = null;
+    if ((m = /^#(?:DIV\/0!|VALUE!|REF!|NAME\?|N\/A|NUM!|NULL!|CIRC!|SPILL!|CALC!|ДЕЛ\/0!|ЗНАЧ!|ССЫЛКА!|ИМЯ\?|Н\/Д|ЧИСЛО!|ПУСТО!|ПЕРЕНОС!|ВЫЧИСЛ!|ЦИКЛ!)/.exec(rest))) {
+      out.push({ type: 'err', text: m[0], code: ERR_EN[m[0]] || m[0] }); i += m[0].length; continue;
+    }
+    // ссылка (возможно с листом): Лист1!A1, 'Мой лист'!$B$2, Лист1:Лист3!A1; целые столбцы A:C и строки 1:5
+    let sheet = null; let sheet2 = null;
     let sheetText = '';
     if ((m = SHEET_RE.exec(rest))) {
       const after = rest.slice(m[0].length);
-      if (/^\$?[A-Za-z]{1,3}\$?\d/.test(after)) { sheet = m[1] ? m[1].replace(/''/g, "'") : m[2]; sheetText = m[0]; }
+      if (/^(\$?[A-Za-z]{1,3}\$?\d|\$?[A-Za-z]{1,3}:\$?[A-Za-z]{1,3}(?![\w(])|\$?\d{1,7}:\$?\d)/.test(after)) {
+        [sheet, sheet2] = splitSheets(m[1] ? m[1].replace(/''/g, "'") : m[2]);
+        sheetText = m[0];
+      }
     }
     const refPart = rest.slice(sheetText.length);
+    if ((m = /^(\$?)([A-Za-z]{1,3}):(\$?)([A-Za-z]{1,3})(?![\w(!.])/.exec(refPart))) {
+      const c1 = colIndex(m[2]); const c2 = colIndex(m[4]);
+      out.push({ type: 'cols', text: sheetText + m[0], sheet, sheet2, abs1: !!m[1], c1: Math.min(c1, c2), abs2: !!m[3], c2: Math.max(c1, c2) });
+      i += sheetText.length + m[0].length;
+      continue;
+    }
+    if ((m = /^(\$?)(\d{1,7}):(\$?)(\d{1,7})(?![\d.])/.exec(refPart))) {
+      const r1 = +m[2] - 1; const r2 = +m[4] - 1;
+      out.push({ type: 'rows', text: sheetText + m[0], sheet, sheet2, abs1: !!m[1], r1: Math.min(r1, r2), abs2: !!m[3], r2: Math.max(r1, r2) });
+      i += sheetText.length + m[0].length;
+      continue;
+    }
     if ((m = /^(\$?)([A-Za-z]{1,3})(\$?)(\d{1,7})(?![\w(])/.exec(refPart))) {
-      out.push({ type: 'ref', text: sheetText + m[0], sheet, absC: !!m[1], c: colIndex(m[2]), absR: !!m[3], r: +m[4] - 1 });
+      out.push({ type: 'ref', text: sheetText + m[0], sheet, sheet2, absC: !!m[1], c: colIndex(m[2]), absR: !!m[3], r: +m[4] - 1 });
       i += sheetText.length + m[0].length;
       continue;
     }
@@ -54,7 +99,7 @@ export function tokenize(src) {
       out.push({ type: 'num', text: m[0], value: parseFloat(m[0]) }); i += m[0].length; continue;
     }
     if ((m = /^([A-Za-zА-Яа-яЁё_][\wА-Яа-яЁё.]*)\s*\(/.exec(rest))) {
-      const name = m[1].toUpperCase();
+      const name = m[1].toUpperCase().replace(/^_XLFN\.(_XLWS\.)?/, '');
       out.push({ type: 'func', text: m[1], name: RU[name] || name });
       i += m[1].length;
       continue;
@@ -69,7 +114,8 @@ export function tokenize(src) {
     if (ch === '(' || ch === ')') { out.push({ type: ch, text: ch }); i++; continue; }
     if (ch === ',' || ch === ';') { out.push({ type: 'sep', text: ch }); i++; continue; }
     if (ch === ':') { out.push({ type: ':', text: ch }); i++; continue; }
-    if ((m = /^[A-Za-zА-Яа-яЁё_][\wА-Яа-яЁё.]*/.exec(rest))) { out.push({ type: 'name', text: m[0] }); i += m[0].length; continue; }
+    // имя (именованный диапазон, параметр LET); _xlpm. — префикс параметров в файле
+    if ((m = /^[A-Za-zА-Яа-яЁё_\\][\wА-Яа-яЁё.]*/.exec(rest))) { out.push({ type: 'name', text: m[0], name: m[0].replace(/^_xlpm\./i, '') }); i += m[0].length; continue; }
     out.push({ type: 'bad', text: ch });
     i++;
   }
@@ -92,15 +138,17 @@ export function parse(src) {
       case 'num': return { t: 'num', v: t.value };
       case 'str': return { t: 'str', v: t.value };
       case 'bool': return { t: 'bool', v: t.value };
-      case 'err': return { t: 'err', v: t.text };
+      case 'err': return { t: 'err', v: t.code };
       case 'ref': {
         if (peek() && peek().type === ':' && toks[p + 1] && toks[p + 1].type === 'ref') {
           next();
           const b = next();
-          return { t: 'range', sheet: t.sheet, r1: Math.min(t.r, b.r), c1: Math.min(t.c, b.c), r2: Math.max(t.r, b.r), c2: Math.max(t.c, b.c) };
+          return { t: 'range', sheet: t.sheet, sheet2: t.sheet2, r1: Math.min(t.r, b.r), c1: Math.min(t.c, b.c), r2: Math.max(t.r, b.r), c2: Math.max(t.c, b.c) };
         }
-        return { t: 'ref', sheet: t.sheet, r: t.r, c: t.c };
+        return t.sheet2 ? { t: 'range', sheet: t.sheet, sheet2: t.sheet2, r1: t.r, c1: t.c, r2: t.r, c2: t.c } : { t: 'ref', sheet: t.sheet, r: t.r, c: t.c };
       }
+      case 'cols': return { t: 'range', sheet: t.sheet, sheet2: t.sheet2, r1: 0, r2: MAX_ROWS - 1, c1: t.c1, c2: t.c2, whole: 'col' };
+      case 'rows': return { t: 'range', sheet: t.sheet, sheet2: t.sheet2, r1: t.r1, r2: t.r2, c1: 0, c2: MAX_COLS - 1, whole: 'row' };
       case 'func': {
         expect('(');
         const args = [];
@@ -119,7 +167,7 @@ export function parse(src) {
       case 'op':
         if (t.text === '-' || t.text === '+') return { t: 'un', op: t.text, a: unary() };
         throw new Error('syntax');
-      case 'name': return { t: 'name', v: t.text };
+      case 'name': return { t: 'name', v: t.name };
       default: throw new Error('syntax');
     }
   }
@@ -338,7 +386,11 @@ const FN = {
   },
   COUNT: (a) => a.reduce((s, x) => s + flat(x).filter((v) => typeof v === 'number').length, 0),
   COUNTA: (a) => a.reduce((s, x) => s + flat(x).filter((v) => v != null).length, 0),
-  COUNTBLANK: (a) => a.reduce((s, x) => s + flat(x).filter((v) => v == null || v === '').length, 0),
+  COUNTBLANK: (a) => a.reduce((s, x) => {
+    const filled = flat(x).filter((v) => v != null && v !== '').length;
+    const size = Array.isArray(x) && x.full ? x.full.rows * x.full.cols : flat(x).length;
+    return s + size - filled;
+  }, 0),
   ABS: ([x]) => { const n = toNum(x); return isErr(n) ? n : Math.abs(n); },
   SIGN: ([x]) => { const n = toNum(x); return isErr(n) ? n : Math.sign(n); },
   INT: ([x]) => { const n = toNum(x); return isErr(n) ? n : Math.floor(n); },
@@ -479,16 +531,25 @@ export function evaluate(node, ctx) {
     case 'num': case 'str': case 'bool': return node.v;
     case 'err': return err(node.v);
     case 'empty': return null;
-    case 'name': return err(ERR.NAME);
+    case 'name': return ctx.name ? ctx.name(node.v) : err(ERR.NAME);
     case 'ref': return ctx.get(node.sheet || ctx.sheet, node.r, node.c);
     case 'range': {
-      if ((node.r2 - node.r1 + 1) * (node.c2 - node.c1 + 1) > 2_000_000) return err(ERR.NUM);
+      // трёхмерная ссылка — те же ячейки на листах от первого до последнего (строки складываются)
+      const sheets = node.sheet2 ? (ctx.sheetsBetween ? ctx.sheetsBetween(node.sheet, node.sheet2) : null) : [node.sheet || ctx.sheet];
+      if (!sheets) return err(ERR.REF);
       const out = [];
-      for (let r = node.r1; r <= node.r2; r++) {
-        const row = [];
-        for (let c = node.c1; c <= node.c2; c++) row.push(ctx.get(node.sheet || ctx.sheet, r, c));
-        out.push(row);
+      for (const sh of sheets) {
+        // целые столбцы/строки — только занятая часть листа (дальше пусто); полный размер — в out.full
+        let { r2, c2 } = node;
+        if (node.whole && ctx.extent) { const e = ctx.extent(sh); r2 = Math.min(r2, e.r); c2 = Math.min(c2, e.c); }
+        if ((r2 - node.r1 + 1) * (c2 - node.c1 + 1) > 2_000_000) return err(ERR.NUM);
+        for (let r = node.r1; r <= r2; r++) {
+          const row = [];
+          for (let c = node.c1; c <= c2; c++) row.push(ctx.get(sh, r, c));
+          out.push(row);
+        }
       }
+      if (node.whole) out.full = { rows: (node.r2 - node.r1 + 1) * sheets.length, cols: node.c2 - node.c1 + 1 };
       return out;
     }
     case 'pct': { const n = toNum(scalar(evaluate(node.a, ctx))); return isErr(n) ? n : n / 100; }
@@ -544,7 +605,12 @@ const scalar = (v) => (Array.isArray(v) ? (v[0] ? v[0][0] : null) : v);
 // ---------- Переписывание формул ----------
 // Привести к хранимому виду: английские имена функций, «,» между аргументами
 export function canonical(src) {
-  return tokenize(src).map((t) => (t.type === 'func' ? t.name : t.type === 'sep' ? ',' : t.type === 'bool' ? (t.value ? 'TRUE' : 'FALSE') : t.text)).join('');
+  return tokenize(src).map((t) => (t.type === 'func' ? t.name : t.type === 'sep' ? ',' : t.type === 'bool' ? (t.value ? 'TRUE' : 'FALSE')
+    : t.type === 'err' ? t.code : t.type === 'name' ? t.name : t.text)).join('');
+}
+// Хранимая формула → запись в файл: префиксы _xlfn. у функций новее Excel 2007
+export function fileFormula(src) {
+  return tokenize(src).map((t) => (t.type === 'func' && FUTURE.has(t.name) ? `_xlfn.${XLWS.has(t.name) ? '_xlws.' : ''}${t.name}` : t.text)).join('');
 }
 
 // Формула, введённая пользователем (русская запись): «1,5» между цифрами — десятичная запятая,
@@ -570,24 +636,47 @@ export function localize(src) {
     if (t.type === 'sep') return ';';
     if (t.type === 'num') return t.text.replace('.', ',');
     if (t.type === 'bool') return t.value ? 'ИСТИНА' : 'ЛОЖЬ';
+    if (t.type === 'err') return errText(t.code);
     return t.text;
   }).join('');
 }
 
-const refText = (t, r, c) => {
-  let sheet = '';
-  if (t.sheet) sheet = /^[A-Za-zА-Яа-яЁё_][\wА-Яа-яЁё.]*$/.test(t.sheet) ? `${t.sheet}!` : `'${t.sheet.replace(/'/g, "''")}'!`;
-  return `${sheet}${t.absC ? '$' : ''}${colName(c)}${t.absR ? '$' : ''}${r + 1}`;
-};
+// Префикс листа для записи: без кавычек, если имя простое (у трёхмерной ссылки — оба имени)
+const PLAIN_SHEET = /^[A-Za-zА-Яа-яЁё_][\wА-Яа-яЁё.]*$/;
+export function sheetPrefix(sheet, sheet2 = null) {
+  if (!sheet) return '';
+  const both = sheet2 ? `${sheet}:${sheet2}` : sheet;
+  return PLAIN_SHEET.test(sheet) && (!sheet2 || PLAIN_SHEET.test(sheet2)) ? `${both}!` : `'${both.replace(/'/g, "''")}'!`;
+}
+const refText = (t, r, c) => `${sheetPrefix(t.sheet, t.sheet2)}${t.absC ? '$' : ''}${colName(c)}${t.absR ? '$' : ''}${r + 1}`;
 
 // Сдвиг ссылок: fn({ r, c, absR, absC, sheet }) → { r, c } | null (null → #REF!)
 // Диапазоны «A1:B3» переписываются по концам; если удалён конец — диапазон сжимается (endFn), полностью — #REF!
 export function rewriteRefs(src, fn) {
   const toks = tokenize(src);
   let out = '';
+  // имя второго листа трёхмерной ссылки — через fn (переименование листа)
+  const sheet2Of = (t) => (t.sheet2 ? ((fn({ ...t, sheet: t.sheet2, r: 0, c: 0 }, 'sheet2') || {}).sheet ?? t.sheet2) : null);
   for (let i = 0; i < toks.length; i++) {
     const t = toks[i];
+    if (t.type === 'cols' || t.type === 'rows') {
+      // целые столбцы/строки: меняется только своя ось
+      const col = t.type === 'cols';
+      const a = fn({ ...t, whole: col ? 'col' : 'row', r: col ? 0 : t.r1, c: col ? t.c1 : 0, absR: col ? true : t.abs1, absC: col ? t.abs1 : true }, 'start');
+      const b = fn({ ...t, whole: col ? 'col' : 'row', r: col ? 0 : t.r2, c: col ? t.c2 : 0, absR: col ? true : t.abs2, absC: col ? t.abs2 : true }, 'end');
+      if (!a || !b || (col ? b.c < a.c : b.r < a.r)) { out += '#REF!'; continue; }
+      const pre = sheetPrefix(a && 'sheet' in a ? a.sheet : t.sheet, sheet2Of(t));
+      out += col ? `${pre}${t.abs1 ? '$' : ''}${colName(a.c)}:${t.abs2 ? '$' : ''}${colName(b.c)}`
+        : `${pre}${t.abs1 ? '$' : ''}${a.r + 1}:${t.abs2 ? '$' : ''}${b.r + 1}`;
+      continue;
+    }
     if (t.type !== 'ref') { out += t.text; continue; }
+    if (t.sheet2) { // трёхмерная ссылка: меняется только имя листа
+      const p = fn(t, 'single');
+      out += refText({ ...t, sheet: p && 'sheet' in p ? p.sheet : t.sheet, sheet2: sheet2Of(t) }, t.r, t.c);
+      if (toks[i + 1] && toks[i + 1].type === ':' && toks[i + 2] && toks[i + 2].type === 'ref') { out += `:${refText({ ...toks[i + 2], sheet: null }, toks[i + 2].r, toks[i + 2].c)}`; i += 2; }
+      continue;
+    }
     // диапазон?
     const isRange = toks[i + 1] && toks[i + 1].type === ':' && toks[i + 2] && toks[i + 2].type === 'ref';
     if (isRange) {
@@ -608,8 +697,8 @@ export function rewriteRefs(src, fn) {
 // Копирование формулы со смещением (dr, dc): относительные ссылки сдвигаются, абсолютные ($) — нет
 export function offsetFormula(src, dr, dc) {
   return rewriteRefs(src, (t) => {
-    const r = t.absR ? t.r : t.r + dr;
-    const c = t.absC ? t.c : t.c + dc;
+    const r = t.absR || t.whole === 'col' ? t.r : t.r + dr;
+    const c = t.absC || t.whole === 'row' ? t.c : t.c + dc;
     return r < 0 || c < 0 ? null : { r, c };
   });
 }
@@ -617,7 +706,8 @@ export function offsetFormula(src, dr, dc) {
 // Вставка/удаление строк или столбцов на листе sheet: axis 'row'|'col', at, count (>0 — вставка, <0 — удаление)
 export function shiftFormula(src, { sheet, current, axis, at, count }) {
   return rewriteRefs(src, (t, part) => {
-    if ((t.sheet || current) !== sheet) return { r: t.r, c: t.c };
+    if ((t.sheet || current) !== sheet || part === 'sheet2' || t.sheet2) return { r: t.r, c: t.c };
+    if ((t.whole === 'col' && axis === 'row') || (t.whole === 'row' && axis === 'col')) return { r: t.r, c: t.c };
     const k = axis === 'row' ? 'r' : 'c';
     let v = t[k];
     if (count > 0) { if (v >= at) v += count; }

@@ -1,5 +1,5 @@
 // Числовые форматы и разбор ввода — с русскими разделителями (пробел между разрядами, запятая в дробной части).
-import { dateToSerial, isErr, serialToDate } from './formula.js';
+import { dateToSerial, errText, isErr, serialToDate } from './formula.js';
 
 // Встроенные форматы Excel (numFmtId → код), которые встречаются в файлах
 export const BUILTIN_FMT = {
@@ -20,7 +20,7 @@ export const FORMAT_PRESETS = [
 ];
 
 export const isDateFormat = (code) => {
-  const c = String(code || '').replace(/"[^"]*"/g, '').replace(/\[[^\]]*\]/g, '');
+  const c = String(code || '').replace(/"[^"]*"/g, '').replace(/\\./g, '').replace(/\[[^\]]*\]/g, '');
   return /[dmyhs]/i.test(c) && !/^[#0.,%\s]*$/.test(c);
 };
 
@@ -57,13 +57,14 @@ function formatDate(v, code) {
   const { y, m, d, hh, mm, ss } = serialToDate(v);
   const p2 = (n) => String(n).padStart(2, '0');
   const MON = ['янв', 'фев', 'мар', 'апр', 'май', 'июн', 'июл', 'авг', 'сен', 'окт', 'ноя', 'дек'];
-  let c = String(code).replace(/"([^"]*)"/g, '$1').replace(/\[\$-[^\]]*\]/g, '');
+  const c = String(code).replace(/\[\$-[^\]]*\]/g, '');
   if (/^\[h\]/i.test(c)) {
     const total = Math.round(v * 86400);
     return `${Math.floor(total / 3600)}:${p2(Math.floor(total / 60) % 60)}:${p2(total % 60)}`;
   }
   // минуты «mm» после h или перед s — иначе месяц
-  const tokens = c.match(/yyyy|yy|mmmm|mmm|mm|m|dd|d|hh|h|ss|s|AM\/PM|./gi) || [];
+  // текст в кавычках и символ после «\» — как есть
+  const tokens = c.match(/"[^"]*"|\\.|yyyy|yy|mmmm|mmm|mm|m|dd|d|hh|h|ss|s|AM\/PM|./gi) || [];
   let out = '';
   tokens.forEach((t, i) => {
     const low = t.toLowerCase();
@@ -83,7 +84,7 @@ function formatDate(v, code) {
       case 'ss': out += p2(ss); break;
       case 's': out += ss; break;
       case 'am/pm': break;
-      default: out += t.replace(/\\/g, '');
+      default: out += t.startsWith('"') ? t.slice(1, -1) : t.startsWith('\\') ? t.slice(1) : t;
     }
   });
   return out.trim();
@@ -92,7 +93,7 @@ function formatDate(v, code) {
 // Значение ячейки → текст для показа
 export function formatValue(v, code = 'General') {
   if (v == null) return '';
-  if (isErr(v)) return v.error;
+  if (isErr(v)) return errText(v.error); // как в русском Excel: #ДЕЛ/0!, #Н/Д…
   if (typeof v === 'boolean') return v ? 'ИСТИНА' : 'ЛОЖЬ';
   if (typeof v === 'string') return v;
   if (!isFinite(v)) return '#NUM!';

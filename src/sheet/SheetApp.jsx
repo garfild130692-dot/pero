@@ -2,18 +2,25 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Grid, { cellText } from './Grid.jsx';
 import SheetRibbon from './SheetRibbon.jsx';
-import { addr, key, parseRange, rangeName } from './address.js';
-import { isErr } from './formula.js';
+import { addr, colName, key, parseRange, rangeName } from './address.js';
+import { isErr, localize, sheetPrefix } from './formula.js';
+
+// $A$1:$B$5 — абсолютная ссылка на выделение (для имён)
+const absRange = (rg) => {
+  const a = `$${colName(rg.c1)}$${rg.r1 + 1}`;
+  return rg.r1 === rg.r2 && rg.c1 === rg.c2 ? a : `${a}:$${colName(rg.c2)}$${rg.r2 + 1}`;
+};
 import { formatValue } from './format.js';
 import {
   DEFAULT_COL_W, DEFAULT_ROW_H, addSheet, autoSumFormula, blockToText, clearRange, collapseGroup, copyBlock, deleteSheet, expandGroup, fill, inputOf,
-  isHidden, mergeAt, newWorkbook, pasteBlock, pasteText, renameSheet, setColWidth, setInput, setRowHeight, showLevels, usedRange,
+  isHidden, isValidName, mergeAt, nameTarget, newWorkbook, setNames, pasteBlock, pasteText, renameSheet, setColWidth, setInput, setRowHeight, showLevels, usedRange,
 } from './model.js';
 import { exportXlsx, importXlsx } from './xlsx.js';
 import { exportCsv, importCsv } from './csv.js';
 import { pageOf, printGeometry, printScale } from './pageSetup.js';
 import { isLocked, isProtected, protectionViolation, setProtection } from './protect.js';
 import ProtectDialog from './ProtectDialog.jsx';
+import NamesDialog from './NamesDialog.jsx';
 
 const PROTECTED_MSG = 'Ячейка на защищённом листе. Чтобы изменить её, снимите защиту: «Рецензирование → Снять защиту листа».';
 import * as fileApi from '../fileApi.js';
@@ -37,6 +44,7 @@ export default function SheetApp({ initialFile, onOpenOther, onNewDoc, autosaveS
   const [renaming, setRenaming] = useState(null);
   const [notice, setNotice] = useState(null); // временное сообщение в строке состояния
   const [protectDlg, setProtectDlg] = useState(null); // 'protect' | 'unprotect'
+  const [namesDlg, setNamesDlg] = useState(false);
   const noticeTimer = useRef(null);
   const flash = useCallback((text) => {
     setNotice(text);
@@ -248,6 +256,7 @@ export default function SheetApp({ initialFile, onOpenOther, onNewDoc, autosaveS
 
   const rg = normSel(sel);
   const ribbonApi = {
+    names: () => setNamesDlg(true),
     protect: () => setProtectDlg(isProtected(sheet) ? 'unprotect' : 'protect'),
     wb, sheet, si, sel, rg, change, undo, redo, canUndo: history.current.undo.length > 0, canRedo: history.current.redo.length > 0,
     file: { newDocument, newBook, open, openHere, save: () => save(), saveAs: () => write(true), saveCsv, print: () => fileApi.print(), pdf: () => fileApi.exportPdf(doc.name.replace(/\.(xlsx|csv)$/i, '') + '.pdf') },
@@ -340,8 +349,22 @@ export default function SheetApp({ initialFile, onOpenOther, onNewDoc, autosaveS
         <input className="name-box" aria-label="Адрес" value={rangeName(rg).replace(/^(\w+):\1$/, '$1')} onChange={() => {}}
           onKeyDown={(e) => {
             if (e.key !== 'Enter') return;
-            const p = parseRange(e.currentTarget.value.toUpperCase());
+            const text = e.currentTarget.value.trim();
+            const p = parseRange(text.toUpperCase());
             if (p) setSel({ r: p.r1, c: p.c1, r2: p.r2, c2: p.c2 });
+            else {
+              const t = nameTarget(wb, text, sheet.name);
+              if (t) {
+                const i = wb.sheets.findIndex((x) => x.name.toLowerCase() === t.sheet.toLowerCase());
+                if (i >= 0 && i !== si) setWb((w) => ({ ...w, active: i }));
+                setSel({ r: t.r1, c: t.c1, r2: t.r2, c2: t.c2 });
+              } else if (isValidName(text)) {
+                // новое имя для выделенного диапазона, как в Excel
+                const ref = `${sheetPrefix(sheet.name)}${absRange(rg)}`;
+                change((w) => setNames(w, [...(w.names || []), { name: text, text: ref, sheet: null }]));
+                flash(`Имя «${text}» присвоено диапазону ${absRange(rg).replace(/\$/g, '')}`);
+              } else flash('Неверная ссылка или имя');
+            }
             gridRef.current && gridRef.current.focus();
           }}
           onFocus={(e) => e.target.select()} />
@@ -401,6 +424,11 @@ export default function SheetApp({ initialFile, onOpenOther, onNewDoc, autosaveS
         {isErr(activeCell && activeCell.v) && <span className="warn">{errorHint(activeCell.v.error)}</span>}
       </div>
       <PrintTable sheet={sheet} />
+      {namesDlg && (
+        <NamesDialog wb={wb} refOfSelection={localize(`${sheetPrefix(sheet.name)}${absRange(rg)}`)}
+          onClose={() => { setNamesDlg(false); gridRef.current && gridRef.current.focus(); }}
+          onSave={(list) => { setNamesDlg(false); change((w) => setNames(w, list)); gridRef.current && gridRef.current.focus(); }} />
+      )}
       {protectDlg && (
         <ProtectDialog mode={protectDlg} protection={sheet.protection} onClose={() => { setProtectDlg(null); gridRef.current && gridRef.current.focus(); }}
           onDone={(p) => { setProtectDlg(null); change((w) => setProtection(w, si, p)); gridRef.current && gridRef.current.focus(); }} />

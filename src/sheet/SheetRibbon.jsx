@@ -1,5 +1,5 @@
 // Лента табличного редактора: Файл / Главная (буфер, шрифт, выравнивание, число, ячейки, редактирование) /
-// Разметка страницы (параметры печати) / Данные (структура) / Рецензирование (защита листа) / Вид (закрепление областей).
+// Разметка страницы (параметры печати) / Формулы (имена) / Данные (структура) / Рецензирование (защита листа) / Вид (закрепление областей).
 import React, { useState } from 'react';
 import { Icon } from '../icons.jsx';
 import { clipboard, reportProblem } from '../fileApi.js';
@@ -129,7 +129,7 @@ export default function SheetRibbon({ api }) {
   const titles = sheet.printTitles || {};
 
   const prot = isProtected(sheet);
-  const tabs = [['file', 'Файл'], ['home', 'Главная'], ['layout', 'Разметка страницы'], ['data', 'Данные'], ['review', 'Рецензирование'], ['view', 'Вид']];
+  const tabs = [['file', 'Файл'], ['home', 'Главная'], ['layout', 'Разметка страницы'], ['formulas', 'Формулы'], ['data', 'Данные'], ['review', 'Рецензирование'], ['view', 'Вид']];
   return (
     <div className="ribbon">
       <div className="rb-tabs">
@@ -305,6 +305,16 @@ export default function SheetRibbon({ api }) {
             <Group title="Печать">
               <Btn big icon="print" label="Печать" onClick={file.print} title="Печать (Ctrl+P)" />
               <Btn big icon="pdf" label="PDF" onClick={file.pdf} title="Экспорт в PDF" />
+            </Group>
+          </>
+        )}
+        {tab === 'formulas' && (
+          <>
+            <Group title="Библиотека функций">
+              <Btn title="Автосумма (Alt+=)" onClick={api.autoSum}><T>Σ</T> Автосумма</Btn>
+            </Group>
+            <Group title="Определённые имена">
+              <Btn big icon="names" label="Диспетчер имён" onClick={api.names} title="Именованные диапазоны и константы книги" />
             </Group>
           </>
         )}

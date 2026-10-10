@@ -1,7 +1,8 @@
 // Модель книги и операции над ней. Все операции возвращают новую книгу (неизменённые листы/ячейки — общие),
 // поэтому отмена — просто стек предыдущих книг.
 //
-// Книга: { sheets: Sheet[], active }
+// Книга: { sheets: Sheet[], active, names? }
+// names: [{ name, text — формула имени в хранимом виде (Данные!$C$2:$C$11, 0.2), sheet — имя листа (локальное) | null }]
 // Лист:  { name, cells: Map<"r,c", Cell>, colW: { c: px }, rowH: { r: px }, merges: Range[],
 //          rowInfo/colInfo: { n: { hidden, level, collapsed, xf } } — скрытие, группировка, стиль строки/столбца (xf файла),
 //          src: { part, rid, name, shifts } — лист из файла (экспорт переписывает его поверх исходного XML) }
@@ -34,6 +35,47 @@ export function recalc(wb) {
     if (!astCache.has(f)) { try { astCache.set(f, parse(f)); } catch { astCache.set(f, null); } }
     return astCache.get(f);
   };
+  // занятая часть листа (для ссылок на целые столбцы и строки)
+  const extents = new Map();
+  const extent = (name) => {
+    const k = String(name).toLowerCase();
+    if (!extents.has(k)) {
+      const sh = sheetByName(wb, name);
+      let r = -1; let c = -1;
+      if (sh) for (const key0 of sh.cells.keys()) { const [rr, cc] = unkey(key0); if (rr > r) r = rr; if (cc > c) c = cc; }
+      extents.set(k, { r, c });
+    }
+    return extents.get(k);
+  };
+  // листы трёхмерной ссылки: от первого до последнего по порядку в книге
+  const sheetsBetween = (a, b) => {
+    const i = wb.sheets.findIndex((x) => x.name.toLowerCase() === String(a).toLowerCase());
+    const j = wb.sheets.findIndex((x) => x.name.toLowerCase() === String(b).toLowerCase());
+    if (i < 0 || j < 0) return null;
+    return wb.sheets.slice(Math.min(i, j), Math.max(i, j) + 1).map((x) => x.name);
+  };
+  // именованные диапазоны и константы: сначала имя листа (локальное), потом книги
+  const namesBusy = new Set();
+  const nameValue = (sheetName) => (n) => {
+    const list = wb.names || [];
+    const lc = n.toLowerCase();
+    const def = list.find((x) => x.name.toLowerCase() === lc && x.sheet && x.sheet.toLowerCase() === String(sheetName).toLowerCase())
+      || list.find((x) => x.name.toLowerCase() === lc && !x.sheet);
+    if (!def) return err(ERR.NAME);
+    const key0 = `${def.sheet || ''}!${lc}`;
+    if (namesBusy.has(key0)) return err(ERR.CIRC);
+    const ast = astOf(def.text);
+    if (!ast) return err(ERR.NAME);
+    namesBusy.add(key0);
+    const v = evaluate(ast, ctxOf(sheetName));
+    namesBusy.delete(key0);
+    return v;
+  };
+  const ctxCache = new Map();
+  const ctxOf = (sheetName) => {
+    if (!ctxCache.has(sheetName)) ctxCache.set(sheetName, { get, sheet: sheetName, extent, sheetsBetween, name: nameValue(sheetName) });
+    return ctxCache.get(sheetName);
+  };
   const get = (sheetName, r, c) => {
     const sheet = sheetByName(wb, sheetName);
     if (!sheet) return err(ERR.REF);
@@ -46,7 +88,7 @@ export function recalc(wb) {
     if (visiting.has(mk)) return err(ERR.CIRC);
     visiting.add(mk);
     const ast = astOf(cell.f);
-    let v = ast ? evaluate(ast, { get, sheet: sheet.name }) : err(ERR.NAME);
+    let v = ast ? evaluate(ast, ctxOf(sheet.name)) : err(ERR.NAME);
     if (Array.isArray(v)) v = v[0] ? v[0][0] : null;
     if (v == null) v = 0; // пустая ссылка в формуле — 0, как в Excel
     visiting.delete(mk);
@@ -205,7 +247,11 @@ export function shiftCells(wb, si, axis, at, count) {
     }
     return next;
   });
-  return recalc({ ...wb, sheets });
+  const names = wb.names && wb.names.map((n) => {
+    const text = shiftFormula(n.text, { sheet: name, current: null, axis, at, count });
+    return text === n.text ? n : { ...n, text };
+  });
+  return recalc({ ...wb, sheets, ...(names ? { names } : {}) });
 }
 // Отрезок a..b после вставки (count > 0) / удаления строк или столбцов; удалён целиком — null
 function shiftSpan(a, b, at, count) {
@@ -490,6 +536,33 @@ export function autoSumFormula(sheet, r, c) {
 }
 const colLetter = (c) => { let s = ''; let n = c + 1; while (n > 0) { const m = (n - 1) % 26; s = String.fromCharCode(65 + m) + s; n = Math.floor((n - 1) / 26); } return s; };
 
+// ---------- Имена ----------
+// Допустимое имя (как в Excel): буква, «_» или «\» в начале, без пробелов, не адрес ячейки (A1, R1C1) и не ИСТИНА/ЛОЖЬ
+export function isValidName(name) {
+  const n = String(name || '');
+  if (!/^[A-Za-zА-Яа-яЁё_\\][\wА-Яа-яЁё.]*$/.test(n) || n.length > 255) return false;
+  if (/^[A-Za-z]{1,3}\d{1,7}$/.test(n) || /^[RrCc]\d*$/.test(n) || /^R\d*C\d*$/i.test(n)) return false;
+  return !/^(TRUE|FALSE|ИСТИНА|ЛОЖЬ)$/i.test(n);
+}
+// Заменить список имён книги (диспетчер имён) — с пересчётом
+export function setNames(wb, names) {
+  const next = { ...wb, names };
+  if (!names || !names.length) delete next.names;
+  return recalc(next);
+}
+// Имя → диапазон для перехода (поле имени): { sheet, r1, c1, r2, c2 } или null
+export function nameTarget(wb, name, sheetName) {
+  const lc = String(name).toLowerCase();
+  const def = (wb.names || []).find((x) => x.name.toLowerCase() === lc && x.sheet && x.sheet.toLowerCase() === String(sheetName).toLowerCase())
+    || (wb.names || []).find((x) => x.name.toLowerCase() === lc && !x.sheet);
+  if (!def) return null;
+  let ast;
+  try { ast = parse(def.text); } catch { return null; }
+  if (ast.t === 'ref') return { sheet: ast.sheet || sheetName, r1: ast.r, c1: ast.c, r2: ast.r, c2: ast.c };
+  if (ast.t === 'range' && !ast.sheet2) return { sheet: ast.sheet || sheetName, r1: ast.r1, c1: ast.c1, r2: Math.min(ast.r2, 1048575), c2: Math.min(ast.c2, 16383) };
+  return null;
+}
+
 // ---------- Листы ----------
 export function addSheet(wb) {
   let n = wb.sheets.length + 1;
@@ -512,7 +585,12 @@ export function renameSheet(wb, si, name) {
     const next = changed ? { ...sheet, cells } : sheet;
     return i === si ? { ...next, name: clean } : next;
   });
-  return recalc({ ...wb, sheets });
+  const names = wb.names && wb.names.map((n) => {
+    const text = n.text.includes('!') ? renameInFormula(n.text, old, clean) : n.text;
+    const sheet = n.sheet && n.sheet.toLowerCase() === old.toLowerCase() ? clean : n.sheet;
+    return text === n.text && sheet === n.sheet ? n : { ...n, text, sheet };
+  });
+  return recalc({ ...wb, sheets, ...(names ? { names } : {}) });
 }
 function renameInFormula(f, old, name) {
   const same = (n) => n && n.toLowerCase() === old.toLowerCase();
@@ -522,7 +600,10 @@ export function deleteSheet(wb, si) {
   if (wb.sheets.length <= 1) return wb;
   const sheets = wb.sheets.filter((_, i) => i !== si);
   const active = Math.max(0, Math.min(wb.active > si ? wb.active - 1 : wb.active, sheets.length - 1));
-  return recalc({ ...wb, sheets, active }); // ссылки на удалённый лист станут #REF! при пересчёте
+  // локальные имена удалённого листа исчезают; ссылки на него станут #REF! при пересчёте
+  const gone = wb.sheets[si].name.toLowerCase();
+  const names = wb.names && wb.names.filter((n) => !(n.sheet && n.sheet.toLowerCase() === gone));
+  return recalc({ ...wb, sheets, active, ...(names ? { names } : {}) });
 }
 
 // Границы использованных данных листа
