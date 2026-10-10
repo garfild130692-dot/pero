@@ -148,6 +148,7 @@ export default function SheetRibbon({ api }) {
               <Btn big icon="open" label="Открыть" onClick={file.open} title="Открыть (Ctrl+O)" />
               <Btn big icon="save" label="Сохранить" onClick={file.save} title="Сохранить (Ctrl+S)" />
               <Btn big icon="saveAs" label="Сохранить как" onClick={file.saveAs} title="Сохранить как (Ctrl+Shift+S)" />
+              <Btn big icon="file" label="CSV" onClick={file.saveCsv} title="Сохранить текущий лист в CSV (разделитель «;», UTF-8)" />
             </Group>
             <Group title="Вывод">
               <Btn big icon="print" label="Печать" onClick={file.print} title="Печать (Ctrl+P)" />

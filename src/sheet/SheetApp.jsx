@@ -10,6 +10,7 @@ import {
   isHidden, mergeAt, newWorkbook, pasteBlock, pasteText, renameSheet, setColWidth, setInput, setRowHeight, showLevels, usedRange,
 } from './model.js';
 import { exportXlsx, importXlsx } from './xlsx.js';
+import { exportCsv, importCsv } from './csv.js';
 import { pageOf, printGeometry, printScale } from './pageSetup.js';
 import { isLocked, isProtected, protectionViolation, setProtection } from './protect.js';
 import ProtectDialog from './ProtectDialog.jsx';
@@ -19,6 +20,8 @@ import * as fileApi from '../fileApi.js';
 import { useAutosave } from '../autosave.js';
 
 const DEFAULT_NAME = 'Книга1.xlsx';
+const isCsv = (name) => /\.csv$/i.test(name || '');
+const CSV_LOSS = 'В формате CSV сохраняется только текущий лист: значения без формул и оформления. Сохранить в CSV?';
 const normSel = (s) => ({ r1: Math.min(s.r, s.r2), c1: Math.min(s.c, s.c2), r2: Math.max(s.r, s.r2), c2: Math.max(s.c, s.c2) });
 
 export default function SheetApp({ initialFile, onOpenOther, onNewDoc, autosaveSec }) {
@@ -72,8 +75,10 @@ export default function SheetApp({ initialFile, onOpenOther, onNewDoc, autosaveS
   // ---------- Файлы ----------
   const load = useCallback(async (file) => {
     try {
-      const { wb: book, warnings: w, kept: k } = await importXlsx(file.data);
-      source.current = file.data;
+      // CSV: книга из одного листа, исходного пакета нет; восстановленная копия CSV — уже .xlsx
+      const csv = isCsv(file.name) && !file.recovered;
+      const { wb: book, warnings: w, kept: k } = csv ? { ...importCsv(file.data, file.name), warnings: {}, kept: {} } : await importXlsx(file.data);
+      source.current = csv ? null : file.data;
       setKept(k || {});
       setWb(book);
       history.current = { undo: [], redo: [] };
@@ -98,8 +103,12 @@ export default function SheetApp({ initialFile, onOpenOther, onNewDoc, autosaveS
 
   const write = async (asNew) => {
     try {
-      const bytes = await exportXlsx(wb, { source: source.current });
-      const r = asNew || !doc.path ? await fileApi.saveFileAs(doc.name, bytes) : await fileApi.saveFile(doc.path, doc.name, bytes);
+      // открытый CSV: «Сохранить» — снова в CSV, «Сохранить как» — книгой .xlsx
+      const csv = isCsv(doc.name) && !asNew;
+      if (csv && (wb.sheets.length > 1 || [...wb.sheets[wb.active].cells.values()].some((c) => c.f != null || c.s)) && !window.confirm(CSV_LOSS)) return false;
+      const bytes = csv ? exportCsv(wb.sheets[wb.active]) : await exportXlsx(wb, { source: source.current });
+      const name = !csv && isCsv(doc.name) ? doc.name.replace(/\.csv$/i, '.xlsx') : doc.name;
+      const r = asNew || !doc.path ? await fileApi.saveFileAs(name, bytes) : await fileApi.saveFile(doc.path, name, bytes);
       if (!r) return false;
       setDoc({ path: r.path, name: r.name });
       setDirty(false);
@@ -124,6 +133,14 @@ export default function SheetApp({ initialFile, onOpenOther, onNewDoc, autosaveS
   const openHere = (f) => {
     if (!f) return;
     if (/\.docx$/i.test(f.name)) { fileApi.setDirty(false); onOpenOther(f); } else load(f);
+  };
+  // «Экспорт в CSV»: копия текущего листа, книга остаётся открытой как была
+  const saveCsv = async () => {
+    try {
+      await fileApi.saveFileAs(`${doc.name.replace(/\.(xlsx|csv)$/i, '')} (${sheet.name}).csv`, exportCsv(sheet));
+    } catch (e) {
+      fileApi.showError('Не удалось сохранить CSV', String(e.message || e));
+    }
   };
   const open = async () => {
     if (!fileApi.isDesktop && dirty && !(await fileApi.confirmDiscard())) return;
@@ -154,7 +171,7 @@ export default function SheetApp({ initialFile, onOpenOther, onNewDoc, autosaveS
     else if (cmd === 'saveAs') h.saveAs();
     else if (cmd === 'openData') { if (/\.docx$/i.test(payload.name)) onOpenOther(payload); else h.load(payload); }
     else if (cmd === 'saveAndClose') h.save(() => fileApi.closeNow());
-    else if (cmd === 'print' || cmd === 'pdf') { if (cmd === 'print') fileApi.print(); else fileApi.exportPdf(doc.name.replace(/\.xlsx$/i, '') + '.pdf'); }
+    else if (cmd === 'print' || cmd === 'pdf') { if (cmd === 'print') fileApi.print(); else fileApi.exportPdf(doc.name.replace(/\.(xlsx|csv)$/i, '') + '.pdf'); }
   }), [onOpenOther, doc.name]);
 
   // ---------- Ввод ----------
@@ -216,7 +233,7 @@ export default function SheetApp({ initialFile, onOpenOther, onNewDoc, autosaveS
 
   // перетаскивание .xlsx/.docx в окно
   const onDrop = async (e) => {
-    const f = [...e.dataTransfer.files].find((x) => /\.(xlsx|docx)$/i.test(x.name));
+    const f = [...e.dataTransfer.files].find((x) => /\.(xlsx|docx|csv)$/i.test(x.name));
     if (!f) return;
     e.preventDefault();
     const p = fileApi.pathForFile(f);
@@ -233,7 +250,7 @@ export default function SheetApp({ initialFile, onOpenOther, onNewDoc, autosaveS
   const ribbonApi = {
     protect: () => setProtectDlg(isProtected(sheet) ? 'unprotect' : 'protect'),
     wb, sheet, si, sel, rg, change, undo, redo, canUndo: history.current.undo.length > 0, canRedo: history.current.redo.length > 0,
-    file: { newDocument, newBook, open, openHere, save: () => save(), saveAs: () => write(true), print: () => fileApi.print(), pdf: () => fileApi.exportPdf(doc.name.replace(/\.xlsx$/i, '') + '.pdf') },
+    file: { newDocument, newBook, open, openHere, save: () => save(), saveAs: () => write(true), saveCsv, print: () => fileApi.print(), pdf: () => fileApi.exportPdf(doc.name.replace(/\.(xlsx|csv)$/i, '') + '.pdf') },
     autoSum: () => {
       const target = rg.r2 > rg.r1 || rg.c2 > rg.c1 ? { r: rg.r2 + 1, c: rg.c1 } : { r: sel.r, c: sel.c };
       const f = rg.r2 > rg.r1 && rg.c1 === rg.c2 ? `SUM(${addr(rg.r1, rg.c1)}:${addr(rg.r2, rg.c1)})` : autoSumFormula(sheet, target.r, target.c);

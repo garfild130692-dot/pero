@@ -402,3 +402,43 @@ print(wb.sheetnames, s['E1'].value, s.freeze_panes, s.row_dimensions[17].hidden,
     expect(cell(back, 'A1').s).toEqual({ bold: true, numFmt: '0.00' });
   });
 });
+
+describe('csv', async () => {
+  const { readFileSync } = await import('fs');
+  const { importCsv, exportCsv, parseCsv, detectDelimiter, decodeText } = await import('../src/sheet/csv.js');
+  const v = (wb, a) => val(wb, a);
+
+  it('CSV из русского Excel: Windows-1251, «;», числа и даты по-русски, ошибки', () => {
+    const { wb, encoding, delimiter } = importCsv(readFileSync('tests/fixtures/book.csv'), 'Продажи.csv');
+    expect([encoding, delimiter, wb.sheets[0].name]).toEqual(['windows-1251', ';', 'Продажи']);
+    expect(v(wb, 'A2')).toBe('Ручка');
+    expect(v(wb, 'C2')).toBe(10);
+    expect(v(wb, 'D6')).toBe(1120);               // «1 120,00»
+    expect(v(wb, 'E2')).toBe(46301);              // 06.10.2026
+    expect(v(wb, 'A8')).toBe(0.125);              // 12,5%
+    expect(v(wb, 'E7')).toEqual({ error: '#DIV/0!' }); // #ДЕЛ/0!
+  });
+
+  it('разбор: кавычки, переводы строк, разделители; UTF-8 с BOM; формулы', () => {
+    expect(parseCsv('a;"b;c";"d""e"\r\n"x\ny";2\n', ';')).toEqual([['a', 'b;c', 'd"e'], ['x\ny', '2']]);
+    expect(detectDelimiter('a,b,c\n1,2,3\n')).toBe(',');
+    expect(detectDelimiter('a\tb\n1\t2\n')).toBe('\t');
+    expect(detectDelimiter('a;b,c\n1;2,5\n')).toBe(';');
+    expect(decodeText(new Uint8Array([0xef, 0xbb, 0xbf, 0x41])).text).toBe('A');
+    const { wb } = importCsv(new TextEncoder().encode('1;2;=A1+B1;=СУММ(A1:B1)\n'));
+    expect(v(wb, 'C1')).toBe(3);
+    expect(formulaOf(wb, 'D1')).toBe('SUM(A1:B1)');
+  });
+
+  it('сохранение: «;», значения как на экране, кавычки по необходимости, UTF-8 с BOM, обратно — те же значения', () => {
+    let wb = put(newWorkbook(), { A1: 'Текст; с разделителем', B1: '1234,5', C1: '12%', A2: 'строка "в кавычках"', B2: '=B1*2', C2: '01.02.2026' });
+    wb = setStyle(wb, 0, { r1: 0, c1: 1, r2: 1, c2: 1 }, { numFmt: '#,##0.00' });
+    const bytes = exportCsv(wb.sheets[0]);
+    expect([...bytes.slice(0, 3)]).toEqual([0xef, 0xbb, 0xbf]);
+    const text = new TextDecoder().decode(bytes.slice(3));
+    expect(text).toBe('"Текст; с разделителем";1 234,50;12%\r\n"строка ""в кавычках""";2 469,00;01.02.2026\r\n');
+    const back = importCsv(bytes).wb;
+    expect([v(back, 'A1'), v(back, 'B1'), v(back, 'C1'), v(back, 'A2'), v(back, 'B2'), v(back, 'C2')])
+      .toEqual(['Текст; с разделителем', 1234.5, 0.12, 'строка "в кавычках"', 2469, v(wb, 'C2')]);
+  });
+});

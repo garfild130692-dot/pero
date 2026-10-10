@@ -13,8 +13,9 @@ const { createAutosave } = require('./autosave.cjs');
 
 const DOCX_FILTER = [{ name: 'Документ Word', extensions: ['docx'] }];
 const XLSX_FILTER = [{ name: 'Книга Excel', extensions: ['xlsx'] }];
-const OPEN_FILTER = [{ name: 'Документы и книги', extensions: ['docx', 'xlsx'] }, ...DOCX_FILTER, ...XLSX_FILTER];
-const FILE_RE = /\.(docx|xlsx)$/i;
+const CSV_FILTER = [{ name: 'CSV (разделитель — точка с запятой)', extensions: ['csv'] }];
+const OPEN_FILTER = [{ name: 'Документы и книги', extensions: ['docx', 'xlsx', 'csv'] }, ...DOCX_FILTER, ...XLSX_FILTER, ...CSV_FILTER];
+const FILE_RE = /\.(docx|xlsx|csv)$/i;
 const NEW_INSTANCE = process.argv.includes('--new-instance');
 const AUTOSAVE_SEC = Math.max(1, +process.env.PERO_AUTOSAVE_SEC || 60);
 
@@ -234,7 +235,7 @@ function createWindow({ kind = 'doc', file = null } = {}) {
   const id = win.webContents.id;
   const s = {
     win,
-    kind: file ? (/\.xlsx$/i.test(file.name) ? 'sheet' : 'doc') : kind,
+    kind: file ? (/\.(xlsx|csv)$/i.test(file.name) ? 'sheet' : 'doc') : kind,
     path: file && file.path ? file.path : null,
     dirty: false,
     forceClose: false,
@@ -400,9 +401,10 @@ ipcMain.handle('file:save', (e, filePath, data) => writeUserFile(stateOf(e), fil
 
 ipcMain.handle('file:saveAs', async (e, suggestedName, data) => {
   const s = stateOf(e);
-  // расширение — по предложенному имени: книга сохраняется в .xlsx, документ — в .docx
-  const ext = /\.xlsx$/i.test(suggestedName || '') ? 'xlsx' : 'docx';
-  const r = await dialog.showSaveDialog(s.win, { defaultPath: suggestedName || 'Документ.docx', filters: ext === 'xlsx' ? XLSX_FILTER : DOCX_FILTER });
+  // расширение — по предложенному имени: книга сохраняется в .xlsx (или .csv), документ — в .docx
+  const ext = (/\.(xlsx|csv)$/i.exec(suggestedName || '') || [, 'docx'])[1].toLowerCase();
+  const filters = { xlsx: XLSX_FILTER, csv: CSV_FILTER, docx: DOCX_FILTER }[ext];
+  const r = await dialog.showSaveDialog(s.win, { defaultPath: suggestedName || 'Документ.docx', filters });
   if (r.canceled || !r.filePath) return null;
   const p = r.filePath.toLowerCase().endsWith(`.${ext}`) ? r.filePath : `${r.filePath}.${ext}`;
   return writeUserFile(s, p, data);
@@ -446,7 +448,7 @@ ipcMain.handle('recovery:open', (e, id) => {
   const m = got.meta;
   const ext = m.kind === 'sheet' ? '.xlsx' : '.docx';
   // «(восстановлен)» — один раз, даже если копию восстанавливают повторно
-  const base = String(m.name || 'Документ').replace(/\.(docx|xlsx)$/i, '').replace(/( \(восстановлен\))+$/, '');
+  const base = String(m.name || 'Документ').replace(/\.(docx|xlsx|csv)$/i, '').replace(/( \(восстановлен\))+$/, '');
   const name = `${base} (восстановлен)${ext}`;
   autosave.write(target.key, { ...m, name, path: null, pid: process.pid }, got.data);
   log.info(`Восстановлен документ: ${m.path || m.name}`);

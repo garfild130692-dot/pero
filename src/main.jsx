@@ -12,7 +12,7 @@ window.addEventListener('error', (e) => fileApi.logError(`${e.message} (${e.file
 window.addEventListener('unhandledrejection', (e) => fileApi.logError(`Необработанный отказ: ${e.reason && e.reason.stack ? e.reason.stack : e.reason}`));
 
 // Одно окно — один файл: текстовый документ (.docx) или книга (.xlsx). Root переключает редакторы.
-const isSheet = (f) => f && /\.xlsx$/i.test(f.name);
+const isSheet = (f) => f && /\.(xlsx|csv)$/i.test(f.name);
 
 function Root() {
   const [boot, setBoot] = useState(null); // { autosaveSec, recovery, notice }
