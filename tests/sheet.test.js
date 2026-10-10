@@ -296,6 +296,36 @@ print(wb.sheetnames, s['E1'].value, s.freeze_panes, s.row_dimensions[17].hidden,
     expect(py).toContain("['Данные 2026', 'Свод', 'Лист4'] Новый текст B2 True 2 B2:B15");
   });
 
+  it('закрепление областей, скрытие и группировка: модель и файл', async () => {
+    const m = await import('../src/sheet/model.js');
+    let wb = put(newWorkbook(), { A1: 'шапка', A2: '1', A3: '2', A4: '3', A5: '=СУММ(A2:A4)' });
+    wb = m.setFreeze(wb, 0, { rows: 1, cols: 1 });
+    wb = m.groupLines(wb, 0, 'row', 1, 3, 1);
+    wb = m.groupLines(wb, 0, 'row', 2, 2, 1);
+    expect(m.outlineRuns(wb.sheets[0], 'row', 1)).toEqual([{ a: 1, b: 3 }]);
+    wb = m.collapseGroup(wb, 0, 'row', 2, 2);          // вложенная — свёрнута
+    wb = m.collapseGroup(wb, 0, 'row', 1, 3);
+    expect(wb.sheets[0].rowInfo[4]).toEqual({ collapsed: true });
+    wb = m.expandGroup(wb, 0, 'row', 1, 3, 1);           // внешняя развёрнута, вложенная осталась свёрнутой
+    expect([1, 2, 3].map((r) => m.isHidden(wb.sheets[0], 'row', r))).toEqual([false, true, false]);
+    wb = m.setHidden(wb, 0, 'col', 3, 4, true);
+    const out = await exportXlsx(wb);
+    const back = (await importXlsx(out)).wb.sheets[0];
+    expect(back.freeze).toEqual({ rows: 1, cols: 1 });
+    expect(back.rowInfo).toEqual(wb.sheets[0].rowInfo);
+    expect(back.colInfo).toEqual({ 3: { hidden: true }, 4: { hidden: true } });
+    // поверх исходного файла: закрепление меняется, остальное в <sheetView> — как было
+    const src = readFileSync('tests/fixtures/preserve.xlsx');
+    let p = (await importXlsx(src)).wb;
+    expect(p.sheets[0].freeze).toEqual({ rows: 1, cols: 1 });
+    p = m.setFreeze(p, 0, { rows: 2, cols: 0 });
+    p = m.groupLines(p, 0, 'col', 1, 2, 1);
+    const JSZip = (await import('jszip')).default;
+    const s1 = await (await JSZip.loadAsync(await exportXlsx(p, { source: src }))).file('xl/worksheets/sheet1.xml').async('string');
+    expect(s1).toContain('<sheetView tabSelected="1" workbookViewId="0"><pane ySplit="2" topLeftCell="A3" activePane="bottomLeft" state="frozen"/><selection pane="bottomLeft"/></sheetView>');
+    expect(s1).toMatch(/<sheetFormatPr defaultRowHeight="15" x14ac:dyDescent="0.25" outlineLevelRow="1" outlineLevelCol="1"\/>/);
+  });
+
   it('новая книга из модели: русские функции → английские, кэшированные значения', async () => {
     let wb = put(newWorkbook(), { A1: '2', A2: '3', A3: '=СУММ(A1:A2)*10', B1: 'текст', B2: '=ЕСЛИ(A3>40;"да";"нет")' });
     wb = setStyle(wb, 0, { r1: 0, c1: 0, r2: 0, c2: 0 }, { bold: true, numFmt: '0.00' });

@@ -4,7 +4,7 @@ import { DOMParser } from '@xmldom/xmldom';
 import { addr, colIndex, key, MAX_COLS, parseRange, rangeName, unkey } from './address.js';
 import { canonical, isErr, offsetFormula, shiftFormula } from './formula.js';
 import { BUILTIN_FMT } from './format.js';
-import { newSheet, recalc, DEFAULT_COL_W, DEFAULT_ROW_H } from './model.js';
+import { maxLevel, newSheet, recalc, DEFAULT_COL_W, DEFAULT_ROW_H } from './model.js';
 
 const NS = 'http://schemas.openxmlformats.org/spreadsheetml/2006/main';
 const R = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships';
@@ -223,6 +223,21 @@ function readSheetData(root, ctx, on) {
 }
 
 const isOn = (el, a) => ['1', 'true'].includes(el.getAttribute(a));
+// Закрепление областей первого представления листа: { rows, cols } или null (разделение без закрепления — не считаем)
+function readFreeze(root) {
+  const view = kid(kid(root, 'sheetViews'), 'sheetView');
+  const pane = view && kid(view, 'pane');
+  if (!pane || !/^frozen/.test(pane.getAttribute('state') || '')) return null;
+  const rows = Math.round(+(pane.getAttribute('ySplit') || 0));
+  const cols = Math.round(+(pane.getAttribute('xSplit') || 0));
+  return rows || cols ? { rows, cols } : null;
+}
+// <pane> и <selection> для закрепления
+function paneXml(f) {
+  if (!f) return '';
+  const act = f.rows && f.cols ? 'bottomRight' : f.rows ? 'bottomLeft' : 'topRight';
+  return `<pane${f.cols ? ` xSplit="${f.cols}"` : ''}${f.rows ? ` ySplit="${f.rows}"` : ''} topLeftCell="${addr(f.rows, f.cols)}" activePane="${act}" state="frozen"/><selection pane="${act}"/>`;
+}
 // Свойства строки/столбца, которые хранит модель: скрыт, уровень группировки, свёрнут, стиль (номер xf исходного файла)
 function readLineInfo(el, styleAttr) {
   const info = {};
@@ -281,6 +296,8 @@ export async function importXlsx(data) {
       const rg = parseRange(m.getAttribute('ref'));
       if (rg) sheet.merges.push(rg);
     }
+    const freeze = readFreeze(root);
+    if (freeze) sheet.freeze = freeze;
     if (kid(root, 'conditionalFormatting')) keep('условное форматирование');
     if (kid(root, 'dataValidations')) keep('проверка данных');
     if (kid(root, 'drawing')) keep('рисунки и диаграммы');
@@ -499,12 +516,30 @@ function dimensionXml(sheet) {
   return `<dimension ref="${rangeName({ r1, c1, r2, c2 })}"/>`;
 }
 
+// Уровни структуры в <sheetFormatPr> (по ним Excel рисует поле с кнопками групп)
+function formatPrXml(tag, sheet) {
+  let t = tag.replace(/\s+outlineLevel(Row|Col)="[^"]*"/g, '');
+  const lr = maxLevel(sheet, 'row'); const lc = maxLevel(sheet, 'col');
+  const attrs = `${lr ? ` outlineLevelRow="${lr}"` : ''}${lc ? ` outlineLevelCol="${lc}"` : ''}`;
+  return attrs ? t.replace(/\s*(\/?)>$/, `${attrs}$1>`) : t;
+}
+// Закрепление в первом <sheetView> исходного листа: прежние <pane>/<selection> заменяются
+function setFreezeXml(xml, f) {
+  const sv = findEl(xml, 'sheetView');
+  if (!sv) return f ? setSheetEl(xml, 'sheetViews', `<sheetViews><sheetView workbookViewId="0">${paneXml(f)}</sheetView></sheetViews>`) : xml;
+  let el = xml.slice(sv.start, sv.end);
+  if (!el.includes('</sheetView>')) el = el.replace(/\s*\/>$/, '></sheetView>');
+  el = el.replace(/<pane\b[^>]*\/>/g, '').replace(/<selection\b[^>]*\/>/g, '');
+  el = el.replace(/^<sheetView\b[^>]*>/, (open) => open + paneXml(f));
+  return xml.slice(0, sv.start) + el + xml.slice(sv.end);
+}
+
 // Новый лист целиком
 function newSheetXml(sheet, active, xfOf, str) {
   const cols = colsXml(sheet, false);
   return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<worksheet xmlns="${NS}" xmlns:r="${R}">` +
-    `${dimensionXml(sheet)}<sheetViews><sheetView workbookViewId="0"${active ? ' tabSelected="1"' : ''}/></sheetViews>` +
-    `<sheetFormatPr defaultRowHeight="15"/>${cols}${sheetDataXml(sheet, (r, c, cell) => cellXml(cell, addr(r, c), xfOf, str), false)}${mergesXml(sheet)}` +
+    `${dimensionXml(sheet)}<sheetViews><sheetView workbookViewId="0"${active ? ' tabSelected="1"' : ''}${sheet.freeze ? `>${paneXml(sheet.freeze)}</sheetView>` : '/>'}</sheetViews>` +
+    `${formatPrXml('<sheetFormatPr defaultRowHeight="15"/>', sheet)}${cols}${sheetDataXml(sheet, (r, c, cell) => cellXml(cell, addr(r, c), xfOf, str), false)}${mergesXml(sheet)}` +
     '<pageMargins left="0.7" right="0.7" top="0.75" bottom="0.75" header="0.3" footer="0.3"/></worksheet>';
 }
 
@@ -577,6 +612,10 @@ function patchSheetXml(xml, sheet, active, root, book, xfOf, str) {
   out = setSheetEl(out, 'mergeCells', mergesXml(sheet));
   out = setSheetEl(out, 'dimension', dimensionXml(sheet));
   out = selectTab(out, active);
+  if (JSON.stringify(readFreeze(root)) !== JSON.stringify(sheet.freeze || null)) out = setFreezeXml(out, sheet.freeze || null);
+  const fp = findEl(out, 'sheetFormatPr');
+  if (fp) out = out.slice(0, fp.start) + formatPrXml(out.slice(fp.start, fp.end), sheet) + out.slice(fp.end);
+  else if (maxLevel(sheet, 'row') || maxLevel(sheet, 'col')) out = setSheetEl(out, 'sheetFormatPr', formatPrXml('<sheetFormatPr defaultRowHeight="15"/>', sheet));
   // вставка/удаление строк и столбцов: диапазоны условного форматирования, проверки, ссылок, фильтра
   const shifts = (sheet.src && sheet.src.shifts) || [];
   if (shifts.length) {

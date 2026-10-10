@@ -4,7 +4,7 @@ import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 're
 import { colName, key } from './address.js';
 import { formatValue } from './format.js';
 import { isErr } from './formula.js';
-import { DEFAULT_COL_W, DEFAULT_ROW_H, mergeAt } from './model.js';
+import { DEFAULT_COL_W, DEFAULT_ROW_H, isHidden, maxLevel, mergeAt, outlineRuns } from './model.js';
 import { cssFontStack } from '../editor/font.js';
 
 const HEAD_W = 46; // ширина заголовков строк
@@ -86,7 +86,9 @@ function cellStyle(cell) {
   };
 }
 
-export default function Grid({ sheet, sel, setSel, editing, setEditing, onCommit, onColWidth, onRowHeight, onRefInsert, gridRef }) {
+const OUT_STEP = 14; // ширина уровня в поле структуры (кнопки «+/−» групп)
+
+export default function Grid({ sheet, sel, setSel, editing, setEditing, onCommit, onColWidth, onRowHeight, onRefInsert, onOutline, gridRef }) {
   const scrollRef = useRef(null);
   const [view, setView] = useState({ top: 0, left: 0, w: 800, h: 500 });
   // размеры области: использованная часть + запас (как «бесконечный» лист)
@@ -95,10 +97,22 @@ export default function Grid({ sheet, sel, setSel, editing, setEditing, onCommit
     for (const k of sheet.cells.keys()) { const i = k.indexOf(','); r = Math.max(r, +k.slice(0, i)); c = Math.max(c, +k.slice(i + 1)); }
     return { r, c };
   }, [sheet.cells]);
-  const rows = Math.max(200, used.r + 60, sel.r2 + 30, sel.r + 30);
-  const cols = Math.max(30, used.c + 12, sel.c2 + 8, sel.c + 8);
-  const colPos = useMemo(() => prefix(cols, (c) => sheet.colW[c] ?? DEFAULT_COL_W), [cols, sheet.colW]);
-  const rowPos = useMemo(() => prefix(rows, (r) => sheet.rowH[r] ?? DEFAULT_ROW_H), [rows, sheet.rowH]);
+  const fr = (sheet.freeze && sheet.freeze.rows) || 0; // закреплённые строки и столбцы
+  const fc = (sheet.freeze && sheet.freeze.cols) || 0;
+  const rows = Math.max(200, used.r + 60, sel.r2 + 30, sel.r + 30, fr + 30);
+  const cols = Math.max(30, used.c + 12, sel.c2 + 8, sel.c + 8, fc + 8);
+  // скрытые строки и столбцы — нулевого размера
+  const colPos = useMemo(() => prefix(cols, (c) => (isHidden(sheet, 'col', c) ? 0 : sheet.colW[c] ?? DEFAULT_COL_W)), [cols, sheet.colW, sheet.colInfo]);
+  const rowPos = useMemo(() => prefix(rows, (r) => (isHidden(sheet, 'row', r) ? 0 : sheet.rowH[r] ?? DEFAULT_ROW_H)), [rows, sheet.rowH, sheet.rowInfo]);
+  // поля структуры (группировка): слева от заголовков строк и над заголовками столбцов
+  const rowLevels = useMemo(() => maxLevel(sheet, 'row'), [sheet.rowInfo]);
+  const colLevels = useMemo(() => maxLevel(sheet, 'col'), [sheet.colInfo]);
+  const rowGut = rowLevels ? (rowLevels + 1) * OUT_STEP + 4 : 0;
+  const colGut = colLevels ? (colLevels + 1) * OUT_STEP + 4 : 0;
+  const HW = HEAD_W + rowGut;
+  const HH = HEAD_H + colGut;
+  const frozenW = colPos[fc];
+  const frozenH = rowPos[fr];
 
   useLayoutEffect(() => {
     const el = scrollRef.current;
@@ -109,27 +123,33 @@ export default function Grid({ sheet, sel, setSel, editing, setEditing, onCommit
     return () => ro.disconnect();
   }, []);
 
-  // прокрутка к активной ячейке
+  // прокрутка к активной ячейке (закреплённая часть не прокручивается)
   useEffect(() => {
     const el = scrollRef.current;
     if (!el) return;
-    const x1 = colPos[sel.c]; const x2 = colPos[sel.c + 1];
-    const y1 = rowPos[sel.r]; const y2 = rowPos[sel.r + 1];
-    const vw = el.clientWidth - HEAD_W; const vh = el.clientHeight - HEAD_H;
-    if (x1 < el.scrollLeft) el.scrollLeft = x1; else if (x2 > el.scrollLeft + vw) el.scrollLeft = x2 - vw;
-    if (y1 < el.scrollTop) el.scrollTop = y1; else if (y2 > el.scrollTop + vh) el.scrollTop = y2 - vh;
-  }, [sel.r, sel.c, colPos, rowPos]);
+    const vw = el.clientWidth - HW - frozenW; const vh = el.clientHeight - HH - frozenH;
+    if (sel.c >= fc) {
+      const x1 = colPos[sel.c] - frozenW; const x2 = colPos[sel.c + 1] - frozenW;
+      if (x1 < el.scrollLeft) el.scrollLeft = x1; else if (x2 > el.scrollLeft + vw) el.scrollLeft = x2 - vw;
+    }
+    if (sel.r >= fr) {
+      const y1 = rowPos[sel.r] - frozenH; const y2 = rowPos[sel.r + 1] - frozenH;
+      if (y1 < el.scrollTop) el.scrollTop = y1; else if (y2 > el.scrollTop + vh) el.scrollTop = y2 - vh;
+    }
+  }, [sel.r, sel.c, colPos, rowPos, fr, fc, HW, HH]);
 
   const r0 = findIndex(rowPos, view.top);
   const r1 = Math.min(rows - 1, findIndex(rowPos, view.top + view.h) + 1);
   const c0 = findIndex(colPos, view.left);
   const c1 = Math.min(cols - 1, findIndex(colPos, view.left + view.w) + 1);
 
-  // ячейка под точкой (координаты относительно области ячеек)
+  // ячейка под точкой: в закреплённой части — без прокрутки
   const cellAt = (clientX, clientY) => {
     const rect = scrollRef.current.getBoundingClientRect();
-    const x = clientX - rect.left - HEAD_W + scrollRef.current.scrollLeft;
-    const y = clientY - rect.top - HEAD_H + scrollRef.current.scrollTop;
+    let x = clientX - rect.left - HW;
+    let y = clientY - rect.top - HH;
+    if (x >= frozenW) x += scrollRef.current.scrollLeft;
+    if (y >= frozenH) y += scrollRef.current.scrollTop;
     return { r: Math.max(0, findIndex(rowPos, Math.max(0, y))), c: Math.max(0, findIndex(colPos, Math.max(0, x))) };
   };
 
@@ -186,103 +206,187 @@ export default function Grid({ sheet, sel, setSel, editing, setEditing, onCommit
 
   const selR1 = Math.min(sel.r, sel.r2); const selR2 = Math.max(sel.r, sel.r2);
   const selC1 = Math.min(sel.c, sel.c2); const selC2 = Math.max(sel.c, sel.c2);
-
-  // видимые ячейки (объединённые — одной ячейкой от левой верхней). Текст без переноса «перетекает»
-  // в пустые соседние ячейки справа (как в Excel), поэтому смотрим и немного левее видимой области.
-  const cellsOut = [];
-  const drawnMerges = new Set();
   const isEmpty = (r, c) => { const x = sheet.cells.get(key(r, c)); return !x || x.v == null || x.v === ''; };
-  for (let r = r0; r <= r1; r++) {
-    for (let c = Math.max(0, c0 - 20); c <= c1; c++) {
-      const m = sheet.merges.length ? mergeAt(sheet, r, c) : null;
-      if (c < c0 && m) continue;
-      let rr = r; let cc = c; let r2 = r; let c2 = c;
-      if (m) {
-        const mk = `${m.r1},${m.c1}`;
-        if (drawnMerges.has(mk)) continue;
-        drawnMerges.add(mk);
-        rr = m.r1; cc = m.c1; r2 = m.r2; c2 = m.c2;
-      }
-      const cell = sheet.cells.get(key(rr, cc));
-      if (!cell && !m) continue;
-      let text = cellText(cell);
-      if (!text && !(cell && cell.s && (cell.s.fill || cell.s.border)) && !m) continue;
-      const st = cellStyle(cell);
-      const own = colPos[c2 + 1] - colPos[cc];
-      const box = { left: colPos[cc], top: rowPos[rr], width: own, height: rowPos[r2 + 1] - rowPos[rr] };
-      const s0 = (cell && cell.s) || {};
-      if (text && typeof cell.v === 'number' && !s0.wrap) text = fitNumber(cell, text, own - 3, st);
-      // перетекание текста вправо
-      let spill = own;
-      if (text && !m && typeof cell.v === 'string' && !s0.wrap && st.textAlign === 'left') {
-        const need = textWidth(text, st) + 6;
-        let cn = c2 + 1;
-        while (spill < need && cn < cols && isEmpty(rr, cn) && !(sheet.merges.length && mergeAt(sheet, rr, cn))) { spill += colPos[cn + 1] - colPos[cn]; cn++; }
-      }
-      if (c < c0 && spill === own) continue;
-      if (spill > own) {
-        // фон и границы — только своей ячейки, текст — поверх соседних
-        cellsOut.push(<div key={`f${rr},${cc}`} className="gcell" style={{ ...box, ...st, color: undefined }} />);
-        cellsOut.push(<div key={`${rr},${cc}`} className="gcell" style={{ ...box, ...st, width: spill, background: undefined, borderTop: undefined, borderLeft: undefined, borderRight: undefined, borderBottom: undefined }}>{text}</div>);
-      } else {
-        cellsOut.push(<div key={`${rr},${cc}`} className={`gcell${m ? ' merged' : ''}`} style={{ ...box, ...st }}>{text}</div>);
+
+  // ячейки строк ra..rb и столбцов ca..cb (объединённые — одной ячейкой от левой верхней). Текст без переноса
+  // «перетекает» в пустые соседние ячейки справа (как в Excel), поэтому смотрим и немного левее области.
+  const renderCells = (ra, rb, ca, cb, cMin = 0) => {
+    const out = [];
+    const drawnMerges = new Set();
+    for (let r = ra; r <= rb; r++) {
+      if (rowPos[r + 1] === rowPos[r] && !(sheet.merges.length && mergeAt(sheet, r, ca))) continue; // скрытая строка
+      for (let c = Math.max(cMin, ca - 20); c <= cb; c++) {
+        const m = sheet.merges.length ? mergeAt(sheet, r, c) : null;
+        if (c < ca && m) continue;
+        let rr = r; let cc = c; let r2 = r; let c2 = c;
+        if (m) {
+          const mk = `${m.r1},${m.c1}`;
+          if (drawnMerges.has(mk)) continue;
+          drawnMerges.add(mk);
+          rr = m.r1; cc = m.c1; r2 = m.r2; c2 = m.c2;
+        }
+        const cell = sheet.cells.get(key(rr, cc));
+        if (!cell && !m) continue;
+        let text = cellText(cell);
+        if (!text && !(cell && cell.s && (cell.s.fill || cell.s.border)) && !m) continue;
+        const own = colPos[c2 + 1] - colPos[cc];
+        if (own <= 0 && !m) continue; // скрытый столбец
+        const st = cellStyle(cell);
+        const box = { left: colPos[cc], top: rowPos[rr], width: own, height: rowPos[r2 + 1] - rowPos[rr] };
+        const s0 = (cell && cell.s) || {};
+        if (text && typeof cell.v === 'number' && !s0.wrap) text = fitNumber(cell, text, own - 3, st);
+        // перетекание текста вправо
+        let spill = own;
+        if (text && !m && typeof cell.v === 'string' && !s0.wrap && st.textAlign === 'left') {
+          const need = textWidth(text, st) + 6;
+          let cn = c2 + 1;
+          while (spill < need && cn < cols && isEmpty(rr, cn) && !(sheet.merges.length && mergeAt(sheet, rr, cn))) { spill += colPos[cn + 1] - colPos[cn]; cn++; }
+        }
+        if (c < ca && spill === own) continue;
+        if (spill > own) {
+          // фон и границы — только своей ячейки, текст — поверх соседних
+          out.push(<div key={`f${rr},${cc}`} className="gcell" style={{ ...box, ...st, color: undefined }} />);
+          out.push(<div key={`${rr},${cc}`} className="gcell" style={{ ...box, ...st, width: spill, background: undefined, borderTop: undefined, borderLeft: undefined, borderRight: undefined, borderBottom: undefined }}>{text}</div>);
+        } else {
+          out.push(<div key={`${rr},${cc}`} className={`gcell${m ? ' merged' : ''}`} style={{ ...box, ...st }}>{text}</div>);
+        }
       }
     }
-  }
+    return out;
+  };
+  // линии сетки — фоном, ячейки — поверх
+  const gridLines = (ra, rb, ca, cb) => (
+    <svg className="grid-lines" width={colPos[cb + 1] - colPos[ca]} height={rowPos[rb + 1] - rowPos[ra]} style={{ left: colPos[ca], top: rowPos[ra] }}>
+      {Array.from({ length: cb - ca + 2 }, (_, i) => { if (i > 0 && colPos[ca + i] === colPos[ca + i - 1]) return null; const x = colPos[ca + i] - colPos[ca] + 0.5; return <line key={`v${i}`} x1={x} x2={x} y1={0} y2="100%" />; })}
+      {Array.from({ length: rb - ra + 2 }, (_, i) => { if (i > 0 && rowPos[ra + i] === rowPos[ra + i - 1]) return null; const y = rowPos[ra + i] - rowPos[ra] + 0.5; return <line key={`h${i}`} y1={y} y2={y} x1={0} x2="100%" />; })}
+    </svg>
+  );
 
   const ed = editing && { left: colPos[editing.c], top: rowPos[editing.r], width: Math.max(colPos[editing.c + 1] - colPos[editing.c], 80), height: rowPos[editing.r + 1] - rowPos[editing.r] };
   const active = mergeAt(sheet, sel.r, sel.c) || { r1: sel.r, c1: sel.c, r2: sel.r, c2: sel.c };
+  const marks = (
+    <>
+      <div className="gsel" style={{ left: colPos[selC1], top: rowPos[selR1], width: colPos[selC2 + 1] - colPos[selC1], height: rowPos[selR2 + 1] - rowPos[selR1] }} />
+      <div className="gactive" style={{ left: colPos[active.c1], top: rowPos[active.r1], width: colPos[active.c2 + 1] - colPos[active.c1], height: rowPos[active.r2 + 1] - rowPos[active.r1] }} />
+    </>
+  );
+  // редактор — в той части листа (закреплённой или нет), где ячейка
+  const editorIn = (top, left) => (editing && editing.text !== null && !editing.fromBar && (editing.r < fr) === top && (editing.c < fc) === left
+    ? <CellEditor key={`${editing.r},${editing.c}`} box={ed} editing={editing} setEditing={setEditing} onCommit={onCommit} style={cellStyle(sheet.cells.get(key(editing.r, editing.c)))} />
+    : null);
+
+  // заголовки столбцов ca..cb и строк ra..rb
+  const colHeads = (ca, cb) => Array.from({ length: cb - ca + 1 }, (_, i) => {
+    const c = ca + i;
+    const w = colPos[c + 1] - colPos[c];
+    if (!w) return null;
+    const on = c >= selC1 && c <= selC2;
+    return (
+      <div key={c} className={`ghead${on ? ' on' : ''}`} style={{ left: colPos[c], width: w }}
+        onMouseDown={(e) => { if (e.target.classList.contains('gresize')) return; setSel(e.shiftKey ? { ...sel, c2: c, r: 0, r2: rows - 1 } : { r: 0, c, r2: rows - 1, c2: c, whole: 'col' }); gridRef.current && gridRef.current.focus(); }}>
+        {colName(c)}
+        <span className="gresize col" onMouseDown={(e) => startResize(e, 'col', c)} title="Ширина столбца" />
+      </div>
+    );
+  });
+  const rowHeads = (ra, rb) => Array.from({ length: rb - ra + 1 }, (_, i) => {
+    const r = ra + i;
+    const h = rowPos[r + 1] - rowPos[r];
+    if (!h) return null;
+    const on = r >= selR1 && r <= selR2;
+    return (
+      <div key={r} className={`ghead row${on ? ' on' : ''}`} style={{ top: rowPos[r], height: h }}
+        onMouseDown={(e) => { if (e.target.classList.contains('gresize')) return; setSel(e.shiftKey ? { ...sel, r2: r, c: 0, c2: cols - 1 } : { r, c: 0, r2: r, c2: cols - 1, whole: 'row' }); gridRef.current && gridRef.current.focus(); }}>
+        {r + 1}
+        <span className="gresize row" onMouseDown={(e) => startResize(e, 'row', r)} title="Высота строки" />
+      </div>
+    );
+  });
+
+  // поле структуры: линии групп и кнопки «+/−» у итоговой строки (под группой) / столбца (справа)
+  const outline = (axis) => {
+    const levels = axis === 'row' ? rowLevels : colLevels;
+    const pos = axis === 'row' ? rowPos : colPos;
+    const [lo, hi] = axis === 'row' ? [r0, r1] : [c0, c1];
+    const out = [];
+    for (let lvl = 1; lvl <= levels; lvl++) {
+      for (const run of outlineRuns(sheet, axis, lvl)) {
+        if (run.b + 1 < lo || run.a > hi + 1) continue;
+        const collapsed = pos[run.b + 1] === pos[run.a];
+        const across = (lvl - 1) * OUT_STEP + 4;
+        const len = pos[run.b + 1] - pos[run.a];
+        if (len > 0) {
+          out.push(<div key={`l${lvl}-${run.a}`} className={`gout-line ${axis}`} style={axis === 'row'
+            ? { top: pos[run.a], height: len, left: across + 6 } : { left: pos[run.a], width: len, top: across + 6 }} />);
+        }
+        const at = pos[run.b + 1] + ((pos[run.b + 2] - pos[run.b + 1]) || 0) / 2 - 6;
+        out.push(
+          <button key={`b${lvl}-${run.a}`} type="button" className="gout-btn" title={collapsed ? 'Показать детали' : 'Скрыть детали'}
+            style={axis === 'row' ? { top: at, left: across } : { left: at, top: across }}
+            onMouseDown={(e) => e.preventDefault()} onClick={() => onOutline(axis, collapsed ? { type: 'expand', ...run, level: lvl } : { type: 'collapse', ...run, level: lvl })}>
+            {collapsed ? '+' : '−'}
+          </button>,
+        );
+      }
+    }
+    return out;
+  };
+  const levelButtons = (axis) => {
+    const levels = axis === 'row' ? rowLevels : colLevels;
+    return Array.from({ length: levels + 1 }, (_, i) => (
+      <button key={i} type="button" className="gout-btn level" title={`Показать уровень ${i + 1}`}
+        style={axis === 'row' ? { left: i * OUT_STEP + 4 - 1, top: colGut + (HEAD_H - 13) / 2 } : { top: i * OUT_STEP + 4 - 1, left: rowGut + (HEAD_W - 13) / 2 }}
+        onMouseDown={(e) => e.preventDefault()} onClick={() => onOutline(axis, { type: 'level', n: i + 1 })}>{i + 1}</button>
+    ));
+  };
 
   return (
     <div className="grid-wrap">
       <div ref={scrollRef} className="grid-scroll" onScroll={(e) => setView((v) => ({ ...v, top: e.currentTarget.scrollTop, left: e.currentTarget.scrollLeft }))}>
-        <div className="grid-canvas" style={{ width: colPos[cols] + HEAD_W, height: rowPos[rows] + HEAD_H }}>
+        <div className="grid-canvas" style={{ width: colPos[cols] + HW, height: rowPos[rows] + HH }}>
           {/* ячейки */}
-          <div className="grid-cells" style={{ left: HEAD_W, top: HEAD_H, width: colPos[cols], height: rowPos[rows] }}
+          <div className="grid-cells" style={{ left: HW, top: HH, width: colPos[cols], height: rowPos[rows] }}
             onMouseDown={onMouseDown}
             onDoubleClick={(e) => { const p = cellAt(e.clientX, e.clientY); setEditing({ r: p.r, c: p.c, text: null }); }}>
-            {/* линии сетки — фоном, ячейки — поверх */}
-            <svg className="grid-lines" width={colPos[c1 + 1] - colPos[c0]} height={rowPos[r1 + 1] - rowPos[r0]} style={{ left: colPos[c0], top: rowPos[r0] }}>
-              {Array.from({ length: c1 - c0 + 2 }, (_, i) => { const x = colPos[c0 + i] - colPos[c0] + 0.5; return <line key={`v${i}`} x1={x} x2={x} y1={0} y2="100%" />; })}
-              {Array.from({ length: r1 - r0 + 2 }, (_, i) => { const y = rowPos[r0 + i] - rowPos[r0] + 0.5; return <line key={`h${i}`} y1={y} y2={y} x1={0} x2="100%" />; })}
-            </svg>
-            {cellsOut}
-            <div className="gsel" style={{ left: colPos[selC1], top: rowPos[selR1], width: colPos[selC2 + 1] - colPos[selC1], height: rowPos[selR2 + 1] - rowPos[selR1] }} />
-            <div className="gactive" style={{ left: colPos[active.c1], top: rowPos[active.r1], width: colPos[active.c2 + 1] - colPos[active.c1], height: rowPos[active.r2 + 1] - rowPos[active.r1] }} />
-            {editing && editing.text !== null && !editing.fromBar && (
-              <CellEditor key={`${editing.r},${editing.c}`} box={ed} editing={editing} setEditing={setEditing} onCommit={onCommit} style={cellStyle(sheet.cells.get(key(editing.r, editing.c)))} />
+            {gridLines(r0, r1, c0, c1)}
+            {renderCells(r0, r1, c0, c1)}
+            {marks}
+            {editorIn(false, false)}
+            {/* закреплённые строки сверху, столбцы слева и угол — поверх прокручиваемой части */}
+            {fr > 0 && (
+              <div className="grid-pane top" style={{ left: 0, top: view.top, width: colPos[cols], height: frozenH }}>
+                {gridLines(0, fr - 1, c0, c1)}{renderCells(0, fr - 1, c0, c1)}{marks}{editorIn(true, false)}
+              </div>
+            )}
+            {fc > 0 && (
+              <div className="grid-pane left" style={{ left: view.left, top: 0, width: frozenW, height: rowPos[rows] }}>
+                {gridLines(r0, r1, 0, fc - 1)}{renderCells(r0, r1, 0, fc - 1)}{marks}{editorIn(false, true)}
+              </div>
+            )}
+            {fr > 0 && fc > 0 && (
+              <div className="grid-pane top left" style={{ left: view.left, top: view.top, width: frozenW, height: frozenH }}>
+                {gridLines(0, fr - 1, 0, fc - 1)}{renderCells(0, fr - 1, 0, fc - 1)}{marks}{editorIn(true, true)}
+              </div>
             )}
           </div>
           {/* заголовки столбцов */}
-          <div className="grid-colhead" style={{ top: view.top, left: HEAD_W, width: colPos[cols], height: HEAD_H }}>
-            {Array.from({ length: c1 - c0 + 1 }, (_, i) => {
-              const c = c0 + i;
-              const on = c >= selC1 && c <= selC2;
-              return (
-                <div key={c} className={`ghead${on ? ' on' : ''}`} style={{ left: colPos[c], width: colPos[c + 1] - colPos[c] }}
-                  onMouseDown={(e) => { if (e.target.classList.contains('gresize')) return; setSel(e.shiftKey ? { ...sel, c2: c, r: 0, r2: rows - 1 } : { r: 0, c, r2: rows - 1, c2: c, whole: 'col' }); gridRef.current && gridRef.current.focus(); }}>
-                  {colName(c)}
-                  <span className="gresize col" onMouseDown={(e) => startResize(e, 'col', c)} title="Ширина столбца" />
-                </div>
-              );
-            })}
+          <div className="grid-colhead" style={{ top: view.top + colGut, left: HW, width: colPos[cols], height: HEAD_H }}>
+            {colHeads(c0, c1)}
+            {fc > 0 && <div className="grid-headpane" style={{ left: view.left, top: 0, width: frozenW, height: HEAD_H }}>{colHeads(0, fc - 1)}</div>}
           </div>
           {/* заголовки строк */}
-          <div className="grid-rowhead" style={{ left: view.left, top: HEAD_H, width: HEAD_W, height: rowPos[rows] }}>
-            {Array.from({ length: r1 - r0 + 1 }, (_, i) => {
-              const r = r0 + i;
-              const on = r >= selR1 && r <= selR2;
-              return (
-                <div key={r} className={`ghead row${on ? ' on' : ''}`} style={{ top: rowPos[r], height: rowPos[r + 1] - rowPos[r] }}
-                  onMouseDown={(e) => { if (e.target.classList.contains('gresize')) return; setSel(e.shiftKey ? { ...sel, r2: r, c: 0, c2: cols - 1 } : { r, c: 0, r2: r, c2: cols - 1, whole: 'row' }); gridRef.current && gridRef.current.focus(); }}>
-                  {r + 1}
-                  <span className="gresize row" onMouseDown={(e) => startResize(e, 'row', r)} title="Высота строки" />
-                </div>
-              );
-            })}
+          <div className="grid-rowhead" style={{ left: view.left + rowGut, top: HH, width: HEAD_W, height: rowPos[rows] }}>
+            {rowHeads(r0, r1)}
+            {fr > 0 && <div className="grid-headpane" style={{ left: 0, top: view.top, width: HEAD_W, height: frozenH }}>{rowHeads(0, fr - 1)}</div>}
           </div>
-          <div className="grid-corner" style={{ left: view.left, top: view.top }} title="Выделить всё"
-            onMouseDown={() => setSel({ r: 0, c: 0, r2: rows - 1, c2: cols - 1 })} />
+          {rowGut > 0 && <div className="grid-outline row" style={{ left: view.left, top: HH, width: rowGut, height: rowPos[rows] }}>{outline('row')}</div>}
+          {colGut > 0 && <div className="grid-outline col" style={{ top: view.top, left: HW, height: colGut, width: colPos[cols] }}>{outline('col')}</div>}
+          <div className="grid-corner" style={{ left: view.left, top: view.top, width: HW, height: HH }}>
+            <div className="grid-corner-all" style={{ left: rowGut, top: colGut }} title="Выделить всё"
+              onMouseDown={() => setSel({ r: 0, c: 0, r2: rows - 1, c2: cols - 1 })} />
+            {rowGut > 0 && levelButtons('row')}
+            {colGut > 0 && levelButtons('col')}
+          </div>
         </div>
       </div>
     </div>

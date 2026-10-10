@@ -48,7 +48,25 @@
 .gresize { position: absolute; z-index: 1; }
 .gresize.col { top: 0; right: -3px; width: 6px; height: 100%; cursor: col-resize; }
 .gresize.row { left: 0; bottom: -3px; height: 6px; width: 100%; cursor: row-resize; }
-.grid-corner { position: absolute; z-index: 7; width: 46px; height: 22px; background: #e8e8e8; border-right: 1px solid #c8c8c8; border-bottom: 1px solid #c8c8c8; box-sizing: border-box; cursor: pointer; }
+.grid-corner { position: absolute; z-index: 7; background: #f7f7f7; }
+.grid-corner-all { position: absolute; width: 46px; height: 22px; background: #e8e8e8; border-right: 1px solid #c8c8c8; border-bottom: 1px solid #c8c8c8; box-sizing: border-box; cursor: pointer; }
+/* закреплённые области: поверх прокручиваемой части, граница — тёмной линией */
+.grid-pane { position: absolute; overflow: hidden; background: #fff; z-index: 3; }
+.grid-pane.top { box-shadow: 0 1px 0 #8f8f8f; }
+.grid-pane.left { box-shadow: 1px 0 0 #8f8f8f; }
+.grid-pane.top.left { z-index: 4; box-shadow: 1px 1px 0 #8f8f8f; }
+.grid-headpane { position: absolute; overflow: hidden; background: #f3f3f3; z-index: 1; }
+/* поле структуры (группировка) */
+.grid-outline { position: absolute; z-index: 6; background: #f7f7f7; }
+.grid-outline.row { border-right: 1px solid #dcdcdc; }
+.grid-outline.col { border-bottom: 1px solid #dcdcdc; }
+.gout-line { position: absolute; pointer-events: none; }
+.gout-line.row { width: 4px; border-left: 1px solid #8f8f8f; border-bottom: 1px solid #8f8f8f; }
+.gout-line.col { height: 4px; border-top: 1px solid #8f8f8f; border-right: 1px solid #8f8f8f; }
+.gout-btn { position: absolute; z-index: 1; width: 13px; height: 13px; padding: 0; font: 11px/11px 'Segoe UI', sans-serif; color: #333;
+  border: 1px solid #8f8f8f; background: #fff; cursor: pointer; display: flex; align-items: center; justify-content: center; }
+.gout-btn:hover { border-color: var(--accent); color: var(--accent); }
+.gout-btn.level { font-size: 9px; }
 .grid-guide { position: absolute; z-index: 8; pointer-events: none; background: var(--accent); }
 .grid-guide.col { top: 0; bottom: 0; width: 1px; }
 .grid-guide.row { left: 0; right: 0; height: 1px; }

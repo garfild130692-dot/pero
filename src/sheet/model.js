@@ -220,6 +220,109 @@ function shiftMerge(m, axis, at, count) {
 export const setColWidth = (wb, si, c, px) => withSheet(wb, si, { ...wb.sheets[si], colW: { ...wb.sheets[si].colW, [c]: Math.max(8, Math.round(px)) } });
 export const setRowHeight = (wb, si, r, px) => withSheet(wb, si, { ...wb.sheets[si], rowH: { ...wb.sheets[si].rowH, [r]: Math.max(8, Math.round(px)) } });
 
+// ---------- Закрепление, скрытие, группировка ----------
+// Закрепление областей: { rows, cols } — число закреплённых строк сверху и столбцов слева; null — снять
+export function setFreeze(wb, si, freeze) {
+  const f = freeze && (freeze.rows > 0 || freeze.cols > 0) ? { rows: Math.max(0, freeze.rows | 0), cols: Math.max(0, freeze.cols | 0) } : null;
+  const sheet = { ...wb.sheets[si], freeze: f };
+  if (!f) delete sheet.freeze;
+  return withSheet(wb, si, sheet);
+}
+
+const infoKey = (axis) => (axis === 'row' ? 'rowInfo' : 'colInfo');
+// Изменить свойства строк/столбцов a..b: fn(info) → новый info (пустой — удаляется)
+function mapLines(wb, si, axis, a, b, fn) {
+  const sheet = wb.sheets[si];
+  const k = infoKey(axis);
+  const info = { ...(sheet[k] || {}) };
+  for (let i = a; i <= b; i++) {
+    const next = fn({ ...(info[i] || {}) }, i);
+    for (const n of Object.keys(next)) if (next[n] == null || next[n] === false || next[n] === 0) delete next[n];
+    if (Object.keys(next).length) info[i] = next; else delete info[i];
+  }
+  return withSheet(wb, si, { ...sheet, [k]: info });
+}
+export const isHidden = (sheet, axis, i) => !!((sheet[infoKey(axis)] || {})[i] || {}).hidden;
+export const levelOf = (sheet, axis, i) => ((sheet[infoKey(axis)] || {})[i] || {}).level || 0;
+
+// Скрыть / отобразить строки или столбцы a..b
+export const setHidden = (wb, si, axis, a, b, hidden) => mapLines(wb, si, axis, a, b, (x) => ({ ...x, hidden }));
+
+// Группировать (delta = 1) / разгруппировать (delta = -1); уровней не больше 7, как в Excel
+export function groupLines(wb, si, axis, a, b, delta) {
+  let out = mapLines(wb, si, axis, a, b, (x) => {
+    const level = Math.max(0, Math.min(7, (x.level || 0) + delta));
+    // разгруппированная строка показывается (иначе её уже не развернуть)
+    return { ...x, level, hidden: delta < 0 && level < (x.level || 0) && !level ? false : x.hidden };
+  });
+  // признак «свёрнуто» у итоговой строки после группы
+  if (delta < 0) out = mapLines(out, si, axis, b + 1, b + 1, (x) => ({ ...x, collapsed: false }));
+  return out;
+}
+
+// Группы уровня level: [{ a, b }] — сплошные участки строк с уровнем ≥ level; итоговая строка — b + 1
+export function outlineRuns(sheet, axis, level) {
+  const info = sheet[infoKey(axis)] || {};
+  const idx = Object.keys(info).map(Number).filter((i) => (info[i].level || 0) >= level).sort((x, y) => x - y);
+  const runs = [];
+  for (const i of idx) {
+    const last = runs[runs.length - 1];
+    if (last && last.b === i - 1) last.b = i; else runs.push({ a: i, b: i });
+  }
+  return runs;
+}
+export function maxLevel(sheet, axis) {
+  let m = 0;
+  for (const x of Object.values(sheet[infoKey(axis)] || {})) if (x.level > m) m = x.level;
+  return m;
+}
+
+// Свернуть группу a..b уровня level: строки скрываются, итоговая помечается «свёрнуто»
+export function collapseGroup(wb, si, axis, a, b) {
+  const out = setHidden(wb, si, axis, a, b, true);
+  return mapLines(out, si, axis, b + 1, b + 1, (x) => ({ ...x, collapsed: true }));
+}
+// Развернуть: показываются строки этого уровня, вложенные группы — если сами не свёрнуты
+export function expandGroup(wb, si, axis, a, b, level) {
+  let out = mapLines(wb, si, axis, b + 1, b + 1, (x) => ({ ...x, collapsed: false }));
+  const show = (w, x, y, lvl) => {
+    let o = mapLines(w, si, axis, x, y, (info) => ((info.level || 0) === lvl ? { ...info, hidden: false } : info));
+    for (const run of outlineRuns(o.sheets[si], axis, lvl + 1)) {
+      if (run.a < x || run.b > y) continue;
+      const summary = ((o.sheets[si][infoKey(axis)] || {})[run.b + 1] || {});
+      if (!summary.collapsed) o = show(o, run.a, run.b, lvl + 1);
+    }
+    return o;
+  };
+  out = show(out, a, b, level);
+  return out;
+}
+// Кнопки уровней структуры (1, 2, 3…): показать уровни меньше n, глубже — свернуть
+export function showLevels(wb, si, axis, n) {
+  let out = wb;
+  const max = maxLevel(wb.sheets[si], axis);
+  for (let lvl = max; lvl >= 1; lvl--) {
+    for (const run of outlineRuns(out.sheets[si], axis, lvl)) {
+      out = lvl >= n ? collapseGroup(out, si, axis, run.a, run.b) : mapLines(out, si, axis, run.b + 1, run.b + 1, (x) => ({ ...x, collapsed: false }));
+    }
+  }
+  // строки уровней < n — видимы
+  const info = out.sheets[si][infoKey(axis)] || {};
+  for (const i of Object.keys(info).map(Number)) {
+    const lvl = info[i].level || 0;
+    if (lvl && lvl < n) out = mapLines(out, si, axis, i, i, (x) => ({ ...x, hidden: false }));
+  }
+  return out;
+}
+// Группа, содержащая строку i, самого глубокого уровня: { a, b, level } или null
+export function groupAt(sheet, axis, i) {
+  for (let lvl = levelOf(sheet, axis, i); lvl >= 1; lvl--) {
+    const run = outlineRuns(sheet, axis, lvl).find((x) => i >= x.a && i <= x.b);
+    if (run) return { ...run, level: lvl };
+  }
+  return null;
+}
+
 // ---------- Объединение ячеек ----------
 export function mergeRange(wb, si, rg) {
   const sheet = wb.sheets[si];

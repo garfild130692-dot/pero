@@ -1,4 +1,5 @@
-// Лента табличного редактора: Файл / Главная (буфер, шрифт, выравнивание, число, ячейки, редактирование).
+// Лента табличного редактора: Файл / Главная (буфер, шрифт, выравнивание, число, ячейки, редактирование) /
+// Данные (структура) / Вид (закрепление областей).
 import React, { useState } from 'react';
 import { Icon } from '../icons.jsx';
 import { clipboard, reportProblem } from '../fileApi.js';
@@ -6,7 +7,9 @@ import RecentButton from '../RecentButton.jsx';
 import { ColorPalette, SplitColor, usePopover } from '../FontControls.jsx';
 import { FORMAT_PRESETS, changeDecimals } from './format.js';
 import { key } from './address.js';
-import { clearRange, mergeAt, mergeRange, setStyle, shiftCells, sortRange, unmergeRange } from './model.js';
+import {
+  clearRange, collapseGroup, expandGroup, groupAt, groupLines, mergeAt, mergeRange, setFreeze, setHidden, setStyle, shiftCells, sortRange, unmergeRange,
+} from './model.js';
 
 function Btn({ icon, label, title, onClick, active, disabled, big, children }) {
   const I = icon && Icon[icon];
@@ -98,7 +101,24 @@ export default function SheetRibbon({ api }) {
     return out;
   });
 
-  const tabs = [['file', 'Файл'], ['home', 'Главная']];
+  // выделены целые столбцы (щелчок по заголовку) — группировка и скрытие по столбцам
+  const byCols = sel.whole === 'col';
+  const lines = (axis) => (axis === 'row' ? [rg.r1, rg.r2] : [rg.c1, rg.c2]);
+  const hide = (axis, hidden) => change((w) => setHidden(w, si, axis, ...lines(axis), hidden));
+  const group = (axis, delta) => change((w) => groupLines(w, si, axis, ...lines(axis), delta));
+  // скрыть/показать детали группы под курсором
+  const detail = (show) => change((w) => {
+    const axis = byCols ? 'col' : 'row';
+    const sh = w.sheets[si];
+    const at = axis === 'row' ? sel.r : sel.c;
+    // курсор на итоговой строке группы — тоже её группа
+    const g = groupAt(sh, axis, at) || groupAt(sh, axis, at - 1);
+    if (!g) return w;
+    return show ? expandGroup(w, si, axis, g.a, g.b, g.level) : collapseGroup(w, si, axis, g.a, g.b);
+  });
+  const frozen = sheet.freeze || null;
+
+  const tabs = [['file', 'Файл'], ['home', 'Главная'], ['data', 'Данные'], ['view', 'Вид']];
   return (
     <div className="ribbon">
       <div className="rb-tabs">
@@ -209,6 +229,13 @@ export default function SheetRibbon({ api }) {
                 ['Удалить строки с листа', () => change((w) => shiftCells(w, si, 'row', rg.r1, -(rg.r2 - rg.r1 + 1)))],
                 ['Удалить столбцы с листа', () => change((w) => shiftCells(w, si, 'col', rg.c1, -(rg.c2 - rg.c1 + 1)))],
               ]} />
+              <MenuButton title="Формат: скрыть или отобразить" label="Формат" items={[
+                ['Скрыть строки', () => hide('row', true)],
+                ['Скрыть столбцы', () => hide('col', true)],
+                '-',
+                ['Отобразить строки', () => hide('row', false)],
+                ['Отобразить столбцы', () => hide('col', false)],
+              ]} />
             </Group>
             <Group title="Редактирование">
               <Btn title="Автосумма (Alt+=)" onClick={api.autoSum}><T>Σ</T> Автосумма</Btn>
@@ -220,6 +247,39 @@ export default function SheetRibbon({ api }) {
                 ['Очистить всё', () => change((w) => clearRange(w, si, rg, 'all'))],
                 ['Очистить форматы', () => change((w) => clearRange(w, si, rg, 'formats'))],
                 ['Очистить содержимое', () => change((w) => clearRange(w, si, rg, 'contents'))],
+              ]} />
+            </Group>
+          </>
+        )}
+        {tab === 'data' && (
+          <>
+            <Group title="Сортировка">
+              <Btn title="Сортировка по возрастанию" onClick={() => change((w) => sortRange(w, si, rg, sel.c, true))}><T>А→Я</T></Btn>
+              <Btn title="Сортировка по убыванию" onClick={() => change((w) => sortRange(w, si, rg, sel.c, false))}><T>Я→А</T></Btn>
+            </Group>
+            <Group title="Структура">
+              <MenuButton icon="group" title="Группировать выделенные строки или столбцы" label="Группировать" items={[
+                ['Строки', () => group('row', 1)],
+                ['Столбцы', () => group('col', 1)],
+              ]} />
+              <MenuButton icon="ungroup" title="Разгруппировать" label="Разгруппировать" items={[
+                ['Строки', () => group('row', -1)],
+                ['Столбцы', () => group('col', -1)],
+              ]} />
+              <div className="rb-col">
+                <Btn title="Показать детали группы" onClick={() => detail(true)}><T>+</T> Показать детали</Btn>
+                <Btn title="Скрыть детали группы" onClick={() => detail(false)}><T>−</T> Скрыть детали</Btn>
+              </div>
+            </Group>
+          </>
+        )}
+        {tab === 'view' && (
+          <>
+            <Group title="Окно">
+              <MenuButton icon="freeze" title="Закрепить области" label="Закрепить области" items={[
+                [frozen ? 'Снять закрепление областей' : 'Закрепить области', () => change((w) => setFreeze(w, si, frozen ? null : { rows: sel.r, cols: sel.c }))],
+                ['Закрепить верхнюю строку', () => change((w) => setFreeze(w, si, { rows: 1, cols: 0 }))],
+                ['Закрепить первый столбец', () => change((w) => setFreeze(w, si, { rows: 0, cols: 1 }))],
               ]} />
             </Group>
           </>

@@ -6,8 +6,8 @@ import { addr, key, parseRange, rangeName } from './address.js';
 import { isErr } from './formula.js';
 import { formatValue } from './format.js';
 import {
-  DEFAULT_COL_W, addSheet, autoSumFormula, blockToText, clearRange, copyBlock, deleteSheet, fill, inputOf, mergeAt, newWorkbook,
-  pasteBlock, pasteText, renameSheet, setColWidth, setInput, setRowHeight, usedRange,
+  DEFAULT_COL_W, addSheet, autoSumFormula, blockToText, clearRange, collapseGroup, copyBlock, deleteSheet, expandGroup, fill, inputOf,
+  isHidden, mergeAt, newWorkbook, pasteBlock, pasteText, renameSheet, setColWidth, setInput, setRowHeight, showLevels, usedRange,
 } from './model.js';
 import { exportXlsx, importXlsx } from './xlsx.js';
 import * as fileApi from '../fileApi.js';
@@ -151,6 +151,10 @@ export default function SheetApp({ initialFile, onOpenOther, onNewDoc, autosaveS
     let r = s.r + d[0]; let c = s.c + d[1];
     if (m) { if (d[0] > 0) r = m.r2 + 1; if (d[1] > 0) c = m.c2 + 1; }
     r = Math.max(0, r); c = Math.max(0, c);
+    // скрытые строки/столбцы пропускаются (в начале листа — назад, к видимой)
+    for (let n = 0; n < 100000 && d[0] && isHidden(sheet, 'row', r); n++) r = r + d[0] < 0 ? r + 1 : r + d[0];
+    for (let n = 0; n < 16384 && d[1] && isHidden(sheet, 'col', c); n++) c = c + d[1] < 0 ? c + 1 : c + d[1];
+    if (isHidden(sheet, 'row', r) || isHidden(sheet, 'col', c)) return { r: s.r, c: s.c, r2: s.r, c2: s.c };
     const m2 = mergeAt(sheet, r, c);
     if (m2) { r = m2.r1; c = m2.c1; }
     return { r, c, r2: r, c2: c };
@@ -205,6 +209,10 @@ export default function SheetApp({ initialFile, onOpenOther, onNewDoc, autosaveS
     if (dirty && !(await fileApi.confirmDiscard())) return;
     openHere({ path: null, name: f.name, data: await f.arrayBuffer() });
   };
+
+  // кнопки поля структуры: свернуть/развернуть группу, показать уровень
+  const outlineAction = (axis, a) => change((w) => (a.type === 'collapse' ? collapseGroup(w, si, axis, a.a, a.b)
+    : a.type === 'expand' ? expandGroup(w, si, axis, a.a, a.b, a.level) : showLevels(w, si, axis, a.n)));
 
   const rg = normSel(sel);
   const ribbonApi = {
@@ -315,7 +323,7 @@ export default function SheetApp({ initialFile, onOpenOther, onNewDoc, autosaveS
       <div className="sheet-main" ref={gridRef} tabIndex={0} onKeyDown={onKeyDown} onCopy={(e) => onCopy(e, false)} onCut={(e) => onCopy(e, true)} onPaste={onPaste}>
         <Grid sheet={sheet} sel={sel} setSel={setSel} editing={editing} setEditing={setEditing} onCommit={commit}
           onColWidth={(c, px) => change((w) => setColWidth(w, si, c, px))} onRowHeight={(r, px) => change((w) => setRowHeight(w, si, r, px))}
-          onRefInsert={insertRef} gridRef={gridRef} />
+          onRefInsert={insertRef} gridRef={gridRef} onOutline={outlineAction} />
       </div>
       <div className="sheet-tabs">
         {wb.sheets.map((s, i) => (renaming === i ? (
