@@ -3,7 +3,10 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import Grid, { cellText } from './Grid.jsx';
 import SheetRibbon from './SheetRibbon.jsx';
 import { addr, colName, key, parseRange, rangeName } from './address.js';
-import { isErr, localize, sheetPrefix } from './formula.js';
+import { cycleRef, errText, formulaRefs, isErr, localize, sheetPrefix } from './formula.js';
+
+// цвета ссылок редактируемой формулы (рамки на листе) — как в Excel
+const REF_COLORS = ['#2f6fbf', '#c0392b', '#7a5ab5', '#2e8b57', '#b8860b', '#1f8a9e', '#c2185b', '#6d4c41'];
 
 // $A$1:$B$5 — абсолютная ссылка на выделение (для имён)
 const absRange = (rg) => {
@@ -13,7 +16,7 @@ const absRange = (rg) => {
 import { formatValue } from './format.js';
 import {
   DEFAULT_COL_W, DEFAULT_ROW_H, addSheet, autoSumFormula, blockToText, clearRange, collapseGroup, copyBlock, deleteSheet, expandGroup, fill, inputOf,
-  isHidden, isValidName, mergeAt, nameTarget, newWorkbook, recalc, setNames, spillAnchorAt, valueAt, pasteBlock, pasteText, renameSheet, setColWidth, setInput, setRowHeight, showLevels, usedRange,
+  isHidden, isValidName, mergeAt, nameTarget, newWorkbook, recalc, setNames, spillAnchorAt, valueAt, viewContext, pasteBlock, pasteText, renameSheet, setColWidth, setInput, setRowHeight, showLevels, usedRange,
 } from './model.js';
 import { exportXlsx, importXlsx } from './xlsx.js';
 import { exportCsv, importCsv } from './csv.js';
@@ -21,6 +24,9 @@ import { pageOf, printGeometry, printScale } from './pageSetup.js';
 import { isLocked, isProtected, protectionViolation, setProtection } from './protect.js';
 import ProtectDialog from './ProtectDialog.jsx';
 import NamesDialog from './NamesDialog.jsx';
+import EvalDialog from './EvalDialog.jsx';
+import InsertFunctionDialog from './InsertFunctionDialog.jsx';
+import { AssistPopup, useFormulaAssist } from './FormulaAssist.jsx';
 import TitleBar, { QuickButton } from '../TitleBar.jsx';
 
 const PROTECTED_MSG = 'Ячейка на защищённом листе. Чтобы изменить её, снимите защиту: «Рецензирование → Снять защиту листа».';
@@ -46,6 +52,11 @@ export default function SheetApp({ initialFile, onOpenOther, onNewDoc, autosaveS
   const [notice, setNotice] = useState(null); // временное сообщение в строке состояния
   const [protectDlg, setProtectDlg] = useState(null); // 'protect' | 'unprotect'
   const [namesDlg, setNamesDlg] = useState(false);
+  const [showFormulas, setShowFormulas] = useState(false); // Ctrl+` — формулы вместо значений
+  const [arrows, setArrows] = useState([]); // стрелки влияющих/зависимых ячеек
+  const [evalAt, setEvalAt] = useState(null); // { r, c } — «Вычислить формулу»
+  const [fnDlg, setFnDlg] = useState(null); // мастер функций: { initial }
+  const [errPop, setErrPop] = useState(null); // пояснение к ошибке: { r, c, x, y }
   const noticeTimer = useRef(null);
   const flash = useCallback((text) => {
     setNotice(text);
@@ -256,8 +267,47 @@ export default function SheetApp({ initialFile, onOpenOther, onNewDoc, autosaveS
     : a.type === 'expand' ? expandGroup(w, si, axis, a.a, a.b, a.level) : showLevels(w, si, axis, a.n)));
 
   const rg = normSel(sel);
+
+  const refMarks = useMemo(() => {
+    if (!editing || !editing.text || !editing.text.startsWith('=')) return [];
+    let refs = [];
+    try { refs = formulaRefs(editing.text.slice(1)); } catch { return []; }
+    return refs.filter((x) => !x.sheet || x.sheet.toLowerCase() === sheet.name.toLowerCase()).map((x, i) => ({ ...x, color: REF_COLORS[i % REF_COLORS.length] }));
+  }, [editing, sheet.name]);
+  // стрелки «Зависимости формул»: влияющие — ссылки формулы ячейки; зависимые — формулы листа, ссылающиеся на неё
+  const sameSheet = (s) => !s || s.toLowerCase() === sheet.name.toLowerCase();
+  const precedents = () => {
+    const cell = sheet.cells.get(key(sel.r, sel.c));
+    if (!cell || cell.f == null) { flash('В ячейке нет формулы'); return; }
+    const refs = formulaRefs(cell.f);
+    const local = refs.filter((x) => sameSheet(x.sheet));
+    if (refs.length > local.length) flash('Есть ссылки на другие листы — стрелки к ним не рисуются');
+    setArrows((a) => [...a, ...local.map((x) => ({ from: x, to: { r: sel.r, c: sel.c } }))]);
+  };
+  const dependents = () => {
+    const out = [];
+    for (const [k, cell] of sheet.cells) {
+      if (cell.f == null) continue;
+      if (formulaRefs(cell.f).some((x) => sameSheet(x.sheet) && sel.r >= x.r1 && sel.r <= x.r2 && sel.c >= x.c1 && sel.c <= x.c2)) {
+        const [r, c] = k.split(',').map(Number);
+        out.push({ from: { r1: sel.r, c1: sel.c, r2: sel.r, c2: sel.c }, to: { r, c } });
+      }
+    }
+    if (!out.length) flash('На эту ячейку не ссылаются формулы листа');
+    setArrows((a) => [...a, ...out]);
+  };
+  const evaluateFormula = () => {
+    const cell = sheet.cells.get(key(sel.r, sel.c));
+    if (!cell || cell.f == null) { flash('В ячейке нет формулы'); return; }
+    setEvalAt({ r: sel.r, c: sel.c });
+  };
+
   const ribbonApi = {
     names: () => setNamesDlg(true),
+    insertFunction: (en) => setFnDlg({ initial: en }),
+    showFormulas, toggleFormulas: () => setShowFormulas((v) => !v),
+    precedents, dependents, clearArrows: () => setArrows([]), evaluateFormula,
+    recalc: () => setWb((w) => recalc(w)),
     protect: () => setProtectDlg(isProtected(sheet) ? 'unprotect' : 'protect'),
     wb, sheet, si, sel, rg, change, undo, redo, canUndo: history.current.undo.length > 0, canRedo: history.current.redo.length > 0,
     file: { newDocument, newBook, open, openHere, save: () => save(), saveAs: () => write(true), saveCsv, print: () => fileApi.print(), pdf: () => fileApi.exportPdf(doc.name.replace(/\.(xlsx|csv)$/i, '') + '.pdf') },
@@ -277,6 +327,8 @@ export default function SheetApp({ initialFile, onOpenOther, onNewDoc, autosaveS
     if (ctrl && e.code === 'KeyZ') { e.preventDefault(); undo(); return; }
     if (ctrl && (e.code === 'KeyY')) { e.preventDefault(); redo(); return; }
     if (e.key === 'F9') { e.preventDefault(); setWb((w) => recalc(w)); return; }
+    if (ctrl && e.code === 'Backquote') { e.preventDefault(); setShowFormulas((v) => !v); return; }
+    if (e.shiftKey && e.key === 'F3') { e.preventDefault(); setFnDlg({}); return; }
     if (ctrl && e.code === 'KeyA') { e.preventDefault(); const u = usedRange(sheet); setSel({ r: 0, c: 0, r2: u ? u.r2 : 0, c2: u ? u.c2 : 0 }); return; }
     if (ctrl && e.code === 'KeyB') { e.preventDefault(); ribbonApi.toggle('bold'); return; }
     if (ctrl && e.code === 'KeyI') { e.preventDefault(); ribbonApi.toggle('italic'); return; }
@@ -370,21 +422,21 @@ export default function SheetApp({ initialFile, onOpenOther, onNewDoc, autosaveS
             gridRef.current && gridRef.current.focus();
           }}
           onFocus={(e) => e.target.select()} />
-        <span className="fx">fx</span>
-        <input className={`fx-input${ghost && !(editing && editing.r === sel.r && editing.c === sel.c) ? ' ghost' : ''}`} aria-label="Строка формул" value={barText}
+        <button type="button" className="fx-btn" title="Вставить функцию (Shift+F3)" onMouseDown={(e) => e.preventDefault()} onClick={() => setFnDlg({})}>fx</button>
+        <FormulaBarInput className={`fx-input${ghost && !(editing && editing.r === sel.r && editing.c === sel.c) ? ' ghost' : ''}`} value={barText} names={wb.names || []}
           title={ghost ? 'Значение рассчитано формулой массива — изменить можно в её первой ячейке' : undefined}
           readOnly={isProtected(sheet) && isLocked(activeCell)}
           onFocus={() => { if (!editing && !(isProtected(sheet) && isLocked(activeCell))) { lastRef.current = null; setEditingState({ r: sel.r, c: sel.c, text: ghost ? '' : inputOf(activeCell), fromBar: true }); } }}
-          onChange={(e) => setEditingState({ r: sel.r, c: sel.c, text: e.target.value, fromBar: true })}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter') { e.preventDefault(); commit(editing ? editing.text : barText, 'down'); }
-            if (e.key === 'Escape') { e.preventDefault(); setEditingState(null); gridRef.current && gridRef.current.focus(); }
-          }} />
+          onChange={(text) => setEditingState({ r: sel.r, c: sel.c, text, fromBar: true })}
+          onCommit={() => commit(editing ? editing.text : barText, 'down')}
+          onCancel={() => { setEditingState(null); gridRef.current && gridRef.current.focus(); }} />
       </div>
       <div className="sheet-main" ref={gridRef} tabIndex={0} onKeyDown={onKeyDown} onCopy={(e) => onCopy(e, false)} onCut={(e) => onCopy(e, true)} onPaste={onPaste}>
         <Grid sheet={sheet} sel={sel} setSel={setSel} editing={editing} setEditing={setEditing} onCommit={commit}
           onColWidth={(c, px) => change((w) => setColWidth(w, si, c, px))} onRowHeight={(r, px) => change((w) => setRowHeight(w, si, r, px))}
-          onRefInsert={insertRef} gridRef={gridRef} onOutline={outlineAction} />
+          onRefInsert={insertRef} gridRef={gridRef} onOutline={outlineAction} names={wb.names || []}
+          refMarks={refMarks} showFormulas={showFormulas} arrows={arrows}
+          onErrorInfo={(r, c, rect) => setErrPop({ r, c, x: rect.right + 4, y: rect.top })} />
       </div>
       <div className="sheet-tabs">
         {wb.sheets.map((s, i) => (renaming === i ? (
@@ -427,6 +479,29 @@ export default function SheetApp({ initialFile, onOpenOther, onNewDoc, autosaveS
         {isErr(activeCell && activeCell.v) && <span className="warn">{errorHint(activeCell.v.error)}</span>}
       </div>
       <PrintTable sheet={sheet} />
+      {evalAt && (
+        <EvalDialog cellName={`${sheetPrefix(sheet.name)}${addr(evalAt.r, evalAt.c)}`} formula={(sheet.cells.get(key(evalAt.r, evalAt.c)) || {}).f || ''}
+          ctx={viewContext(wb, si, evalAt.r, evalAt.c)} onClose={() => { setEvalAt(null); gridRef.current && gridRef.current.focus(); }} />
+      )}
+      {fnDlg && (
+        <InsertFunctionDialog ctx={viewContext(wb, si, sel.r, sel.c)} initial={fnDlg.initial}
+          onClose={() => { setFnDlg(null); gridRef.current && gridRef.current.focus(); }}
+          onInsert={(text) => { setFnDlg(null); setEditingState(null); change((w) => setInput(w, si, sel.r, sel.c, text)); gridRef.current && gridRef.current.focus(); }} />
+      )}
+      {errPop && (() => {
+        const v = valueAt(sheet, errPop.r, errPop.c);
+        const hasFormula = (sheet.cells.get(key(errPop.r, errPop.c)) || {}).f != null;
+        return (
+          <div className="modal-backdrop transparent" onMouseDown={() => setErrPop(null)}>
+            <div className="err-pop" style={{ left: errPop.x, top: errPop.y }} onMouseDown={(e) => e.stopPropagation()}>
+              <div className="err-title">{isErr(v) ? errText(v.error) : ''}</div>
+              <div className="err-text">{isErr(v) ? errorHint(v.error) : ''}</div>
+              {hasFormula && <button type="button" onClick={() => { setErrPop(null); setEvalAt({ r: errPop.r, c: errPop.c }); }}>Показать этапы вычисления…</button>}
+              <button type="button" onClick={() => setErrPop(null)}>Закрыть</button>
+            </div>
+          </div>
+        );
+      })()}
       {namesDlg && (
         <NamesDialog wb={wb} refOfSelection={localize(`${sheetPrefix(sheet.name)}${absRange(rg)}`)}
           onClose={() => { setNamesDlg(false); gridRef.current && gridRef.current.focus(); }}
@@ -499,6 +574,32 @@ function PrintTable({ sheet }) {
         {headRows.length > 0 && <thead>{headRows.map(row)}</thead>}
         <tbody>{bodyRows.map(row)}</tbody>
       </table>
+    </>
+  );
+}
+
+// Строка формул с подсказками функций и F4 (те же, что в редакторе ячейки)
+function FormulaBarInput({ value, names, onChange, onCommit, onCancel, ...rest }) {
+  const ref = useRef(null);
+  const assist = useFormulaAssist(value, names);
+  const apply = ({ text, caret }) => {
+    onChange(text);
+    assist.setCaret(caret);
+    requestAnimationFrame(() => { const el = ref.current; if (el) { el.focus(); el.setSelectionRange(caret, caret); } });
+  };
+  const box = ref.current ? { left: ref.current.offsetLeft, top: ref.current.offsetTop + ref.current.offsetHeight + 2 } : { left: 0, top: 30 };
+  return (
+    <>
+      <input ref={ref} aria-label="Строка формул" value={value} {...rest}
+        onChange={(e) => { onChange(e.target.value); assist.setCaret(e.target.selectionStart); }}
+        onSelect={(e) => assist.setCaret(e.currentTarget.selectionStart)}
+        onKeyDown={(e) => {
+          if (assist.onKey(e, apply)) return;
+          if (e.key === 'F4') { e.preventDefault(); const r = cycleRef(value, e.currentTarget.selectionStart); if (r) apply(r); return; }
+          if (e.key === 'Enter') { e.preventDefault(); onCommit(); }
+          if (e.key === 'Escape') { e.preventDefault(); onCancel(); }
+        }} />
+      {document.activeElement === ref.current && <AssistPopup assist={assist} style={box} onPick={(i) => { const r = assist.accept(i); if (r) apply(r); }} />}
     </>
   );
 }

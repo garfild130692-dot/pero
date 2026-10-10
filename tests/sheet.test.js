@@ -578,3 +578,49 @@ describe('массивы: константы, поэлементные опер�
     expect(x2).toContain('<c r="C1"><f>A1:A2*3</f><v>3</v></c>');
   });
 });
+
+describe('ввод формул: подсказки, F4, справочник функций, вычисление по шагам', async () => {
+  const f = await import('../src/sheet/formula.js');
+  const { formulaContext } = await import('../src/sheet/FormulaAssist.jsx');
+  const { FN_INFO, FN_LIST, signature } = await import('../src/sheet/fninfo.js');
+  const { startEval, stepEval, exprText } = await import('../src/sheet/evalSteps.js');
+  const m = await import('../src/sheet/model.js');
+
+  it('подсказка: набираемое имя и функция с номером аргумента под курсором', () => {
+    expect(formulaContext('=СУ', 3).prefix).toEqual({ text: 'СУ', start: 1 });
+    const c = formulaContext('=ЕСЛИ(A1>0;СУММ(B1;', 19);
+    expect([c.call.info.en, c.call.arg]).toEqual(['SUM', 1]);
+    expect(formulaContext('=ЕСЛИ(A1>0;СУММ(B1);', 20).call).toMatchObject({ arg: 2 });
+    expect(formulaContext('="СУ', 4).prefix).toBe(null); // в кавычках — нет
+    expect(formulaContext('СУ', 2)).toBe(null); // не формула
+  });
+
+  it('F4: $A$1 → A$1 → $A1 → A1, у диапазона — оба конца, у листа — после «!»', () => {
+    let s = { text: '=СУММ(A1:B2)', caret: 7 };
+    const seen = [];
+    for (let i = 0; i < 4; i++) { s = f.cycleRef(s.text, s.caret); seen.push(s.text); }
+    expect(seen).toEqual(['=СУММ($A$1:$B$2)', '=СУММ(A$1:B$2)', '=СУММ($A1:$B2)', '=СУММ(A1:B2)']);
+    expect(f.cycleRef("='Мой лист'!C3*2", 12).text).toBe("='Мой лист'!$C$3*2");
+    expect(f.cycleRef('=1+2', 2)).toBe(null);
+  });
+
+  it('справочник: у каждой функции движка — описание и русское имя, которое читается обратно', () => {
+    const missing = f.FUNCTIONS.filter((en) => !FN_INFO[en] || !FN_INFO[en].description);
+    expect(missing).toEqual([]);
+    for (const info of FN_LIST) expect(f.fromUser(`${info.ru}()`)).toBe(`${info.en}()`);
+    expect(signature(FN_INFO.VLOOKUP)).toBe('ВПР(искомое_значение; таблица; номер_столбца; [интервальный_просмотр])');
+  });
+
+  it('вычисление по шагам: ссылки, функции, затем ЕСЛИ выбирает ветку', () => {
+    let wb = put(newWorkbook(), { A1: '10', A2: '20', A3: '30' });
+    const ctx = m.viewContext(wb, 0, 5, 1);
+    let st = startEval(f.fromUser('ЕСЛИ(СУММ(A1:A3)>50;A1*2+1;"мало")'));
+    const steps = [];
+    while (st.mark) { steps.push(exprText(st.ast, st.mark).replace('\u0001', '[').replace('\u0002', ']')); st = stepEval(st, ctx); }
+    expect(steps).toEqual([
+      'ЕСЛИ(СУММ([A1:A3])>50;A1*2+1;"мало")', 'ЕСЛИ([СУММ({10:20:30})]>50;A1*2+1;"мало")', 'ЕСЛИ([60>50];A1*2+1;"мало")',
+      '[ЕСЛИ(ИСТИНА;A1*2+1;"мало")]', '[A1]*2+1', '[10*2]+1', '[20+1]',
+    ]);
+    expect(exprText(st.ast)).toBe('21');
+  });
+});

@@ -4,7 +4,9 @@ import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 're
 import { colName, key } from './address.js';
 import { formatValue } from './format.js';
 import { isErr } from './formula.js';
-import { DEFAULT_COL_W, DEFAULT_ROW_H, isHidden, maxLevel, mergeAt, outlineRuns, spillAnchorAt } from './model.js';
+import { DEFAULT_COL_W, DEFAULT_ROW_H, inputOf, isHidden, maxLevel, mergeAt, outlineRuns, spillAnchorAt } from './model.js';
+import { cycleRef } from './formula.js';
+import { AssistPopup, useFormulaAssist } from './FormulaAssist.jsx';
 import { cssFontStack } from '../editor/font.js';
 
 const HEAD_W = 46; // ширина заголовков строк
@@ -88,7 +90,10 @@ function cellStyle(cell) {
 
 const OUT_STEP = 14; // ширина уровня в поле структуры (кнопки «+/−» групп)
 
-export default function Grid({ sheet, sel, setSel, editing, setEditing, onCommit, onColWidth, onRowHeight, onRefInsert, onOutline, gridRef }) {
+// refMarks — ссылки редактируемой формулы (цветные рамки); showFormulas — формулы вместо значений (Ctrl+`);
+// arrows — стрелки влияющих/зависимых ячеек [{ from: диапазон, to: { r, c } }]; onErrorInfo — значок у ячейки с ошибкой
+export default function Grid({ sheet, sel, setSel, editing, setEditing, onCommit, onColWidth, onRowHeight, onRefInsert, onOutline, gridRef,
+  refMarks = [], showFormulas = false, arrows = [], onErrorInfo, names = [] }) {
   const scrollRef = useRef(null);
   const [view, setView] = useState({ top: 0, left: 0, w: 800, h: 500 });
   // размеры области: использованная часть + запас (как «бесконечный» лист)
@@ -235,14 +240,15 @@ export default function Grid({ sheet, sel, setSel, editing, setEditing, onCommit
         }
         const cell = cellAtKey(rr, cc);
         if (!cell && !m) continue;
-        let text = cellText(cell);
+        let text = showFormulas && cell && cell.f != null ? inputOf(cell) : cellText(cell);
         if (!text && !(cell && cell.s && (cell.s.fill || cell.s.border)) && !m) continue;
         const own = colPos[c2 + 1] - colPos[cc];
         if (own <= 0 && !m) continue; // скрытый столбец
         const st = cellStyle(cell);
         const box = { left: colPos[cc], top: rowPos[rr], width: own, height: rowPos[r2 + 1] - rowPos[rr] };
         const s0 = (cell && cell.s) || {};
-        if (text && typeof cell.v === 'number' && !s0.wrap) text = fitNumber(cell, text, own - 3, st);
+        if (showFormulas && cell && cell.f != null) { st.justifyContent = 'flex-start'; st.textAlign = 'left'; }
+        else if (text && typeof cell.v === 'number' && !s0.wrap) text = fitNumber(cell, text, own - 3, st);
         // перетекание текста вправо
         let spill = own;
         if (text && !m && typeof cell.v === 'string' && !s0.wrap && st.textAlign === 'left') {
@@ -276,14 +282,41 @@ export default function Grid({ sheet, sel, setSel, editing, setEditing, onCommit
     <>
       <div className="gsel" style={{ left: colPos[selC1], top: rowPos[selR1], width: colPos[selC2 + 1] - colPos[selC1], height: rowPos[selR2 + 1] - rowPos[selR1] }} />
       <div className="gactive" style={{ left: colPos[active.c1], top: rowPos[active.r1], width: colPos[active.c2 + 1] - colPos[active.c1], height: rowPos[active.r2 + 1] - rowPos[active.r1] }} />
+      {refMarks.map((m, i) => (
+        <div key={`rm${i}`} className="gref" style={{ left: colPos[m.c1], top: rowPos[m.r1], width: colPos[Math.min(m.c2, cols - 1) + 1] - colPos[m.c1], height: rowPos[Math.min(m.r2, rows - 1) + 1] - rowPos[m.r1], borderColor: m.color, background: `${m.color}14` }} />
+      ))}
       {spillSel && (
         <div className="gspill" style={{ left: colPos[spillSel.range.c1], top: rowPos[spillSel.range.r1], width: colPos[spillSel.range.c2 + 1] - colPos[spillSel.range.c1], height: rowPos[spillSel.range.r2 + 1] - rowPos[spillSel.range.r1] }} />
       )}
     </>
   );
+  // стрелки влияющих/зависимых ячеек (как «Зависимости формул» Excel): от центра источника к центру ячейки
+  const center = (r, c) => [(colPos[c] + colPos[c + 1]) / 2, (rowPos[r] + rowPos[r + 1]) / 2];
+  const arrowLayer = arrows.length > 0 && (
+    <svg className="garrows" width={colPos[cols]} height={rowPos[rows]}>
+      <defs><marker id="garrow-head" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#2f6fbf" /></marker></defs>
+      {arrows.map((a, i) => {
+        const [x1, y1] = center(a.from.r1, a.from.c1);
+        const [x2, y2] = center(a.to.r, a.to.c);
+        const range = a.from.r2 > a.from.r1 || a.from.c2 > a.from.c1;
+        return (
+          <g key={i}>
+            {range && <rect x={colPos[a.from.c1] + 0.5} y={rowPos[a.from.r1] + 0.5} width={colPos[a.from.c2 + 1] - colPos[a.from.c1] - 1} height={rowPos[a.from.r2 + 1] - rowPos[a.from.r1] - 1} fill="none" stroke="#2f6fbf" strokeWidth="1.5" />}
+            <circle cx={x1} cy={y1} r="3" fill="#2f6fbf" />
+            <line x1={x1} y1={y1} x2={x2} y2={y2} stroke="#2f6fbf" strokeWidth="1.5" markerEnd="url(#garrow-head)" />
+          </g>
+        );
+      })}
+    </svg>
+  );
+  const activeCellVal = cellAtKey(sel.r, sel.c);
+  const errBadge = onErrorInfo && !editing && activeCellVal && activeCellVal.v && typeof activeCellVal.v === 'object' && 'error' in activeCellVal.v && (
+    <button type="button" className="gerr" title="Ошибка в ячейке: подробнее" style={{ left: colPos[sel.c] - 20, top: rowPos[sel.r] + (rowPos[sel.r + 1] - rowPos[sel.r] - 18) / 2 }}
+      onMouseDown={(e) => { e.preventDefault(); e.stopPropagation(); }} onClick={(e) => { e.stopPropagation(); onErrorInfo(sel.r, sel.c, e.currentTarget.getBoundingClientRect()); }}>!</button>
+  );
   // редактор — в той части листа (закреплённой или нет), где ячейка
   const editorIn = (top, left) => (editing && editing.text !== null && !editing.fromBar && (editing.r < fr) === top && (editing.c < fc) === left
-    ? <CellEditor key={`${editing.r},${editing.c}`} box={ed} editing={editing} setEditing={setEditing} onCommit={onCommit} style={cellStyle(sheet.cells.get(key(editing.r, editing.c)))} />
+    ? <CellEditor key={`${editing.r},${editing.c}`} box={ed} editing={editing} setEditing={setEditing} onCommit={onCommit} style={cellStyle(sheet.cells.get(key(editing.r, editing.c)))} names={names} />
     : null);
 
   // заголовки столбцов ca..cb и строк ra..rb
@@ -362,6 +395,8 @@ export default function Grid({ sheet, sel, setSel, editing, setEditing, onCommit
             {gridLines(r0, r1, c0, c1)}
             {renderCells(r0, r1, c0, c1)}
             {marks}
+            {arrowLayer}
+            {errBadge}
             {editorIn(false, false)}
             {/* закреплённые строки сверху, столбцы слева и угол — поверх прокручиваемой части */}
             {fr > 0 && (
@@ -405,8 +440,15 @@ export default function Grid({ sheet, sel, setSel, editing, setEditing, onCommit
 }
 
 // Редактор ячейки поверх сетки (Enter — вниз, Tab — вправо, Esc — отмена)
-function CellEditor({ box, editing, setEditing, onCommit, style }) {
+function CellEditor({ box, editing, setEditing, onCommit, style, names }) {
   const ref = useRef(null);
+  const assist = useFormulaAssist(editing.text, names);
+  // заменить текст и поставить курсор (подсказка, F4)
+  const apply = ({ text, caret }) => {
+    setEditing({ ...editing, text });
+    assist.setCaret(caret);
+    requestAnimationFrame(() => { const el = ref.current; if (el) { el.focus(); el.setSelectionRange(caret, caret); } });
+  };
   useEffect(() => {
     const el = ref.current;
     if (!el) return;
@@ -420,14 +462,18 @@ function CellEditor({ box, editing, setEditing, onCommit, style }) {
     if (el && document.activeElement !== el) { el.focus(); el.setSelectionRange(el.value.length, el.value.length); }
   }, [editing.text]);
   return (
+    <>
     <textarea
       ref={ref}
       className="gedit"
       style={{ left: box.left, top: box.top, minWidth: box.width, height: box.height, fontWeight: style.fontWeight, fontStyle: style.fontStyle, fontFamily: style.fontFamily, fontSize: style.fontSize, color: style.color }}
       value={editing.text}
       spellCheck={false}
-      onChange={(e) => setEditing({ ...editing, text: e.target.value })}
+      onChange={(e) => { setEditing({ ...editing, text: e.target.value }); assist.setCaret(e.target.selectionStart); }}
+      onSelect={(e) => assist.setCaret(e.currentTarget.selectionStart)}
       onKeyDown={(e) => {
+        if (assist.onKey(e, apply)) { e.stopPropagation(); return; }
+        if (e.key === 'F4') { e.preventDefault(); const r = cycleRef(editing.text, e.currentTarget.selectionStart); if (r) apply(r); e.stopPropagation(); return; }
         if (e.key === 'Enter' && !e.altKey) { e.preventDefault(); onCommit(editing.text, e.shiftKey ? 'up' : 'down'); }
         else if (e.key === 'Enter' && e.altKey) { e.preventDefault(); setEditing({ ...editing, text: `${editing.text}\n` }); }
         else if (e.key === 'Tab') { e.preventDefault(); onCommit(editing.text, e.shiftKey ? 'left' : 'right'); }
@@ -435,5 +481,7 @@ function CellEditor({ box, editing, setEditing, onCommit, style }) {
         e.stopPropagation();
       }}
     />
+    <AssistPopup assist={assist} style={{ left: box.left, top: box.top + box.height + 2 }} onPick={(i) => { const r = assist.accept(i); if (r) apply(r); }} />
+    </>
   );
 }

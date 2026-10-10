@@ -259,6 +259,52 @@ const parseCse = (ref) => {
   const col = (t) => [...t].reduce((n, ch) => n * 26 + ch.charCodeAt(0) - 64, 0) - 1;
   return { r1: +m[2] - 1, c1: col(m[1]), r2: +(m[4] || m[2]) - 1, c2: col(m[3] || m[1]) };
 };
+// Контекст вычисления по уже посчитанной книге (значения формул не пересчитываются): пошаговое вычисление,
+// предпросмотр аргументов в мастере функций. si, r, c — ячейка, «от имени» которой считаем
+export function viewContext(wb, si, r, c) {
+  const byName = new Map();
+  for (const sh of wb.sheets) { byName.set(sh.name, sh); byName.set(sh.name.toLowerCase(), sh); }
+  const sheetOf = (name) => byName.get(name) || byName.get(String(name).toLowerCase());
+  const sheetName = wb.sheets[si].name;
+  const busy = new Set();
+  const ctx = {
+    sheet: sheetName, cur: { r, c }, markArray: () => {},
+    get: (sh, rr, cc) => { const s = sheetOf(sh); return s ? valueAt(s, rr, cc) : err(ERR.REF); },
+    extent: (sh) => {
+      const s = sheetOf(sh); let mr = -1; let mc = -1;
+      if (s) for (const k of s.cells.keys()) { const [a, b] = unkey(k); if (a > mr) mr = a; if (b > mc) mc = b; }
+      if (s && s.spillAt) for (const rg of s.spillAt.values()) { if (rg.r2 > mr) mr = rg.r2; if (rg.c2 > mc) mc = rg.c2; }
+      return { r: mr, c: mc };
+    },
+    sheetsBetween: (a, b) => {
+      const i = wb.sheets.findIndex((x) => x.name.toLowerCase() === String(a).toLowerCase());
+      const j = wb.sheets.findIndex((x) => x.name.toLowerCase() === String(b).toLowerCase());
+      return i < 0 || j < 0 ? null : wb.sheets.slice(Math.min(i, j), Math.max(i, j) + 1).map((x) => x.name);
+    },
+    nameDef: (n) => {
+      const lc = String(n).toLowerCase();
+      const d = (wb.names || []).find((x) => x.name.toLowerCase() === lc && x.sheet && x.sheet.toLowerCase() === sheetName.toLowerCase())
+        || (wb.names || []).find((x) => x.name.toLowerCase() === lc && !x.sheet);
+      return d ? d.text : null;
+    },
+    name: (n) => {
+      const text = ctx.nameDef(n);
+      if (text == null) return err(ERR.NAME);
+      if (busy.has(n)) return err(ERR.CIRC);
+      const ast = astOf(text);
+      if (!ast) return err(ERR.NAME);
+      busy.add(n); const v = evaluate(ast, ctx); busy.delete(n);
+      return v;
+    },
+    spill: (sh, rr, cc) => { const s = sheetOf(sh); const cell = s && s.cells.get(key(rr, cc)); if (!cell || cell.f == null) return err(ERR.REF); return cell.arr || [[cell.v]]; },
+    formulaAt: (sh, rr, cc) => { const s = sheetOf(sh); const cell = s && s.cells.get(key(rr, cc)); return cell && cell.f != null ? cell.f : null; },
+    rowHidden: (sh, rr) => { const s = sheetOf(sh); return !!(s && s.rowInfo && s.rowInfo[rr] && s.rowInfo[rr].hidden); },
+    sheetIndex: (name) => wb.sheets.findIndex((x) => x.name.toLowerCase() === String(name).toLowerCase()),
+    sheetCount: () => wb.sheets.length,
+  };
+  return ctx;
+}
+
 // Значение ячейки с учётом «разлива» (для показа, копирования, итогов в строке состояния)
 export function valueAt(sheet, r, c) {
   const cell = sheet.cells.get(key(r, c));

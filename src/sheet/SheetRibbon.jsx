@@ -8,6 +8,7 @@ import { ColorPalette, SplitColor, usePopover } from '../FontControls.jsx';
 import { FORMAT_PRESETS, changeDecimals } from './format.js';
 import { MARGIN_PRESETS, PAPERS, pageOf, setPage, setPrintArea, setPrintTitles } from './pageSetup.js';
 import { isProtected } from './protect.js';
+import { CATEGORIES, FN_LIST } from './fninfo.js';
 import { key } from './address.js';
 import {
   clearRange, collapseGroup, expandGroup, groupAt, groupLines, mergeAt, mergeRange, setFreeze, setHidden, setStyle, shiftCells, sortRange, unmergeRange,
@@ -313,7 +314,25 @@ export default function SheetRibbon({ api }) {
         {tab === 'formulas' && (
           <>
             <Group title="Библиотека функций">
-              <Btn title="Автосумма (Alt+=)" onClick={api.autoSum}><T>Σ</T> Автосумма</Btn>
+              <Btn big icon="fx" label="Вставить функцию" onClick={() => api.insertFunction()} title="Мастер функций (Shift+F3)" />
+              <div className="rb-col">
+                <Btn title="Автосумма (Alt+=)" onClick={api.autoSum}><T>Σ</T> Автосумма</Btn>
+                <MenuButton title="Функции по категориям" label="Категории" items={CATEGORIES.map((c) => [c, () => api.insertFunction(FN_LIST.find((f) => f.category === c).en)])} />
+              </div>
+            </Group>
+            <Group title="Зависимости формул">
+              <div className="rb-col">
+                <Btn title="Стрелки от ячеек, на которые ссылается формула" onClick={api.precedents}><T>→▣</T> Влияющие ячейки</Btn>
+                <Btn title="Стрелки к формулам, которые ссылаются на ячейку" onClick={api.dependents}><T>▣→</T> Зависимые ячейки</Btn>
+              </div>
+              <div className="rb-col">
+                <Btn title="Убрать стрелки" onClick={api.clearArrows}><T>✕</T> Убрать стрелки</Btn>
+                <Btn title="Показать формулы (Ctrl+`)" active={api.showFormulas} onClick={api.toggleFormulas}><T>ƒx</T> Показать формулы</Btn>
+              </div>
+              <Btn big icon="evaluate" label="Вычислить формулу" onClick={api.evaluateFormula} title="Вычислить формулу по шагам" />
+            </Group>
+            <Group title="Вычисление">
+              <Btn big icon="recalc" label="Пересчёт" onClick={api.recalc} title="Пересчитать книгу (F9)" />
             </Group>
             <Group title="Определённые имена">
               <Btn big icon="names" label="Диспетчер имён" onClick={api.names} title="Именованные диапазоны и константы книги" />

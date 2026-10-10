@@ -747,6 +747,7 @@ export function evaluate(node, ctx) {
       return out;
     }
     case 'array': return node.v.map((row) => [...row]);
+    case 'value': return node.v; // уже вычисленная часть (пошаговое вычисление)
     case 'spill': return ctx.spill ? ctx.spill(node.sheet || ctx.sheet, node.r, node.c) : err(ERR.REF);
     case 'pct': return lift1(evaluate(node.a, ctx), ctx, (x) => { const n = toNum(x); return isErr(n) ? n : n / 100; });
     case 'un': return lift1(evaluate(node.a, ctx), ctx, (x) => { const n = toNum(x); return isErr(n) ? n : node.op === '-' ? -n : n; });
@@ -915,6 +916,40 @@ export function fromUser(src) {
 // Каноническая формула → русская запись для строки формул: ЕСЛИ(A1>1,5;"да";"нет")
 const EN_RU = {};
 for (const [ru, en] of Object.entries(RU)) if (!EN_RU[en] && en !== 'TRUE' && en !== 'FALSE') EN_RU[en] = ru;
+export const ruName = (en) => EN_RU[en] || en;
+// все имена функций для подсказок: русское → английское (русские и английские варианты ввода)
+export const functionNames = () => ({ ...Object.fromEntries(Object.keys(FN).map((en) => [en, en])), ...RU });
+
+// Токены с позициями в тексте: [{ ...токен, start, end }]
+export function tokenizeWithPos(src) {
+  let at = 0;
+  return tokenize(src).map((t) => { const out = { ...t, start: at, end: at + t.text.length }; at += t.text.length; return out; });
+}
+// F4: ссылка под курсором — $A$1 → A$1 → $A1 → A1 → $A$1 (у диапазона — оба конца). { text, caret } или null
+export function cycleRef(text, caret) {
+  const toks = tokenizeWithPos(text);
+  const i = toks.findIndex((t) => (t.type === 'ref' || t.type === 'cols' || t.type === 'rows') && caret >= t.start && caret <= t.end);
+  if (i < 0) return null;
+  let a = i; let b = i;
+  if (toks[i].type === 'ref') {
+    if (toks[i + 1] && toks[i + 1].type === ':' && toks[i + 2] && toks[i + 2].type === 'ref') b = i + 2;
+    else if (toks[i - 1] && toks[i - 1].type === ':' && toks[i - 2] && toks[i - 2].type === 'ref') a = i - 2;
+  }
+  const next = (absR, absC) => (absR && absC ? [true, false] : absR ? [false, true] : absC ? [false, false] : [true, true]);
+  const first = toks[a];
+  const [nr, nc] = first.type === 'ref' ? next(first.absR, first.absC) : next(first.abs1, first.abs1);
+  const fmt = (t) => {
+    const pre = t.text.slice(0, t.text.lastIndexOf('!') + 1);
+    if (t.type === 'ref') return `${pre}${nc ? '$' : ''}${colName(t.c)}${nr ? '$' : ''}${t.r + 1}`;
+    const abs = t.type === 'cols' ? nc : nr;
+    const parts = t.text.slice(pre.length).split(':').map((p) => p.replace(/\$/g, ''));
+    return `${pre}${abs ? '$' : ''}${parts[0]}:${abs ? '$' : ''}${parts[1]}`;
+  };
+  let out = '';
+  for (let j = a; j <= b; j++) out += toks[j].type === 'ref' || toks[j].type === 'cols' || toks[j].type === 'rows' ? fmt(toks[j]) : toks[j].text;
+  const start = toks[a].start; const end = toks[b].end;
+  return { text: text.slice(0, start) + out + text.slice(end), caret: start + out.length };
+}
 export function localize(src) {
   let depth = 0;
   return tokenize(src).map((t) => {
