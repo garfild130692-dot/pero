@@ -57,6 +57,10 @@ function formatDate(v, code) {
   const { y, m, d, hh, mm, ss } = serialToDate(v);
   const p2 = (n) => String(n).padStart(2, '0');
   const MON = ['янв', 'фев', 'мар', 'апр', 'май', 'июн', 'июл', 'авг', 'сен', 'окт', 'ноя', 'дек'];
+  const MONTH = ['Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь', 'Июль', 'Август', 'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь'];
+  const DAY = ['воскресенье', 'понедельник', 'вторник', 'среда', 'четверг', 'пятница', 'суббота'];
+  const DAY_SHORT = ['Вс', 'Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб'];
+  const wd = ((Math.floor(v) - 1) % 7 + 7) % 7; // 0 — воскресенье (серийный 1 = 01.01.1900, воскресенье)
   const c = String(code).replace(/\[\$-[^\]]*\]/g, '');
   if (/^\[h\]/i.test(c)) {
     const total = Math.round(v * 86400);
@@ -64,7 +68,7 @@ function formatDate(v, code) {
   }
   // минуты «mm» после h или перед s — иначе месяц
   // текст в кавычках и символ после «\» — как есть
-  const tokens = c.match(/"[^"]*"|\\.|yyyy|yy|mmmm|mmm|mm|m|dd|d|hh|h|ss|s|AM\/PM|./gi) || [];
+  const tokens = c.match(/"[^"]*"|\\.|yyyy|yy|mmmmm|mmmm|mmm|mm|m|dddd|ddd|dd|d|hh|h|ss|s|AM\/PM|./gi) || [];
   let out = '';
   tokens.forEach((t, i) => {
     const low = t.toLowerCase();
@@ -74,7 +78,11 @@ function formatDate(v, code) {
     switch (low) {
       case 'yyyy': out += y; break;
       case 'yy': out += p2(y % 100); break;
-      case 'mmmm': case 'mmm': out += MON[m - 1]; break;
+      case 'mmmmm': out += MONTH[m - 1][0]; break;
+      case 'mmmm': out += MONTH[m - 1]; break;
+      case 'mmm': out += MON[m - 1]; break;
+      case 'dddd': out += DAY[wd]; break;
+      case 'ddd': out += DAY_SHORT[wd]; break;
       case 'mm': out += isMin ? p2(mm) : p2(m); break;
       case 'm': out += isMin ? mm : m; break;
       case 'dd': out += p2(d); break;

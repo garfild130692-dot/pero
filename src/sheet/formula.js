@@ -3,6 +3,7 @@
 // Формула хранится без «=» в синтаксисе файла xlsx: английские имена функций, разделитель аргументов «,»,
 // десятичная точка. При вводе принимаются и русские имена (СУММ, ЕСЛИ…) и «;» — они приводятся к хранимому виду.
 import { colIndex, colName, MAX_COLS, MAX_ROWS } from './address.js';
+import { functions, lazyFunctions } from './fnlib.js';
 
 // ---------- Ошибки и значения ----------
 export const ERR = {
@@ -46,7 +47,39 @@ const RU = {
   ДЕНЬ: 'DAY', ДАТА: 'DATE', ЕПУСТО: 'ISBLANK', ЕЧИСЛО: 'ISNUMBER', ЕТЕКСТ: 'ISTEXT', ЕОШИБКА: 'ISERROR', ПИ: 'PI',
   ЗНАК: 'SIGN', МЕДИАНА: 'MEDIAN', НАЙТИ: 'FIND', ПОДСТАВИТЬ: 'SUBSTITUTE', ПОВТОР: 'REPT', ЗНАЧЕН: 'VALUE',
   ИСТИНА: 'TRUE', ЛОЖЬ: 'FALSE', ПОСЛЕД: 'SEQUENCE', ТРАНСП: 'TRANSPOSE', ФИЛЬТР: 'FILTER', СОРТ: 'SORT', СОРТПО: 'SORTBY',
-  УНИК: 'UNIQUE', СЛЧИС: 'RAND', СЛУЧМЕЖДУ: 'RANDBETWEEN', СЛУЧМАССИВ: 'RANDARRAY', ЧСТРОК: 'ROWS', ЧИСЛСТОЛБ: 'COLUMNS', ИНДЕКС: 'INDEX', ПОИСКПОЗ: 'MATCH', СУММПРОИЗВ: 'SUMPRODUCT', РАНГ: 'RANK',
+  УНИК: 'UNIQUE', СЛЧИС: 'RAND', СЛУЧМЕЖДУ: 'RANDBETWEEN', СЛУЧМАССИВ: 'RANDARRAY', ЧСТРОК: 'ROWS', ЧИСЛСТОЛБ: 'COLUMNS',
+  // этап 12, часть 4
+  ОКРУГЛТ: 'MROUND', ОКРВВЕРХ: 'CEILING', 'ОКРВВЕРХ.МАТ': 'CEILING.MATH', 'ОКРВВЕРХ.ТОЧН': 'CEILING.PRECISE', ОКРВНИЗ: 'FLOOR',
+  'ОКРВНИЗ.МАТ': 'FLOOR.MATH', 'ОКРВНИЗ.ТОЧН': 'FLOOR.PRECISE', ОТБР: 'TRUNC', ЧЁТН: 'EVEN', ЧЕТН: 'EVEN', НЕЧЁТ: 'ODD', НЕЧЕТ: 'ODD',
+  ФАКТР: 'FACT', НОД: 'GCD', НОК: 'LCM', ЧАСТНОЕ: 'QUOTIENT', ГРАДУСЫ: 'DEGREES', РАДИАНЫ: 'RADIANS', РИМСКОЕ: 'ROMAN',
+  АРАБСКОЕ: 'ARABIC', СУММКВ: 'SUMSQ', ЧИСЛКОМБ: 'COMBIN', ПЕРЕСТ: 'PERMUT', ОСНОВАНИЕ: 'BASE', ДЕС: 'DECIMAL', КОРЕНЬПИ: 'SQRTPI',
+  СУММРАЗНКВ: 'SUMX2MY2', СУММСУММКВ: 'SUMX2PY2', СУММКВРАЗН: 'SUMXMY2',
+  ИСКЛИЛИ: 'XOR', ЕСЛИМН: 'IFS', ПЕРЕКЛЮЧ: 'SWITCH', ЕСНД: 'IFNA', НД: 'NA', ЕНД: 'ISNA', ЕОШ: 'ISERR', ЕЛОГИЧ: 'ISLOGICAL',
+  ЕНЕТЕКСТ: 'ISNONTEXT', ЕЧЁТН: 'ISEVEN', ЕЧЕТН: 'ISEVEN', ЕНЕЧЁТ: 'ISODD', ЕНЕЧЕТ: 'ISODD', ЕССЫЛКА: 'ISREF', ЕФОРМУЛА: 'ISFORMULA',
+  'Ф.ТЕКСТ': 'FORMULATEXT', Ч: 'N', ТИП: 'TYPE', 'ТИП.ОШИБКИ': 'ERROR.TYPE', ЛИСТ: 'SHEET', ЛИСТЫ: 'SHEETS', ЯЧЕЙКА: 'CELL',
+  СУММЕСЛИМН: 'SUMIFS', СЧЁТЕСЛИМН: 'COUNTIFS', СЧЕТЕСЛИМН: 'COUNTIFS', СРЗНАЧЕСЛИМН: 'AVERAGEIFS', МАКСЕСЛИ: 'MAXIFS',
+  МИНЕСЛИ: 'MINIFS', 'ПРОМЕЖУТОЧНЫЕ.ИТОГИ': 'SUBTOTAL', АГРЕГАТ: 'AGGREGATE',
+  ГПР: 'HLOOKUP', ПРОСМОТР: 'LOOKUP', ПРОСМОТРX: 'XLOOKUP', ПРОСМОТРХ: 'XLOOKUP', ПОИСКПОЗX: 'XMATCH', ПОИСКПОЗХ: 'XMATCH',
+  ВЫБОР: 'CHOOSE', СТРОКА: 'ROW', СТОЛБЕЦ: 'COLUMN', АДРЕС: 'ADDRESS', СМЕЩ: 'OFFSET', ДВССЫЛ: 'INDIRECT', 'РАНГ.РВ': 'RANK.EQ',
+  'РАНГ.СР': 'RANK.AVG', ГИПЕРССЫЛКА: 'HYPERLINK',
+  ПРОПНАЧ: 'PROPER', ПОИСК: 'SEARCH', ЗАМЕНИТЬ: 'REPLACE', ОБЪЕДИНИТЬ: 'TEXTJOIN', СОВПАД: 'EXACT', СИМВОЛ: 'CHAR', КОДСИМВ: 'CODE',
+  ЮНИСИМВ: 'UNICHAR', ПЕЧСИМВ: 'CLEAN', ЧЗНАЧ: 'NUMBERVALUE', Т: 'T', ТЕКСТ: 'TEXT', ФИКСИРОВАННЫЙ: 'FIXED', РУБЛЬ: 'DOLLAR',
+  ТЕКСТДО: 'TEXTBEFORE', ТЕКСТПОСЛЕ: 'TEXTAFTER', ТЕКСТРАЗД: 'TEXTSPLIT',
+  ДЕНЬНЕД: 'WEEKDAY', НОМНЕДЕЛИ: 'WEEKNUM', 'НОМНЕДЕЛИ.ISO': 'ISOWEEKNUM', ДАТАМЕС: 'EDATE', КОНМЕСЯЦА: 'EOMONTH', РАБДЕНЬ: 'WORKDAY',
+  'РАБДЕНЬ.МЕЖД': 'WORKDAY.INTL', ЧИСТРАБДНИ: 'NETWORKDAYS', 'ЧИСТРАБДНИ.МЕЖД': 'NETWORKDAYS.INTL', РАЗНДАТ: 'DATEDIF', ДНИ: 'DAYS',
+  ДОЛЯГОДА: 'YEARFRAC', ДНЕЙ360: 'DAYS360', ВРЕМЯ: 'TIME', ЧАС: 'HOUR', МИНУТЫ: 'MINUTE', СЕКУНДЫ: 'SECOND', ДАТАЗНАЧ: 'DATEVALUE',
+  ВРЕМЗНАЧ: 'TIMEVALUE',
+  СРЗНАЧА: 'AVERAGEA', МАКСА: 'MAXA', МИНА: 'MINA', НАИБОЛЬШИЙ: 'LARGE', НАИМЕНЬШИЙ: 'SMALL', МОДА: 'MODE', 'МОДА.ОДН': 'MODE.SNGL',
+  СТАНДОТКЛОН: 'STDEV', 'СТАНДОТКЛОН.В': 'STDEV.S', 'СТАНДОТКЛОН.Г': 'STDEV.P', СТАНДОТКЛОНП: 'STDEVP', ДИСП: 'VAR', 'ДИСП.В': 'VAR.S',
+  'ДИСП.Г': 'VAR.P', ДИСПР: 'VARP', КВАРТИЛЬ: 'QUARTILE', 'КВАРТИЛЬ.ВКЛ': 'QUARTILE.INC', 'КВАРТИЛЬ.ИСКЛ': 'QUARTILE.EXC',
+  ПЕРСЕНТИЛЬ: 'PERCENTILE', 'ПРОЦЕНТИЛЬ.ВКЛ': 'PERCENTILE.INC', 'ПРОЦЕНТИЛЬ.ИСКЛ': 'PERCENTILE.EXC',
+  'ПЕРСЕНТИЛЬ.ВКЛ': 'PERCENTILE.INC', 'ПЕРСЕНТИЛЬ.ИСКЛ': 'PERCENTILE.EXC', ПРОЦЕНТРАНГ: 'PERCENTRANK',
+  'ПРОЦЕНТРАНГ.ВКЛ': 'PERCENTRANK.INC', КОРРЕЛ: 'CORREL', НАКЛОН: 'SLOPE', ОТРЕЗОК: 'INTERCEPT', ПРЕДСКАЗ: 'FORECAST',
+  'ПРЕДСКАЗ.ЛИНЕЙН': 'FORECAST.LINEAR', ТЕНДЕНЦИЯ: 'TREND', ЧАСТОТА: 'FREQUENCY', СРГЕОМ: 'GEOMEAN', СРГАРМ: 'HARMEAN',
+  СРОТКЛ: 'AVEDEV', КВАДРОТКЛ: 'DEVSQ', 'НОРМ.РАСП': 'NORM.DIST', 'НОРМ.ОБР': 'NORM.INV', 'НОРМ.СТ.РАСП': 'NORM.S.DIST',
+  'НОРМ.СТ.ОБР': 'NORM.S.INV', НОРМРАСП: 'NORMDIST', НОРМОБР: 'NORMINV', НОРМСТРАСП: 'NORMSDIST', НОРМСТОБР: 'NORMSINV',
+  ПЛТ: 'PMT', ПРПЛТ: 'IPMT', ОСПЛТ: 'PPMT', БС: 'FV', ПС: 'PV', КПЕР: 'NPER', СТАВКА: 'RATE', ЧПС: 'NPV', ВСД: 'IRR', ЧИСТНЗ: 'XNPV',
+  ЧИСТВНДОХ: 'XIRR', АПЛ: 'SLN', ФУО: 'DB', ДДОБ: 'DDB', АСЧ: 'SYD', ЭФФЕКТ: 'EFFECT', НОМИНАЛ: 'NOMINAL', ИНДЕКС: 'INDEX', ПОИСКПОЗ: 'MATCH', СУММПРОИЗВ: 'SUMPRODUCT', РАНГ: 'RANK',
 };
 
 // ---------- Токенизатор ----------
@@ -329,6 +362,21 @@ function wildcard(text) {
   }
   return new RegExp(`^${re}$`, 'i');
 }
+// Приблизительный поиск как в Excel (ВПР/ГПР/ПОИСКПОЗ/ПРОСМОТР): двоичный — последняя позиция со значением ≤ искомого
+// (по убыванию — ≥). На неотсортированных данных Excel из-за этого находит «не то» — и Перо так же.
+export function approxIndex(list, val, desc = false) {
+  let lo = 0; let hi = list.length - 1; let res = -1;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    let m = mid;
+    // пустые и значения другого типа пропускаются (ищем ближайшее подходящее вниз)
+    while (m >= lo && (list[m] == null || (typeof list[m] !== typeof val && !(typeof val === 'number' && typeof list[m] === 'number')))) m--;
+    if (m < lo) { lo = mid + 1; continue; }
+    const r = compare(list[m], val);
+    if (desc ? r >= 0 : r <= 0) { res = m; lo = mid + 1; } else hi = m - 1;
+  }
+  return res;
+}
 // Точное совпадение для ВПР/ПОИСКПОЗ/ГПР: текст — без регистра и с подстановочными знаками
 function exactMatcher(val) {
   const re = typeof val === 'string' ? wildcard(val) : null;
@@ -537,22 +585,21 @@ const FN = {
       const row = table.find((r) => hit(r[0]));
       return row ? (row[c - 1] ?? 0) : err(ERR.NA);
     }
-    let found = null;
-    for (const r of table) { if (r[0] == null) continue; if (compare(r[0], val) <= 0) found = r; else break; }
-    return found ? (found[c - 1] ?? 0) : err(ERR.NA);
+    const i = approxIndex(table.map((r) => r[0]), val);
+    return i >= 0 ? (table[i][c - 1] ?? 0) : err(ERR.NA);
   },
   MATCH: ([val, range, type]) => {
     const list = flat(range);
     const t = type == null ? 1 : toNum(type);
     if (isErr(val)) return val;
     if (t === 0) { const hit = exactMatcher(val); const i = list.findIndex(hit); return i < 0 ? err(ERR.NA) : i + 1; }
-    let found = -1;
-    list.forEach((v, i) => { if (v != null && (t > 0 ? compare(v, val) <= 0 : compare(v, val) >= 0)) found = i; });
+    const found = approxIndex(list, val, t < 0);
     return found < 0 ? err(ERR.NA) : found + 1;
   },
   INDEX: ([range, r, c]) => {
     if (isErr(range)) return range;
     const t = Array.isArray(range) ? range : [[range]];
+    if (t.length === 1 && c == null && r != null) { c = r; r = 1; } // одна строка — номер столбца
     const i = toNum(r ?? 1); const j = toNum(c ?? 1);
     if (firstErr(i, j)) return firstErr(i, j);
     const row = t[(i || 1) - 1];
@@ -658,6 +705,14 @@ const FN = {
     return 1 + list.filter((x) => (desc ? x > n : x < n)).length;
   },
 };
+// Библиотека функций (fnlib.js) — помощники движка передаются ей явно
+const HELPERS = {
+  ERR, err, isErr, toNum, toText, toBool, flat, nums, firstErr, criterion, compare, exactMatcher, wildcard, dateToSerial, serialToDate,
+  toArr, numText, textToNum, round, colName, FN, approxIndex,
+  evaluate: (...a) => evaluate(...a), parse: (...a) => parse(...a), localize: (...a) => localize(...a), sheetPrefix: (...a) => sheetPrefix(...a),
+};
+Object.assign(FN, functions(HELPERS));
+const LAZY = lazyFunctions(HELPERS);
 export const FUNCTIONS = Object.keys(FN);
 const SCALAR_FN = new Set(['ABS', 'SIGN', 'INT', 'SQRT', 'POWER', 'MOD', 'ROUND', 'ROUNDUP', 'ROUNDDOWN', 'NOT', 'LEN', 'UPPER', 'LOWER',
   'TRIM', 'LEFT', 'RIGHT', 'MID', 'FIND', 'SUBSTITUTE', 'REPT', 'VALUE', 'ISBLANK', 'ISNUMBER', 'ISTEXT', 'ISERROR', 'DATE', 'YEAR',
@@ -724,6 +779,7 @@ export function evaluate(node, ctx) {
         if (!branch) return b;
         return evaluate(branch, ctx) ?? 0;
       }
+      if (LAZY[node.name]) return fin(LAZY[node.name](node.args, ctx, evaluate));
       if (node.name === 'IFERROR') {
         const v = evaluate(node.args[0], ctx);
         const alt = () => evaluate(node.args[1] || { t: 'str', v: '' }, ctx);
@@ -738,7 +794,7 @@ export function evaluate(node, ctx) {
         markArray(ctx);
         return broadcast(args, (xs) => fin(f(xs)));
       }
-      return fin(f(args, ctx));
+      return fin(f(args, ctx, node.args));
     }
     default: return err(ERR.VALUE);
   }
@@ -808,8 +864,23 @@ export function canonical(src) {
 }
 // Хранимая формула → запись в файл: префиксы _xlfn. у функций новее Excel 2007
 export function fileFormula(src) {
-  return tokenize(src).map((t) => (t.type === 'func' && FUTURE.has(t.name) ? `_xlfn.${XLWS.has(t.name) ? '_xlws.' : ''}${t.name}`
-    : t.type === 'ref' && t.spill ? `_xlfn.ANCHORARRAY(${t.text.slice(0, -1)})` : t.text)).join('');
+  const toks = tokenize(src);
+  // имена параметров LET (нечётные аргументы, кроме последнего) — в файле с префиксом _xlpm.
+  const params = new Set();
+  toks.forEach((t, i) => {
+    if (t.type !== 'func' || t.name !== 'LET') return;
+    let depth = 0; let arg = 0;
+    for (let j = i + 1; j < toks.length; j++) {
+      const u = toks[j];
+      if (u.type === '(') { depth++; continue; }
+      if (u.type === ')') { if (--depth === 0) break; continue; }
+      if (depth === 1 && u.type === 'sep') { arg++; continue; }
+      if (depth === 1 && u.type === 'name' && arg % 2 === 0) params.add(u.name.toLowerCase());
+    }
+  });
+  return toks.map((t) => (t.type === 'func' && FUTURE.has(t.name) ? `_xlfn.${XLWS.has(t.name) ? '_xlws.' : ''}${t.name}`
+    : t.type === 'ref' && t.spill ? `_xlfn.ANCHORARRAY(${t.text.slice(0, -1)})`
+      : t.type === 'name' && params.has(t.name.toLowerCase()) ? `_xlpm.${t.name}` : t.text)).join('');
 }
 
 // Формула, введённая пользователем (русская запись): «1,5» между цифрами — десятичная запятая,

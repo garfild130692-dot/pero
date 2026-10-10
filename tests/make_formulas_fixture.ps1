@@ -1,5 +1,6 @@
 ﻿# Генерирует tests/fixtures/formulas.xlsx средствами Excel (COM) — эталон для сверки формул Перо с Excel.
-# Формулы — из tests/formula_cases.json (английская запись); лист «Формулы»: A — группа, B — текст формулы, C — формула
+# Формулы — из tests/formula_cases.json (английская запись); лист «Формулы»: A — группа, B — текст формулы, C — формула,
+# E — её русская запись (Formula2Local)
 # (Formula2 — с динамическими массивами), значения в файле посчитаны самим Excel. Лист «Данные» и листы Кв1–Кв3 — исходные
 # данные, имена Ставка и Суммы. Автор — нейтральный «Перо Тест». Файл в UTF-8 с BOM (PowerShell 5.1).
 # Запуск: powershell -ExecutionPolicy Bypass -File tests/make_formulas_fixture.ps1
@@ -72,7 +73,12 @@ try {
     foreach ($text in $g.Value) {
       $f.Cells.Item($row, 1).Value2 = $g.Name
       $f.Cells.Item($row, 2).Value2 = $text
-      try { $f.Cells.Item($row, 3).Formula2 = "=$text" }
+      try {
+        $f.Cells.Item($row, 3).Formula2 = "=$text"
+        # русская запись той же формулы — эталон для русских имён функций и разделителей
+        $f.Cells.Item($row, 5).NumberFormat = '@'
+        $f.Cells.Item($row, 5).Value2 = $f.Cells.Item($row, 3).Formula2Local
+      }
       catch { $f.Cells.Item($row, 4).Value2 = "Excel не принял формулу" }
       $row++
     }

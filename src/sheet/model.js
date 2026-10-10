@@ -89,7 +89,21 @@ export function recalc(wb) {
   };
   const ctxCache = new Map();
   const ctxOf = (sheetName) => {
-    if (!ctxCache.has(sheetName)) ctxCache.set(sheetName, { get, sheet: sheetName, extent, sheetsBetween, name: nameValue(sheetName), spill: spillRef, markArray });
+    if (!ctxCache.has(sheetName)) {
+      ctxCache.set(sheetName, {
+        get, sheet: sheetName, extent, sheetsBetween, name: nameValue(sheetName), spill: spillRef, markArray, cur: null,
+        formulaAt: (sh, r, c) => { const s0 = sheetByName(wb, sh); const cell = s0 && s0.cells.get(key(r, c)); return cell && cell.f != null ? cell.f : null; },
+        rowHidden: (sh, r) => { const s0 = sheetByName(wb, sh); return !!(s0 && s0.rowInfo && s0.rowInfo[r] && s0.rowInfo[r].hidden); },
+        sheetIndex: (name) => wb.sheets.findIndex((x) => x.name.toLowerCase() === String(name).toLowerCase()),
+        sheetCount: () => wb.sheets.length,
+        nameDef: (n) => {
+          const lc = String(n).toLowerCase();
+          const d = (wb.names || []).find((x) => x.name.toLowerCase() === lc && x.sheet && x.sheet.toLowerCase() === String(sheetName).toLowerCase())
+            || (wb.names || []).find((x) => x.name.toLowerCase() === lc && !x.sheet);
+          return d ? d.text : null;
+        },
+      });
+    }
     return ctxCache.get(sheetName);
   };
   // «Разлив» динамических массивов: по листу — значения соседних ячеек (vals), диапазоны якорей (at), заблокированные (blocked).
@@ -107,7 +121,12 @@ export function recalc(wb) {
     const ast = astOf(cell.f);
     const saved = arrFlag;
     arrFlag = false;
-    let v = ast ? evaluate(ast, ctxOf(sheet.name)) : err(ERR.NAME);
+    const ctx = ctxOf(sheet.name);
+    const prevCur = ctx.cur;
+    const [cr, cc] = unkey(k);
+    ctx.cur = { r: cr, c: cc }; // СТРОКА(), СТОЛБЕЦ(), ЯЧЕЙКА() без ссылки — текущая ячейка
+    let v = ast ? evaluate(ast, ctx) : err(ERR.NAME);
+    ctx.cur = prevCur;
     const ax = arrFlag;
     arrFlag = saved;
     let full = null;

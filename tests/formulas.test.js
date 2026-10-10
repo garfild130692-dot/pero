@@ -8,11 +8,13 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync, writeFileSync, mkdirSync } from 'fs';
 import { importXlsx } from '../src/sheet/xlsx.js';
 import { recalc } from '../src/sheet/model.js';
-import { isErr } from '../src/sheet/formula.js';
+import { fromUser, isErr, localize } from '../src/sheet/formula.js';
 
 const VOLATILE = 'Летучие (только тип)';
 // Известные расхождения — до соответствующей части этапа 12 (по мере работы список сокращается)
 const KNOWN = new Set([]);
+// итерационные функции: Excel останавливается при точности 1e-8 (его ЧИСТВНДОХ отличается от точного корня в 8-м знаке)
+const ITERATIVE = /^(XIRR|IRR|RATE)\(/;
 const show = (v) => (v == null ? '(пусто)' : isErr(v) ? v.error : typeof v === 'string' ? JSON.stringify(v) : String(v));
 const kind = (v) => (v == null ? 'empty' : isErr(v) ? 'error' : typeof v);
 function same(a, b) {
@@ -36,13 +38,16 @@ export async function compareWithExcel() {
     const excel = (excelSheet.cells.get(`${r},2`) || {}).v ?? null;
     const mine = (oursSheet.cells.get(`${r},2`) || {}).v ?? null;
     const rejected = excelSheet.cells.get(`${r},3`);
+    const formula = (excelSheet.cells.get(`${r},2`) || {}).f;
+    const local = String((excelSheet.cells.get(`${r},4`) || {}).v ?? '').replace(/^=/, ''); // русская запись от Excel
     let status;
     if (rejected || (isErr(excel) && excel.error === '#NAME?')) status = 'нет в Excel';
     else if (group === VOLATILE) status = kind(mine) === kind(excel) ? 'совпало' : isErr(mine) && mine.error === '#NAME?' ? 'нет в Перо' : 'расхождение';
     else if (same(mine, excel)) status = 'совпало';
+    else if (ITERATIVE.test(text.v) && typeof mine === 'number' && typeof excel === 'number' && Math.abs(mine - excel) <= 1e-7 * Math.max(1, Math.abs(excel))) status = 'совпало';
     else if (isErr(mine) && mine.error === '#NAME?') status = 'нет в Перо';
     else status = KNOWN.has(text.v) ? 'известное расхождение' : 'расхождение';
-    rows.push({ group, text: text.v, excel, mine, status });
+    rows.push({ group, text: text.v, excel, mine, status, formula, local });
   }
   return rows;
 }
@@ -62,6 +67,14 @@ describe('формулы как в Excel', () => {
     mkdirSync('tests/out', { recursive: true });
     writeFileSync('tests/out/formulas_report.md', lines.join('\n'));
     const bad = rows.filter((x) => x.status === 'расхождение').map((x) => `=${x.text}: Excel ${show(x.excel)}, Перо ${show(x.mine)}`);
+    expect(bad).toEqual([]);
+  });
+
+  it('русская запись формул совпадает с Excel (имена функций, «;», десятичная запятая, {;:})', async () => {
+    const rows = (await compareWithExcel()).filter((x) => x.status !== 'нет в Excel' && x.formula != null && x.local);
+    const bad = rows.filter((x) => localize(x.formula) !== x.local || fromUser(x.local) !== x.formula)
+      .map((x) => `Excel: ${x.local} | Перо: ${localize(x.formula)} | обратно: ${fromUser(x.local)}`);
+    expect(rows.length).toBeGreaterThan(300);
     expect(bad).toEqual([]);
   });
 });
