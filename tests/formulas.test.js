@@ -15,6 +15,21 @@ const VOLATILE = 'Летучие (только тип)';
 const KNOWN = new Set([]);
 // итерационные функции: Excel останавливается при точности 1e-8 (его ЧИСТВНДОХ отличается от точного корня в 8-м знаке)
 const ITERATIVE = /^(XIRR|IRR|RATE)\(/;
+// функции Бесселя: у Excel приближения с точностью ~1e-7 (Перо точнее — сверено с рядом), допуск 1e-6
+const BESSEL = /^BESSEL[IJKY]\(/;
+// комплексные числа — текст «a+bi»: последний из 15 знаков зависит от порядка операций, сравниваем как числа
+const complexOf = (t) => {
+  const m = /^([-+]?[\d,]+(?:E[-+]?\d+)?)?(?:([-+])([\d,]+(?:E[-+]?\d+)?)?([ij]))?$/.exec(String(t));
+  if (!m || (m[1] === undefined && m[2] === undefined)) return null;
+  const n = (x) => +x.replace(',', '.');
+  return [m[1] !== undefined ? n(m[1]) : 0, m[2] ? (m[2] === '-' ? -1 : 1) * (m[3] !== undefined ? n(m[3]) : 1) : 0];
+};
+const sameComplex = (a, b) => {
+  const x = complexOf(a); const y = complexOf(b);
+  if (!x || !y) return false;
+  const scale = Math.max(1, Math.hypot(y[0], y[1]));
+  return Math.abs(x[0] - y[0]) <= 1e-12 * scale && Math.abs(x[1] - y[1]) <= 1e-12 * scale;
+};
 const show = (v) => (v == null ? '(пусто)' : isErr(v) ? v.error : typeof v === 'string' ? JSON.stringify(v) : String(v));
 const kind = (v) => (v == null ? 'empty' : isErr(v) ? 'error' : typeof v);
 function same(a, b) {
@@ -45,6 +60,8 @@ export async function compareWithExcel() {
     else if (group === VOLATILE) status = kind(mine) === kind(excel) ? 'совпало' : isErr(mine) && mine.error === '#NAME?' ? 'нет в Перо' : 'расхождение';
     else if (same(mine, excel)) status = 'совпало';
     else if (ITERATIVE.test(text.v) && typeof mine === 'number' && typeof excel === 'number' && Math.abs(mine - excel) <= 1e-7 * Math.max(1, Math.abs(excel))) status = 'совпало';
+    else if (BESSEL.test(text.v) && typeof mine === 'number' && typeof excel === 'number' && Math.abs(mine - excel) <= 1e-6 * Math.max(1, Math.abs(excel))) status = 'совпало';
+    else if (/^IM[A-Z0-9]+\(|^COMPLEX\(/.test(text.v) && typeof mine === 'string' && typeof excel === 'string' && sameComplex(mine, excel)) status = 'совпало';
     else if (isErr(mine) && mine.error === '#NAME?') status = 'нет в Перо';
     else status = KNOWN.has(text.v) ? 'известное расхождение' : 'расхождение';
     rows.push({ group, text: text.v, excel, mine, status, formula, local });
