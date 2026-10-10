@@ -28,12 +28,12 @@ function Root() {
   }, []);
 
   if (!mode) return null;
-  const props = { key: mode.n, initialFile: mode.file, onOpenOther: openOther, autosaveSec: boot.autosaveSec };
+  const props = { initialFile: mode.file, onOpenOther: openOther, autosaveSec: boot.autosaveSec };
   return (
     <>
       {mode.kind === 'sheet'
-        ? <SheetApp {...props} onNewDoc={() => open('doc', null)} />
-        : <App {...props} onNewSheet={() => open('sheet', null)} />}
+        ? <SheetApp key={mode.n} {...props} onNewDoc={() => open('doc', null)} />
+        : <App key={mode.n} {...props} onNewSheet={() => open('sheet', null)} />}
       {boot.recovery && (
         <RecoveryPanel items={boot.recovery} onOpenHere={openOther} onClose={() => setBoot((b) => ({ ...b, recovery: null }))} />
       )}

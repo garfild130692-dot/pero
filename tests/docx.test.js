@@ -34,7 +34,10 @@ describe('docx', () => {
     writeFileSync('tests/out/roundtrip.docx', bytes);
     const b = (await importDocx(bytes)).doc;
     Node.fromJSON(schema, b).check();
-    expect(b).toEqual(a);
+    // без исходного пакета нестандартного стиля заголовка («Название») в файле нет — пишется наш Heading N;
+    // вид заголовка при этом сохраняется прямым форматированием, теряется только ссылка на стиль (fileStyle)
+    const noFileStyle = (d) => JSON.parse(JSON.stringify(d, (k, v) => (k === 'fileStyle' ? undefined : v)));
+    expect(noFileStyle(b)).toEqual(noFileStyle(a));
   });
 
   it('результат открывает сторонняя библиотека (python-docx)', async () => {
@@ -235,8 +238,8 @@ describe('таблицы', () => {
     expect(t1.attrs.borders.insideV).toEqual(line('single', 0.5));
     expect(t1.content.map((r) => r.content[0].attrs.colwidth)).toEqual([[113.4], [113.4], [113.4]]); // 3 см
     expect(cell(t1, 0, 2).colwidth[0] * 15).toBeCloseTo(4535, 5); // 8 см в твипах
-    expect(t1.content[0].attrs).toEqual({ height: null, heightRule: null, repeatHeader: true });
-    expect(t1.content[1].attrs).toEqual({ height: 28.35, heightRule: 'exact', repeatHeader: false });
+    expect(t1.content[0].attrs).toEqual({ height: null, heightRule: null, repeatHeader: true, cantSplit: false });
+    expect(t1.content[1].attrs).toEqual({ height: 28.35, heightRule: 'exact', repeatHeader: false, cantSplit: false });
     expect(cell(t1, 0, 0).background).toBe('#dcefe9');
     expect([cell(t1, 1, 1).verticalAlign, cell(t1, 1, 2).verticalAlign]).toEqual(['center', 'bottom']);
     expect(cell(t1, 2, 2).borders).toEqual({ bottom: line('single', 3, '#c00000') });

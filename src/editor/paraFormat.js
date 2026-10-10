@@ -61,8 +61,8 @@ export const ParaFormat = Extension.create({
     return [{
       types: TYPES,
       attributes: {
-        spaceBefore: attr((el) => cssPt(el.style.marginTop), (a) => (a.spaceBefore != null ? { style: `padding-top: ${a.spaceBefore}pt` } : {})),
-        spaceAfter: attr((el) => cssPt(el.style.marginBottom), (a) => (a.spaceAfter != null ? { style: `padding-bottom: ${a.spaceAfter}pt` } : {})),
+        spaceBefore: attr((el) => cssPt(el.style.marginTop), (a) => (a.spaceBefore != null ? { style: `margin-top: ${a.spaceBefore}pt` } : {}) /* margin: Word берёт больший из соседних интервалов */),
+        spaceAfter: attr((el) => cssPt(el.style.marginBottom), (a) => (a.spaceAfter != null ? { style: `margin-bottom: ${a.spaceAfter}pt` } : {})),
         lineRule: attr((el) => {
           const v = el.style.lineHeight;
           if (!v) return null;

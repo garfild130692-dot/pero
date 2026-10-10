@@ -2,7 +2,7 @@
 // Собственный разбор OOXML: никаких сторонних конвертеров, только распаковка zip и XML.
 import JSZip from 'jszip';
 import { DOMParser, XMLSerializer } from '@xmldom/xmldom';
-import { HIGHLIGHTS, normalizeColor } from '../editor/font.js';
+import { HIGHLIGHTS, headingDefaults, normalizeColor } from '../editor/font.js';
 import { WORD_FALLBACK_PARA, paraBase, paraDiff, twipsToPt } from '../editor/paragraph.js';
 import { CELL_SIDES, NO_BORDERS, TABLE_SIDES, TWIPS_PER_PX, borderFromOoxml } from '../editor/table.js';
 import { EMU_PER_PX, bytesToBase64, mimeOf } from '../editor/image.js';
@@ -445,11 +445,17 @@ class Importer {
     const charMarks = rStyle && this.styles[rStyle] && this.styles[rStyle].name !== 'hyperlink'
       ? resolvedStyleMarks(this.styles, rStyle, this.styleCache) : {};
     const m = { ...paraMarks, ...charMarks, ...readRunMarks(rPr, this.theme) };
-    // совпадающее с умолчаниями (документа или стиля абзаца) — не прямое форматирование; у заголовков свои шрифт и размер
+    // совпадающее с умолчаниями (документа или стиля абзаца) — не прямое форматирование;
+    // у заголовков умолчания свои (шрифт, размер, цвет нашего вида заголовка) — isHeading = уровень заголовка
     if (!isHeading) {
       const base = this.fontBase || this.docDefaults;
       if (m.fontFamily === base.fontFamily) delete m.fontFamily;
       if (m.fontSize === base.fontSize) delete m.fontSize;
+    } else {
+      const hd = headingDefaults(isHeading);
+      if (m.fontFamily === hd.fontFamily) delete m.fontFamily;
+      if (m.fontSize === hd.fontSize) delete m.fontSize;
+      if (m.color && m.color.toLowerCase() === hd.color) delete m.color;
     }
     const marks = marksToArray(m, link);
     if (this.rev) marks.push({ type: this.rev.type, attrs: this.rev.attrs });
@@ -563,9 +569,9 @@ class Importer {
     const directJc = wAttr(child(pPr, 'jc'), 'val');
     const jc = directJc || (custom ? null : styleProp(this.styles, styleId, 'jc'));
     const textAlign = { center: 'center', right: 'right', end: 'right', both: 'justify', distribute: 'justify' }[jc] || null;
-    const styleMarks = level || custom ? {} : resolvedStyleMarks(this.styles, styleId, this.styleCache);
+    const styleMarks = custom ? {} : { ...resolvedStyleMarks(this.styles, styleId, this.styleCache) };
     this.fontBase = def ? { fontFamily: def.run.fontFamily || this.docDefaults.fontFamily, fontSize: def.run.fontSize || this.docDefaults.fontSize } : null;
-    const content = this.inlines(p, styleMarks, !!level);
+    const content = this.inlines(p, styleMarks, level);
     this.fontBase = null;
 
     // Интервалы и отступы: у заголовка — только прямые (вид заголовка задаёт наш стиль);
@@ -573,13 +579,18 @@ class Importer {
     // у абзаца пользовательского стиля — только прямые (отличия от стиля); у обычного — стиль (с basedOn) + прямые.
     // В атрибуты попадают только отличия от базы.
     const direct = readParaProps(pPr);
-    const style = level || custom ? {} : resolvedStylePara(this.styles, styleId, this.styleCache);
+    const style = custom ? {} : resolvedStylePara(this.styles, styleId, this.styleCache);
     let values;
+    let base = paraBase(this.docPara, { headingLevel: level, inList: !!numPr });
     if (numPr) {
       values = { lineRule: style.lineRule, lineSpacing: style.lineSpacing, ...direct };
       delete values.indentLeft; delete values.indentRight; delete values.indentFirst;
+    } else if (this.cell && !level) {
+      // абзац в ячейке — как Word: умолчания документа ← стиль таблицы ← стиль абзаца ← прямые;
+      // вид ячейки по умолчанию (styles.css) — как у «Сетки таблицы»: без интервалов, одинарный
+      values = { ...this.cell.para, ...style, ...direct };
+      base = { ...base, spaceBefore: 0, spaceAfter: 0, lineRule: 'auto', lineSpacing: 1 };
     } else values = { ...style, ...direct };
-    const base = paraBase(this.docPara, { headingLevel: level, inList: !!numPr });
     if (def) Object.assign(base, def.para);
     const para = paraDiff(values, base);
 
@@ -590,7 +601,7 @@ class Importer {
     if (tabs.length) para.tabs = tabs;
     const layout = layoutAttrs({ ...(this.docLayout || {}), ...resolvedStyleLayout(this.styles, styleId, this.styleCache), ...readLayoutProps(pPr, child, wAttr) }, !!level);
     const node = level
-      ? { type: 'heading', attrs: { level, textAlign, ...para, ...layout }, content }
+      ? { type: 'heading', attrs: { level, textAlign, ...para, ...layout, ...(styleId && (this.styles[styleId] || {}).name !== `heading ${level}` ? { fileStyle: { id: styleId, level } } : {}) }, content }
       : { type: 'paragraph', attrs: { textAlign, ...para, ...layout, ...(custom ? { styleId } : {}) }, content };
     // разрыв раздела после абзаца — исходный XML параметров раздела
     const sect = child(pPr, 'sectPr');
@@ -608,6 +619,9 @@ class Importer {
     const borders = { ...NO_BORDERS };
     for (const id of chain.reverse()) Object.assign(borders, this.styles[id].tblBorders);
     Object.assign(borders, readBorders(child(tblPr, 'tblBorders'), TABLE_SIDES));
+    // Свойства абзаца из стиля таблицы («Сетка таблицы»: без интервалов, одинарный) — для абзацев её ячеек
+    const tablePara = {};
+    for (const id of chain) Object.assign(tablePara, this.styles[id].para);
     const jc = wAttr(child(tblPr, 'jc'), 'val');
     const align = { center: 'center', right: 'right', end: 'right' }[jc] || null;
     // Ширины столбцов из сетки таблицы (твипы → px, как хранит TipTap)
@@ -630,7 +644,10 @@ class Importer {
           // нижнюю границу объединённой ячейки Word берёт у последней ячейки объединения
           if (cellBorders.bottom) o.attrs.borders = { ...(o.attrs.borders || {}), bottom: cellBorders.bottom };
         } else {
+          const outerCell = this.cell;
+          this.cell = { para: tablePara };
           let content = this.blocks(tc);
+          this.cell = outerCell;
           if (!content.length) content = [{ type: 'paragraph' }];
           const widths = grid.slice(col, col + span);
           const colwidth = widths.length === span && widths.every((w) => w > 0) ? widths.map((w) => w / TWIPS_PER_PX) : null;
@@ -663,6 +680,7 @@ class Importer {
         height: height || null,
         heightRule: height && wAttr(th, 'hRule') === 'exact' ? 'exact' : null,
         repeatHeader: !!onOff(child(trPr, 'tblHeader')),
+        cantSplit: !!onOff(child(trPr, 'cantSplit')),
       };
       if (cells.length) rows.push({ type: 'tableRow', attrs: rowAttrs, content: cells });
     }

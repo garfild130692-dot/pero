@@ -87,3 +87,10 @@ export function stepSize(size, dir) {
   const prev = [...FONT_SIZES].reverse().find((s) => s < size);
   return prev ?? Math.max(Math.ceil(size) - 1, MIN_SIZE);
 }
+
+// Как оформлены заголовки по умолчанию (совпадает со styles.css и стилями Heading1–6 в export.js).
+// Оформление заголовка из файла, отличное от этого, переносится в метки текста (см. import.js).
+export const HEADING_FONT = 'Calibri Light';
+export const HEADING_SIZES = { 1: 16, 2: 13, 3: 12, 4: 11, 5: 11, 6: 11 };
+export const HEADING_COLORS = { 1: '#2f5496', 2: '#2f5496', 3: '#1f3763', 4: '#2f5496', 5: '#2f5496', 6: '#2f5496' };
+export const headingDefaults = (level) => ({ fontFamily: HEADING_FONT, fontSize: HEADING_SIZES[level] || 11, color: HEADING_COLORS[level] || '#2f5496' });

@@ -8,7 +8,7 @@ import Highlight from '@tiptap/extension-highlight';
 import Subscript from '@tiptap/extension-subscript';
 import Superscript from '@tiptap/extension-superscript';
 import {
-  DEFAULT_FONT, DEFAULT_SIZE, cssFontStack, normalizeColor, normalizeFontFamily, parseSize, stepSize, MIN_SIZE, MAX_SIZE,
+  DEFAULT_FONT, DEFAULT_SIZE, HEADING_FONT, HEADING_SIZES, cssFontStack, normalizeColor, normalizeFontFamily, parseSize, stepSize, MIN_SIZE, MAX_SIZE,
 } from './font.js';
 import { NEW_DOC_PARA } from './paragraph.js';
 import { ParaFormat } from './paraFormat.js';
@@ -24,9 +24,8 @@ import { ParagraphStyles, styleOf } from './styles.js';
 import { Comments } from './comments.js';
 import { Deletion, Insertion, TrackChanges } from './track.js';
 
-// Как оформлены заголовки (совпадает со styles.css и стилями Heading1–6 в export.js)
-export const HEADING_FONT = 'Calibri Light';
-export const HEADING_SIZES = { 1: 16, 2: 13, 3: 12, 4: 11, 5: 11, 6: 11 };
+// Как оформлены заголовки — font.js (совпадает со styles.css и стилями Heading1–6 в export.js)
+export { HEADING_FONT, HEADING_SIZES };
 
 // Умолчания шрифта и абзаца храним в атрибутах документа (аналог docDefaults + стиль «Обычный»).
 // В текст и абзацы попадает только прямое форматирование — то, что отличается от умолчаний.

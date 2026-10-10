@@ -107,15 +107,11 @@ const sideCss = (b) => (b ? `${b.style === 'double' ? Math.max(b.width * 3, 2.25
 function boxStyle(a) {
   const b = a.pBorders || {};
   const off = (s) => (b[s] ? (b[s].space || 0) + (b[s].style === 'double' ? b[s].width * 3 : b[s].width) : 0);
-  // интервалы по умолчанию: у абзаца — padding из переменных документа, у заголовка — margin (снаружи блока)
-  const heading = a.level != null;
-  const sb = a.spaceBefore != null ? `${a.spaceBefore}pt` : heading ? '0pt' : 'var(--p-before, 0pt)';
-  const sa = a.spaceAfter != null ? `${a.spaceAfter}pt` : heading ? '0pt' : 'var(--p-after, 0pt)';
   return [
     `--pbx-top: ${sideCss(b.top)}`, `--pbx-left: ${sideCss(b.left)}`, `--pbx-bottom: ${sideCss(b.bottom)}`,
     `--pbx-right: ${sideCss(b.right)}`, `--pbx-between: ${sideCss(b.between)}`,
     `--pbx-bg: ${a.shading || 'transparent'}`,
-    `--pbx-t: calc(${sb} - ${off('top')}pt)`, `--pbx-b: calc(${sa} - ${off('bottom')}pt)`,
+    `--pbx-t: -${off('top')}pt`, `--pbx-b: -${off('bottom')}pt`, // интервалы до/после — margin, снаружи рамки
     `--pbx-l: -${off('left')}pt`, `--pbx-r: -${off('right')}pt`,
   ].join('; ');
 }
@@ -124,6 +120,13 @@ const boxKey = (n) => (n.attrs.pBorders || n.attrs.shading
   ? JSON.stringify([n.attrs.pBorders, n.attrs.shading, n.attrs.indentLeft, n.attrs.indentRight, n.type.name]) : null);
 
 const groupKey = new PluginKey('paraBoxGroups');
+// Промежуток между соседними абзацами (pt): больший из «после» верхнего и «перед» нижнего, как в Word и CSS
+function gapPt(a, b, docAttrs) {
+  const dp = (docAttrs && docAttrs.para) || {};
+  const after = a.attrs.spaceAfter ?? (a.type.name === 'heading' ? 0 : dp.spaceAfter ?? 8);
+  const before = b.attrs.spaceBefore ?? (b.type.name === 'heading' ? (b.attrs.level === 1 ? 12 : 2) : dp.spaceBefore ?? 0);
+  return Math.max(after, before);
+}
 function groupDecorations(doc) {
   const decos = [];
   const scan = (parent, base) => {
@@ -132,10 +135,11 @@ function groupDecorations(doc) {
       const pos = base + off;
       const k = TYPES.includes(node.type.name) ? boxKey(node) : null;
       if (k && prev && prev.key === k) {
-        decos.push(Decoration.node(prev.pos, prev.pos + prev.size, { class: 'pb-next' }));
+        // верхний блок дотягивается до нижнего через промежуток между абзацами
+        decos.push(Decoration.node(prev.pos, prev.pos + prev.size, { class: 'pb-next', style: `--pbx-join: ${gapPt(prev.node, node, doc.attrs)}pt` }));
         decos.push(Decoration.node(pos, pos + node.nodeSize, { class: 'pb-prev' }));
       }
-      prev = k ? { key: k, pos, size: node.nodeSize } : null;
+      prev = k ? { key: k, pos, size: node.nodeSize, node } : null;
       if (!node.isTextblock && node.childCount) scan(node, pos + 1);
     });
   };
@@ -167,6 +171,13 @@ export const ParaLayout = Extension.create({
           renderHTML: (a) => (a.pBorders || a.shading ? { 'data-pbox': '', style: boxStyle(a) } : {}),
         },
         shading: { default: null, keepOnSplit: true, parseHTML: () => null, renderHTML: () => ({}) }, // рисуется вместе с pBorders
+      },
+    }, {
+      // Исходный стиль заголовка из файла { id, level } («Название», «Заголовок 1» с другим id…): при сохранении
+      // заголовок того же уровня пишется с ним, а не с нашим Heading N — оформление стиля файла не теряется
+      types: ['heading'],
+      attributes: {
+        fileStyle: { default: null, keepOnSplit: false, parseHTML: () => null, renderHTML: () => ({}) },
       },
     }];
   },

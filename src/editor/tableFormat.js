@@ -1,5 +1,7 @@
 // Таблицы: атрибуты таблицы/строки/ячейки, отрисовка и команды форматирования.
 import { Extension } from '@tiptap/core';
+import { Plugin, PluginKey } from '@tiptap/pm/state';
+import { Decoration, DecorationSet } from '@tiptap/pm/view';
 import { Table, TableCell, TableHeader, TableRow, TableView } from '@tiptap/extension-table';
 import { TableMap, selectedRect } from '@tiptap/pm/tables';
 import { CELL_SIDES, DEFAULT_PEN, GRID_BORDERS, NONE, NO_BORDERS, TABLE_SIDES, borderCss } from './table.js';
@@ -77,6 +79,11 @@ export const PeroTableRow = TableRow.extend({
         default: false,
         renderHTML: (a) => (a.repeatHeader ? { 'data-repeat-header': 'true' } : {}),
       },
+      // «Не разрывать строку» (w:cantSplit): строка целиком на одном листе; по умолчанию Word делит строку между листами
+      cantSplit: {
+        default: false,
+        renderHTML: (a) => (a.cantSplit ? { 'data-cant-split': 'true' } : {}),
+      },
     };
   },
 });
@@ -88,7 +95,7 @@ const cellAttrs = (parent) => ({
     default: null,
     renderHTML: (a) => {
       if (!a.borders) return {};
-      const css = CELL_SIDES.filter((s) => a.borders[s]).map((s) => `border-${s}: ${borderCss(a.borders[s])}`);
+      const css = CELL_SIDES.filter((s) => a.borders[s]).map((s) => `--cb-${s}: ${borderCss(a.borders[s])}`);
       return css.length ? { style: css.join('; ') } : {};
     },
   },
@@ -137,7 +144,46 @@ const MODES = {
 };
 const OPPOSITE = { top: 'bottom', bottom: 'top', left: 'right', right: 'left' };
 
+// Края таблицы для каждой ячейки (с учётом объединений): data-tb-edge="t l b r" — по нему ячейка берёт внешнюю
+// или внутреннюю границу. Декорации, а не правка DOM: ProseMirror не перечитывает ячейки из-за чужих атрибутов.
+const edgesKey = new PluginKey('tableEdges');
+function edgeDecorations(doc) {
+  const decos = [];
+  doc.descendants((node, pos) => {
+    if (node.type.name !== 'table') return true;
+    const map = TableMap.get(node);
+    const seen = new Set();
+    for (let i = 0; i < map.map.length; i++) {
+      const off = map.map[i];
+      if (seen.has(off)) continue;
+      seen.add(off);
+      const rect = map.findCell(off);
+      const e = [];
+      if (rect.top === 0) e.push('t');
+      if (rect.left === 0) e.push('l');
+      if (rect.bottom === map.height) e.push('b');
+      if (rect.right === map.width) e.push('r');
+      const cell = node.nodeAt(off);
+      const from = pos + 1 + off;
+      decos.push(Decoration.node(from, from + cell.nodeSize, { 'data-tb-edge': e.join(' ') }));
+    }
+    return false;
+  });
+  return DecorationSet.create(doc, decos);
+}
+
 export const TableFormat = Extension.create({
+  addProseMirrorPlugins() {
+    return [new Plugin({
+      key: edgesKey,
+      state: {
+        init: (_c, state) => edgeDecorations(state.doc),
+        apply: (tr, old) => (tr.docChanged ? edgeDecorations(tr.doc) : old),
+      },
+      props: { decorations: (state) => edgesKey.getState(state) },
+    })];
+  },
+
   name: 'tableFormat',
 
   addCommands() {

@@ -24,8 +24,8 @@ export function styleCss(styles) {
     if (r.italic) decl.push('font-style: italic');
     if (r.underline) decl.push('text-decoration: underline');
     if (s.align) decl.push(`text-align: ${s.align}`);
-    if (p.spaceBefore != null) decl.push(`padding-top: ${p.spaceBefore}pt`);
-    if (p.spaceAfter != null) decl.push(`padding-bottom: ${p.spaceAfter}pt`);
+    if (p.spaceBefore != null) decl.push(`margin-top: ${p.spaceBefore}pt`);
+    if (p.spaceAfter != null) decl.push(`margin-bottom: ${p.spaceAfter}pt`);
     if (p.lineSpacing != null) decl.push(`line-height: ${lineCss(p.lineRule || 'auto', p.lineSpacing)}`);
     if (p.indentLeft != null) decl.push(`margin-left: ${p.indentLeft}pt`);
     if (p.indentRight != null) decl.push(`margin-right: ${p.indentRight}pt`);

@@ -278,9 +278,16 @@ body { background: var(--workspace); overflow: hidden; }
 
 /* Листы на экране: распорка разбиения рисует нижнее поле, промежуток между листами и верхнее поле следующего */
 .pero-page-spacer { position: static; user-select: none; text-indent: 0; }
+/* распорка внутри абзаца — отдельная «строка» во всю ширину; в таблице — строка-распорка */
+.pero-line-spacer { display: inline-block; width: 100%; vertical-align: top; line-height: 0; user-select: none; text-indent: 0; }
+.pero-row-spacer, .pero-row-spacer > td { border: 0 !important; padding: 0 !important; background: transparent !important; }
+.pero-row-spacer > td::before, .pero-row-spacer > td::after { display: none !important; }
+.pero-header-copy { user-select: none; pointer-events: none; }
+/* полосы между листами — отдельный слой поверх листа (pagination.js), координаты от .page */
+.pero-bands { position: absolute; left: 0; right: 0; top: 0; height: 0; z-index: 2; pointer-events: none; }
 .pero-page-band {
-  position: absolute; left: calc(-1 * var(--page-ml, 113px)); right: calc(-1 * var(--page-mr, 57px));
-  display: flex; flex-direction: column; pointer-events: none;
+  position: absolute; left: 0; right: 0;
+  display: flex; flex-direction: column; pointer-events: none; background: #fff;
 }
 .pero-page-gap {
   background: var(--workspace); flex: none;
@@ -314,7 +321,8 @@ body { background: var(--workspace); overflow: hidden; }
   :root { --gridline: transparent; }
   html, body, #root, .app { height: auto; overflow: visible; background: #fff; }
   .titlebar, .ribbon, .statusbar, .ruler-bar, .modal-backdrop,
-  .pero-page-spacer, .pero-page-fill, .page-chrome-top, .page-chrome-bottom { display: none !important; }
+  .pero-page-spacer, .pero-page-fill, .page-chrome-top, .page-chrome-bottom,
+  .pero-line-spacer, .pero-row-spacer, .pero-header-copy, .pero-bands { display: none !important; }
   .workspace { overflow: visible; padding: 0; }
   .main-row { display: block; }
   .page-scaler { width: auto !important; height: auto !important; }
@@ -336,16 +344,26 @@ body { background: var(--workspace); overflow: hidden; }
   line-height: var(--p-line, calc(var(--line-ratio, 1.15) * 1.08));
   tab-size: 4; -moz-tab-size: 4;
 }
+/* Переносы строк как в Word: пробел в конце строки «висит» за краем и не выталкивает слово на следующую строку.
+   ProseMirror ставит break-spaces (там конечные пробелы занимают место) — из-за этого строки рвались раньше, чем в Word. */
+.page-content.ProseMirror { white-space: pre-wrap; }
+/* интервалы — margin; flow-root не даёт интервалу первого абзаца «провалиться» сквозь верх области текста */
+.page-content { display: flow-root; }
+/* Word без «Кернинга» в формате символов (по умолчанию) пары не сближает; браузер по умолчанию сближает —
+   строки получались уже, чем в Word, и переносились в других местах */
+.page-content { font-kerning: none; }
 /* Абзац по умолчанию документа — CSS-переменные из атрибутов документа (App).
-   Интервалы до/после — padding, а не margin: в Word они складываются, а margin в CSS схлопывается. */
+   Интервалы до/после — margin: Word между соседними абзацами берёт БОЛЬШИЙ из «после» и «перед» (проверено через
+   COM: 20 + 30 → 30, 20 + 10 → 20) — ровно как схлопывание margin в CSS. */
 .page-content p {
-  margin: 0 var(--p-right, 0) 0 var(--p-left, 0);
-  padding: var(--p-before, 0) 0 var(--p-after, 8pt);
+  margin: var(--p-before, 0) var(--p-right, 0) var(--p-after, 8pt) var(--p-left, 0);
+  padding: 0;
   text-indent: var(--p-indent, 0);
 }
 .page-content h1, .page-content h2, .page-content h3,
 .page-content h4, .page-content h5, .page-content h6 {
-  font-family: 'Calibri Light', Calibri, Carlito, sans-serif; font-weight: normal; margin: 12pt 0 0; line-height: 1.2;
+  /* межстрочный — как у стилей Heading в Word: множитель 1,08 «одинарного» */
+  font-family: 'Calibri Light', Calibri, Carlito, sans-serif; font-weight: normal; margin: 12pt 0 0; line-height: calc(var(--line-ratio, 1.15) * 1.0792);
   /* отступы заголовки наследуют от «Обычного», как в Word */
   margin-left: var(--p-left, 0); margin-right: var(--p-right, 0); text-indent: var(--p-indent, 0);
 }
@@ -353,7 +371,7 @@ body { background: var(--workspace); overflow: hidden; }
 .page-content h2 { font-size: 13pt; color: #2f5496; margin-top: 2pt; }
 .page-content h3 { font-size: 12pt; color: #1f3763; margin-top: 2pt; }
 .page-content h4, .page-content h5, .page-content h6 { font-size: 11pt; color: #2f5496; font-style: italic; margin-top: 2pt; }
-.page-content > :first-child { margin-top: 0; }
+/* интервал перед первым абзацем документа Word сохраняет (в начале следующих страниц — убирает, см. pagination.js) */
 .page-content ul, .page-content ol { margin: 0 0 8pt; padding-left: 36pt; }
 .page-content li > p { margin: 0; padding: 0; text-indent: 0; }
 .page-content li > ul, .page-content li > ol { margin: 0; padding-left: 24pt; }
@@ -371,16 +389,24 @@ body { background: var(--workspace); overflow: hidden; }
 .page-content table { border-collapse: collapse; table-layout: fixed; width: 100%; margin: 0; }
 /* Границы: таблица задаёт CSS-переменные (PeroTableView), ячейка берёт внешнюю или внутреннюю по положению;
    переопределённые стороны ячейки — инлайн-стилем поверх. «Нет границы» — бледная сетка, только на экране. */
+/* Линии рисует ::before поверх ячейки и не занимают места — как в Word (текст: ширина ячейки − поля; высота строки
+   от линий не зависит). Ячейка рисует верхнюю и левую линии, на нижнем/правом краю таблицы (data-tb-edge, см.
+   tableFormat.js) — ещё нижнюю/правую; переопределённые стороны ячейки — переменные --cb-* (инлайн). */
 .page-content td, .page-content th {
-  padding: 0 5.4pt; vertical-align: top; position: relative; min-width: 2em;
-  border-top: var(--tb-ih, 0.5pt solid #000); border-bottom: var(--tb-ih, 0.5pt solid #000);
-  border-left: var(--tb-iv, 0.5pt solid #000); border-right: var(--tb-iv, 0.5pt solid #000);
+  padding: 0 5.4pt; vertical-align: top; position: relative; min-width: 2em; border: 0;
+  --cb-t: var(--tb-ih, 0.5pt solid #000); --cb-l: var(--tb-iv, 0.5pt solid #000); --cb-b: none; --cb-r: none;
 }
-.page-content tr:first-child > td, .page-content tr:first-child > th { border-top: var(--tb-top, 0.5pt solid #000); }
-.page-content tr:last-child > td, .page-content tr:last-child > th { border-bottom: var(--tb-bottom, 0.5pt solid #000); }
-.page-content tr > td:first-child, .page-content tr > th:first-child { border-left: var(--tb-left, 0.5pt solid #000); }
-.page-content tr > td:last-child, .page-content tr > th:last-child { border-right: var(--tb-right, 0.5pt solid #000); }
-.page-content td p, .page-content th p { padding: 0; line-height: var(--line-ratio, 1.15); } /* TableGrid: без интервалов, одинарный */
+.page-content td[data-tb-edge~="t"], .page-content th[data-tb-edge~="t"] { --cb-t: var(--tb-top, 0.5pt solid #000); }
+.page-content td[data-tb-edge~="l"], .page-content th[data-tb-edge~="l"] { --cb-l: var(--tb-left, 0.5pt solid #000); }
+.page-content td[data-tb-edge~="b"], .page-content th[data-tb-edge~="b"] { --cb-b: var(--tb-bottom, 0.5pt solid #000); }
+.page-content td[data-tb-edge~="r"], .page-content th[data-tb-edge~="r"] { --cb-r: var(--tb-right, 0.5pt solid #000); }
+.page-content td::before, .page-content th::before {
+  content: ''; position: absolute; inset: 0; pointer-events: none; z-index: 1;
+  border-top: var(--cb-top, var(--cb-t)); border-left: var(--cb-left, var(--cb-l));
+  border-bottom: var(--cb-bottom, var(--cb-b)); border-right: var(--cb-right, var(--cb-r));
+}
+/* ячейка по умолчанию — как «Сетка таблицы»: без интервалов, одинарный (отличия у абзаца — атрибутами, см. import.js) */
+.page-content td p, .page-content th p { padding: 0; margin-top: 0; margin-bottom: 0; line-height: var(--line-ratio, 1.15); }
 .page-content th { font-weight: bold; text-align: left; background: #f2f2f2; }
 .page-content .selectedCell::after {
   content: ''; position: absolute; inset: 0; background: rgba(31,111,92,.18); pointer-events: none;
@@ -495,7 +521,7 @@ p[data-section-break]::after {
   -webkit-print-color-adjust: exact; print-color-adjust: exact;
 }
 .page-content [data-pbox].pb-prev::before { top: 0; border-top: var(--pbx-between); }
-.page-content [data-pbox].pb-next::before { bottom: 0; border-bottom: none; }
+.page-content [data-pbox].pb-next::before { bottom: calc(-1 * var(--pbx-join, 0pt)); border-bottom: none; }
 
 /* Положение на странице: при печати страницы режет Chromium — подсказываем ему правила Word */
 @media print {
@@ -507,6 +533,7 @@ p[data-section-break]::after {
   .page-content [data-keep-lines="false"] { break-inside: auto; }
   .page-content [data-page-break-before="true"] { break-before: page; }
   .page-content [data-widow-control="false"] { orphans: 1; widows: 1; }
+  .page-content tr[data-cant-split="true"] { break-inside: avoid; }
 }
 /* Диалог «Абзац»: вкладки и флажки «Положение на странице» */
 .pd-tabs { display: flex; gap: 2px; padding: 0 18px; border-bottom: 1px solid var(--line); }
@@ -544,3 +571,9 @@ p[data-section-break]::after {
 .tabs-actions { display: flex; gap: 6px; margin-top: 10px; }
 .tabs-dlg fieldset { margin-top: 8px; }
 .tabs-dlg .pd-check { margin: 2px 0; }
+/* шапка таблицы над продолжением разделённой строки (слой полос) */
+.pero-header-overlay { position: absolute; background: #fff; z-index: 1; pointer-events: none; min-height: 0; }
+
+.pero-split-line { position: absolute; height: 0; pointer-events: none; z-index: 1; }
+/* под повторённой шапкой над продолжением строки — линия (внутренняя горизонтальная граница таблицы) */
+.pero-header-overlay tr:last-child > td::before, .pero-header-overlay tr:last-child > th::before { border-bottom: var(--cb-bottom, var(--tb-ih, 0.5pt solid #000)); }

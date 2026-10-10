@@ -106,7 +106,8 @@ const DEFAULT_SECTPR = `<w:sectPr><w:pgSz w:w="${PAGE.w}" w:h="${PAGE.h}"/>` +
   '<w:cols w:space="708"/><w:docGrid w:linePitch="360"/></w:sectPr>';
 
 class Exporter {
-  constructor({ styleIds = OUR_STYLE_IDS, numBase = 1, relTargets = null, imgBase = 0, sect = (x) => x, customStyles = [], styleTabs = {} } = {}) {
+  constructor({ styleIds = OUR_STYLE_IDS, numBase = 1, relTargets = null, imgBase = 0, sect = (x) => x, customStyles = [], styleTabs = {}, fileStyleIds = null } = {}) {
+    this.fileStyleIds = fileStyleIds; // id стилей исходного пакета (исходный стиль заголовка — если он там есть)
     this.styleTabs = styleTabs; // id пользовательского стиля → его позиции табуляции (убранные в абзаце пишутся как clear)
     this.sect = sect;             // преобразование XML sectPr (подстановка ссылок на свои колонтитулы)
     this.customStyles = new Set(customStyles); // id пользовательских стилей документа
@@ -217,7 +218,9 @@ class Exporter {
   paragraph(node, { numPr, style } = {}) {
     const attrs = node.attrs || {};
     let pPr = '';
-    const pStyle = style || (node.type === 'heading' ? this.styleIds['Heading' + Math.min(Math.max(attrs.level || 1, 1), 6)]
+    const fs = node.type === 'heading' && attrs.fileStyle;
+    const ownHeading = fs && fs.level === attrs.level && this.fileStyleIds && this.fileStyleIds.has(fs.id) ? fs.id : null;
+    const pStyle = style || ownHeading || (node.type === 'heading' ? this.styleIds['Heading' + Math.min(Math.max(attrs.level || 1, 1), 6)]
       : (attrs.styleId && this.customStyles.has(attrs.styleId) ? attrs.styleId : null));
     if (pStyle) pPr += `<w:pStyle w:val="${pStyle}"/>`;
     // порядок в pPr по схеме: pStyle, keepNext, keepLines, pageBreakBefore, widowControl, numPr, pBdr, shd, tabs, spacing, ind, jc
@@ -309,9 +312,10 @@ class Exporter {
     xml += `<w:tblGrid>${W.map((w) => `<w:gridCol w:w="${w}"/>`).join('')}</w:tblGrid>`;
 
     grid.forEach((cells, r) => {
-      // trPr по схеме: trHeight, tblHeader
+      // trPr по схеме: cantSplit, trHeight, tblHeader
       const ra = (rows[r] && rows[r].attrs) || {};
       let trPr = '';
+      if (ra.cantSplit) trPr += '<w:cantSplit/>';
       if (ra.height) trPr += `<w:trHeight w:val="${ptToTwips(ra.height)}"${ra.heightRule === 'exact' ? ' w:hRule="exact"' : ''}/>`;
       if (ra.repeatHeader) trPr += '<w:tblHeader/>';
       xml += `<w:tr>${trPr ? `<w:trPr>${trPr}</w:trPr>` : ''}`;
@@ -687,7 +691,8 @@ ${(da.comments || []).length ? `<Relationship Id="rIdPeroC" Type="${relType('com
   // картинки, добавленные Пером при прошлых сохранениях, остаются; новые нумеруются дальше
   const imgBase = Math.max(0, ...Object.keys(zip.files).map((n) => +((/\/media\/pero_image(\d+)\.\w+$/.exec(n) || [])[1] || 0)),
     ...[...src.rels.matchAll(/Id="rIdPeroImg(\d+)"/g)].map((m) => +m[1]));
-  const ex = new Exporter({ styleIds, numBase, relTargets: src.relTargets, imgBase, sect, customStyles: customs.map((s) => s.id), styleTabs });
+  const fileStyleIds = new Set([...String(src.styles || '').matchAll(/w:styleId="([^"]+)"/g)].map((m) => m[1]));
+  const ex = new Exporter({ styleIds, numBase, relTargets: src.relTargets, imgBase, sect, customStyles: customs.map((s) => s.id), styleTabs, fileStyleIds });
   let body = ex.blocks(doc.content || []);
   if (!body) body = '<w:p/>';
   body = stripRootNs(body + sectPr, src.rootNs);
