@@ -167,24 +167,52 @@ const parseNumStr = (s) => {
   const t = String(s).trim().replace(/\s/g, '').replace(',', '.');
   return t !== '' && isFinite(+t) ? +t : null;
 };
+// Текст → число, как русский Excel в арифметике и ЗНАЧЕН: «1 234,5», «12%», «100 ₽», «15.01.2026», «14:30»
+export function textToNum(text) {
+  const t = String(text).trim();
+  let n = parseNumStr(t);
+  if (n !== null && t !== '') return n;
+  let m;
+  const flat = t.replace(/[\s\u00a0]/g, '');
+  if ((m = /^([-+]?\d+(?:[.,]\d+)?)%$/.exec(flat))) return parseFloat(m[1].replace(',', '.')) / 100;
+  if ((m = /^([-+]?\d+(?:[.,]\d+)?)(₽|р\.?|руб\.?)$/i.exec(flat))) return parseFloat(m[1].replace(',', '.'));
+  if ((m = /^(\d{1,2})\.(\d{1,2})\.(\d{2}|\d{4})(?:\s+(\d{1,2}):(\d{2})(?::(\d{2}))?)?$/.exec(t))) {
+    const y = m[3].length === 2 ? (+m[3] < 30 ? 2000 : 1900) + +m[3] : +m[3];
+    if (+m[2] >= 1 && +m[2] <= 12 && +m[1] >= 1 && +m[1] <= 31) {
+      n = dateToSerial(y, +m[2], +m[1]);
+      return m[4] ? n + (+m[4] * 3600 + +m[5] * 60 + +(m[6] || 0)) / 86400 : n;
+    }
+  }
+  if ((m = /^(\d{1,2}):(\d{2})(?::(\d{2}))?$/.exec(t))) return (+m[1] * 3600 + +m[2] * 60 + +(m[3] || 0)) / 86400;
+  return null;
+}
+// Пустая ячейка — 0; пустая строка (например, результат ="") — #ЗНАЧ!, как в Excel
 export function toNum(v) {
   if (isErr(v)) return v;
-  if (v == null || v === '') return 0;
+  if (v == null) return 0;
   if (typeof v === 'number') return v;
   if (typeof v === 'boolean') return v ? 1 : 0;
-  const n = parseNumStr(v);
+  const n = textToNum(v);
   return n === null ? err(ERR.VALUE) : n;
+}
+// Число как текст в формате «Общий» русского Excel: до 15 значащих цифр, десятичная запятая
+export function numText(n) {
+  if (Number.isInteger(n) && Math.abs(n) < 1e15) return String(n);
+  let t = String(+n.toPrecision(15));
+  if (/e/.test(t)) t = t.replace(/e([+-])(\d)$/, 'E$10$2').replace('e', 'E');
+  return t.replace('.', ',');
 }
 export function toText(v) {
   if (v == null) return '';
-  if (typeof v === 'boolean') return v ? 'TRUE' : 'FALSE';
-  if (typeof v === 'number') return String(Math.round(v * 1e10) / 1e10);
+  if (typeof v === 'boolean') return v ? 'ИСТИНА' : 'ЛОЖЬ';
+  if (typeof v === 'number') return numText(v);
   return String(v);
 }
 function toBool(v) {
   if (isErr(v)) return v;
   if (typeof v === 'boolean') return v;
-  if (v == null || v === '') return false;
+  if (v == null) return false;
+  if (v === '') return err(ERR.VALUE);
   if (typeof v === 'number') return v !== 0;
   const s = String(v).toUpperCase();
   if (s === 'TRUE' || s === 'ИСТИНА') return true;
@@ -204,22 +232,42 @@ function compare(a, b) {
   if (ra === 1) { const x = a.toLowerCase(); const y = b.toLowerCase(); return x < y ? -1 : x > y ? 1 : 0; }
   const x = ra === 2 ? +a : a || 0;
   const y = rb === 2 ? +b : b || 0;
-  return x < y ? -1 : x > y ? 1 : 0;
+  if (x === y || (ra === 0 && eq15(x, y))) return 0;
+  return x < y ? -1 : 1;
+}
+// Excel сравнивает числа с точностью 15 значащих цифр (0,1+0,2=0,3 — ИСТИНА)
+const eq15 = (x, y) => x === y || (Number.isFinite(x) && Number.isFinite(y) && x.toPrecision(15) === y.toPrecision(15));
+
+// Подстановочные знаки Excel (* ? и ~ для экранирования) → RegExp; null — их нет
+function wildcard(text) {
+  if (!/[*?]/.test(text)) return null;
+  let re = '';
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (ch === '~' && i + 1 < text.length) { re += text[++i].replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); continue; }
+    re += ch === '*' ? '[\\s\\S]*' : ch === '?' ? '[\\s\\S]' : ch.replace(/[.+^${}()|[\]\\]/g, '\\$&');
+  }
+  return new RegExp(`^${re}$`, 'i');
+}
+// Точное совпадение для ВПР/ПОИСКПОЗ/ГПР: текст — без регистра и с подстановочными знаками
+function exactMatcher(val) {
+  const re = typeof val === 'string' ? wildcard(val) : null;
+  return re ? (v) => typeof v === 'string' && re.test(v) : (v) => compare(v, val) === 0;
 }
 
 // Условие СУММЕСЛИ/СЧЁТЕСЛИ: ">5", "<>x", "=текст", "те*ст", число
 function criterion(c) {
-  if (typeof c === 'number' || typeof c === 'boolean') return (v) => compare(v, c) === 0;
-  const s = toText(c);
+  if (typeof c === 'boolean') return (v) => v === c;
+  if (typeof c === 'number') return (v) => (typeof v === 'number' ? eq15(v, c) : typeof v === 'string' && parseNumStr(v) !== null && eq15(parseNumStr(v), c));
+  const s = typeof c === 'string' ? c : toText(c);
+  if (s === '<>') return (v) => v != null;
   const m = /^(<=|>=|<>|<|>|=)?(.*)$/s.exec(s);
   const op = m[1] || '=';
   const raw = m[2];
   const n = parseNumStr(raw);
   const target = n !== null ? n : raw;
-  if (n === null && (op === '=' || op === '<>') && /[*?]/.test(raw)) {
-    const re = new RegExp(`^${raw.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*').replace(/\?/g, '.')}$`, 'i');
-    return (v) => (op === '=') === re.test(toText(v));
-  }
+  const re = n === null && (op === '=' || op === '<>') ? wildcard(raw) : null;
+  if (re) return (v) => (op === '=') === (typeof v === 'string' && re.test(v));
   return (v) => {
     if (n !== null && typeof v !== 'number') { const vn = typeof v === 'string' ? parseNumStr(v) : null; if (vn === null) return op === '<>'; v = vn; }
     const r = compare(v == null ? (n !== null ? 0 : '') : v, target);
@@ -229,9 +277,16 @@ function criterion(c) {
 
 // ---------- Даты (серийные номера, система 1900) ----------
 const EPOCH = Date.UTC(1899, 11, 30);
-export const dateToSerial = (y, m, d) => (Date.UTC(y, m - 1, d) - EPOCH) / 86400000;
+// Как Excel: годы 0–1899 — плюс 1900; 1900 считается високосным (серийный номер 60 — 29.02.1900, «ошибка 1900 года»)
+export const dateToSerial = (y, m, d) => {
+  const yy = y < 1900 ? y + 1900 : y;
+  let first = (Date.UTC(yy, m - 1, 1) - EPOCH) / 86400000; // первое число месяца
+  if (first < 61) first -= 1; // до 1 марта 1900 Excel отстаёт на день
+  return first + d - 1;
+};
 export function serialToDate(n) {
-  const d = new Date(EPOCH + Math.round(n * 86400000));
+  if (Math.floor(n) === 60) return { y: 1900, m: 2, d: 29, hh: 0, mm: 0, ss: 0 };
+  const d = new Date(EPOCH + Math.round((n < 60 ? n + 1 : n) * 86400000));
   return { y: d.getUTCFullYear(), m: d.getUTCMonth() + 1, d: d.getUTCDate(), hh: d.getUTCHours(), mm: d.getUTCMinutes(), ss: d.getUTCSeconds() };
 }
 const nowSerial = () => { const t = new Date(); return (Date.UTC(t.getFullYear(), t.getMonth(), t.getDate(), t.getHours(), t.getMinutes(), t.getSeconds()) - EPOCH) / 86400000; };
@@ -252,6 +307,19 @@ const nums = (args, { strict = false } = {}) => {
   return out;
 };
 const firstErr = (...xs) => xs.find(isErr);
+function logicals(args) {
+  const out = [];
+  for (const a of args) {
+    for (const v of flat(a)) {
+      if (v == null || v === '') continue;
+      if (isErr(v) || typeof v === 'boolean') { out.push(v); continue; }
+      if (typeof v === 'number') { out.push(v !== 0); continue; }
+      const b = toBool(v);
+      if (!isErr(b)) out.push(b);
+    }
+  }
+  return out;
+}
 
 // аргументы приходят уже вычисленными (диапазон — двумерный массив), кроме «ленивых» IF/IFERROR (см. evaluate)
 const FN = {
@@ -269,7 +337,7 @@ const FN = {
     return s.length % 2 ? s[h] : (s[h - 1] + s[h]) / 2;
   },
   COUNT: (a) => a.reduce((s, x) => s + flat(x).filter((v) => typeof v === 'number').length, 0),
-  COUNTA: (a) => a.reduce((s, x) => s + flat(x).filter((v) => v != null && v !== '').length, 0),
+  COUNTA: (a) => a.reduce((s, x) => s + flat(x).filter((v) => v != null).length, 0),
   COUNTBLANK: (a) => a.reduce((s, x) => s + flat(x).filter((v) => v == null || v === '').length, 0),
   ABS: ([x]) => { const n = toNum(x); return isErr(n) ? n : Math.abs(n); },
   SIGN: ([x]) => { const n = toNum(x); return isErr(n) ? n : Math.sign(n); },
@@ -286,8 +354,8 @@ const FN = {
   ROUND: ([x, n]) => { const a = toNum(x); const d = toNum(n ?? 0); return firstErr(a, d) || round(a, Math.trunc(d)); },
   ROUNDUP: ([x, n]) => { const a = toNum(x); const d = toNum(n ?? 0); return firstErr(a, d) || round(a, Math.trunc(d), 'up'); },
   ROUNDDOWN: ([x, n]) => { const a = toNum(x); const d = toNum(n ?? 0); return firstErr(a, d) || round(a, Math.trunc(d), 'down'); },
-  AND: (a) => { let r = true; for (const v of a.flatMap(flat)) { if (v == null) continue; const b = toBool(v); if (isErr(b)) return b; r = r && b; } return r; },
-  OR: (a) => { let r = false; for (const v of a.flatMap(flat)) { if (v == null) continue; const b = toBool(v); if (isErr(b)) return b; r = r || b; } return r; },
+  AND: (a) => { let r = true; for (const v of logicals(a)) { if (isErr(v)) return v; r = r && v; } return r; },
+  OR: (a) => { let r = false; for (const v of logicals(a)) { if (isErr(v)) return v; r = r || v; } return r; },
   NOT: ([x]) => { const b = toBool(x); return isErr(b) ? b : !b; },
   TRUE: () => true,
   FALSE: () => false,
@@ -306,16 +374,34 @@ const FN = {
     const i = toText(where).indexOf(toText(what), s - 1);
     return i < 0 ? err(ERR.VALUE) : i + 1;
   },
-  SUBSTITUTE: ([t, o, n]) => (firstErr(t, o, n) || toText(t).split(toText(o)).join(toText(n))),
+  SUBSTITUTE: ([t, o, n, k]) => {
+    const e = firstErr(t, o, n, k);
+    if (e) return e;
+    const text = toText(t); const old = toText(o);
+    if (!old) return text;
+    if (k == null) return text.split(old).join(toText(n));
+    const which = toNum(k);
+    if (isErr(which) || which < 1) return err(ERR.VALUE);
+    let at = -1;
+    for (let i = 0; i < which; i++) { at = text.indexOf(old, at + 1); if (at < 0) return text; }
+    return text.slice(0, at) + toText(n) + text.slice(at + old.length);
+  },
   REPT: ([t, n]) => { const k = toNum(n); return firstErr(t, k) || toText(t).repeat(Math.max(0, Math.floor(k))); },
   VALUE: ([x]) => toNum(x),
-  ISBLANK: ([x]) => x == null || x === '',
+  ISBLANK: ([x]) => x == null,
   ISNUMBER: ([x]) => typeof x === 'number',
-  ISTEXT: ([x]) => typeof x === 'string' && x !== '',
+  ISTEXT: ([x]) => typeof x === 'string',
   ISERROR: ([x]) => isErr(x),
   TODAY: () => Math.floor(nowSerial()),
   NOW: () => nowSerial(),
-  DATE: ([y, m, d]) => { const a = toNum(y); const b = toNum(m); const c = toNum(d); return firstErr(a, b, c) || dateToSerial(a, b, c); },
+  DATE: ([y, m, d]) => {
+    const a = toNum(y); const b = toNum(m); const c = toNum(d);
+    if (firstErr(a, b, c)) return firstErr(a, b, c);
+    const yy = Math.trunc(a);
+    if (yy < 0 || yy > 9999) return err(ERR.NUM);
+    const v = dateToSerial(yy, Math.trunc(b), Math.trunc(c));
+    return v < 0 ? err(ERR.NUM) : v;
+  },
   YEAR: ([x]) => { const n = toNum(x); return isErr(n) ? n : serialToDate(n).y; },
   MONTH: ([x]) => { const n = toNum(x); return isErr(n) ? n : serialToDate(n).m; },
   DAY: ([x]) => { const n = toNum(x); return isErr(n) ? n : serialToDate(n).d; },
@@ -351,7 +437,8 @@ const FN = {
     if (isErr(c) || c < 1 || c > table[0].length) return err(ERR.REF);
     const exact = approx === false || approx === 0;
     if (exact) {
-      const row = table.find((r) => compare(r[0], val) === 0);
+      const hit = exactMatcher(val);
+      const row = table.find((r) => hit(r[0]));
       return row ? (row[c - 1] ?? 0) : err(ERR.NA);
     }
     let found = null;
@@ -361,12 +448,14 @@ const FN = {
   MATCH: ([val, range, type]) => {
     const list = flat(range);
     const t = type == null ? 1 : toNum(type);
-    if (t === 0) { const i = list.findIndex((v) => compare(v, val) === 0); return i < 0 ? err(ERR.NA) : i + 1; }
+    if (isErr(val)) return val;
+    if (t === 0) { const hit = exactMatcher(val); const i = list.findIndex(hit); return i < 0 ? err(ERR.NA) : i + 1; }
     let found = -1;
     list.forEach((v, i) => { if (v != null && (t > 0 ? compare(v, val) <= 0 : compare(v, val) >= 0)) found = i; });
     return found < 0 ? err(ERR.NA) : found + 1;
   },
   INDEX: ([range, r, c]) => {
+    if (isErr(range)) return range;
     const t = Array.isArray(range) ? range : [[range]];
     const i = toNum(r ?? 1); const j = toNum(c ?? 1);
     if (firstErr(i, j)) return firstErr(i, j);

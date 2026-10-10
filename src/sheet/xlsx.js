@@ -351,7 +351,8 @@ const pristine = new WeakSet();
 
 // ---------- Импорт ----------
 /** @returns {Promise<{ wb, warnings, kept }>} warnings — что потеряется при сохранении, kept — что сохраняется как есть */
-export async function importXlsx(data) {
+// recalc: false — значения формул как записал Excel (сверка движка с Excel в тестах)
+export async function importXlsx(data, { recalc: doRecalc = true } = {}) {
   const zip = await JSZip.loadAsync(data);
   const book = await readBook(zip);
   const { read, rels, wbDoc } = book;
@@ -415,7 +416,7 @@ export async function importXlsx(data) {
   if (!sheets.length) sheets.push(newSheet('Лист1'));
   const view = kid(kid(wbDoc.documentElement, 'bookViews'), 'workbookView');
   const active = Math.min(+(view && view.getAttribute('activeTab')) || 0, sheets.length - 1);
-  const wb = recalc({ sheets, active });
+  const wb = doRecalc ? recalc({ sheets, active }) : { sheets, active };
   for (const sh of wb.sheets) if (sh.src) pristine.add(sh);
   return { wb, warnings: {}, kept };
 }
