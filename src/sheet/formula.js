@@ -782,11 +782,15 @@ export function evaluate(node, ctx) {
         let { r2, c2 } = node;
         if (node.whole && ctx.extent) { const e = ctx.extent(sh); r2 = Math.min(r2, e.r); c2 = Math.min(c2, e.c); }
         if ((r2 - node.r1 + 1) * (c2 - node.c1 + 1) > 2_000_000) return err(ERR.NUM);
-        for (let r = node.r1; r <= r2; r++) {
-          const row = [];
-          for (let c = node.c1; c <= c2; c++) row.push(ctx.get(sh, r, c));
-          out.push(row);
-        }
+        // зависимость — весь диапазон (у целых столбцов — до конца листа), ячейки по отдельности не записываются
+        if (ctx.depRange) ctx.depRange(sh, node.r1, node.c1, node.r2, node.c2);
+        try {
+          for (let r = node.r1; r <= r2; r++) {
+            const row = [];
+            for (let c = node.c1; c <= c2; c++) row.push(ctx.get(sh, r, c));
+            out.push(row);
+          }
+        } finally { if (ctx.depDone) ctx.depDone(); }
       }
       if (node.whole) out.full = { rows: (node.r2 - node.r1 + 1) * sheets.length, cols: node.c2 - node.c1 + 1 };
       return out;

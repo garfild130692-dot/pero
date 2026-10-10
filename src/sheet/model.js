@@ -26,7 +26,7 @@ export function newWorkbook() {
   return { sheets: [newSheet('Лист1')], active: 0 };
 }
 
-const withSheet = (wb, i, sheet) => ({ ...wb, sheets: wb.sheets.map((s, k) => (k === i ? sheet : s)) });
+const withSheet = (wb, i, sheet) => carryGraph({ ...wb, sheets: wb.sheets.map((s, k) => (k === i ? sheet : s)) }, wb);
 const sheetByName = (wb, name) => wb.sheets.find((s) => s.name.toLowerCase() === String(name).toLowerCase());
 
 // ---------- Пересчёт ----------
@@ -41,14 +41,192 @@ function astOf(f) {
   }
   return a;
 }
-// Все формулы книги: memo по (лист, ячейка), циклические ссылки → #CIRC!
-export function recalc(wb) {
+// ---------- Граф зависимостей ----------
+// Для книги, полученной пересчётом, хранится граф (по массиву листов — он общий у книг, отличающихся только
+// активным листом, режимом и т. п.): что читала каждая формула — ячейки и прямоугольники диапазонов.
+// Следующий пересчёт сравнивает листы с теми, по которым граф построен, и считает только изменившиеся ячейки,
+// зависящие от них формулы (по цепочке) и летучие функции. Структурные изменения (листы, имена, скрытие строк,
+// объединения) — полный пересчёт.
+// entry: { base — листы, names, deps: Map(формула → { cells: Set, rects: [{ s, r1, c1, r2, c2 }] }),
+//          rcell: Map(ячейка → Set(формул)), rects: Map(лист → Map(формула → прямоугольники)), vol: Set(летучих) }
+// id ячейки — «лист в нижнем регистре!r,c»
+const graphs = new WeakMap();
+const carryGraph = (next, prev) => { const g = graphs.get(prev.sheets); if (g && !graphs.has(next.sheets)) graphs.set(next.sheets, g); return next; };
+const cellId = (sheetName, k) => `${String(sheetName).toLowerCase()}!${k}`;
+// Летучие функции (как в Excel): пересчитываются при любом пересчёте
+export const VOLATILE = new Set(['NOW', 'TODAY', 'RAND', 'RANDBETWEEN', 'RANDARRAY', 'OFFSET', 'INDIRECT', 'CELL', 'INFO']);
+const volCache = new Map();
+function isVolatile(f) {
+  let v = volCache.get(f);
+  if (v === undefined) {
+    const walk = (n) => {
+      if (!n || typeof n !== 'object') return false;
+      if (n.t === 'fn' && VOLATILE.has(n.name)) return true;
+      if (n.t === 'fn') return n.args.some(walk);
+      if (n.t === 'call') return walk(n.fn) || n.args.some(walk);
+      return walk(n.a) || walk(n.b);
+    };
+    v = walk(astOf(f));
+    if (volCache.size > 100_000) volCache.clear();
+    volCache.set(f, v);
+  }
+  return v;
+}
+const sameCellInput = (a, b) => {
+  if (a === b) return true;
+  if (!a || !b) return !(a ? (a.f != null || a.v != null) : (b.f != null || b.v != null));
+  if (a.f !== b.f || a.cse !== b.cse || !!a.legacy !== !!b.legacy) return false;
+  // у формулы и значение: перенесённая формула (сортировка, вставка) несёт значение со старого места
+  return sameValue(a.v, b.v) && (a.f == null || a.arr === b.arr);
+};
+// Изменённые ячейки относительно листов графа: Set(id) или null (нужен полный пересчёт)
+function changesSince(entry, wb) {
+  if (!entry || wb.names !== entry.names || wb.sheets.length !== entry.base.length) return null;
+  const out = new Set();
+  for (let i = 0; i < wb.sheets.length; i++) {
+    const cur = wb.sheets[i]; const base = entry.base[i];
+    if (cur === base) continue;
+    if (cur.name !== base.name || cur.rowInfo !== base.rowInfo || cur.merges !== base.merges) return null;
+    if (cur.cells === base.cells) continue;
+    for (const [k, c] of cur.cells) if (!sameCellInput(c, base.cells.get(k))) out.add(cellId(cur.name, k));
+    for (const [k, c] of base.cells) if (!cur.cells.has(k) && !sameCellInput(c, undefined)) out.add(cellId(cur.name, k));
+  }
+  return out;
+}
+// Новый граф: старый (или пустой) + новые зависимости формул (null — формулы больше нет); копирование при записи
+function updateGraph(old, updates, base, names, volOf) {
+  const deps = new Map(old ? old.deps : []); const rcell = new Map(old ? old.rcell : []); const rects = new Map(old ? old.rects : []);
+  const vol = new Set(old ? old.vol : []);
+  const ownSet = new Set(); const ownMap = new Set();
+  const setOf = (k) => { if (!ownSet.has(k)) { rcell.set(k, new Set(rcell.get(k) || [])); ownSet.add(k); } return rcell.get(k); };
+  const mapOf = (sh) => { if (!ownMap.has(sh)) { rects.set(sh, new Map(rects.get(sh) || [])); ownMap.add(sh); } return rects.get(sh); };
+  for (const [owner, fr] of updates) {
+    const prev = deps.get(owner);
+    if (prev) {
+      for (const c of prev.cells) { const set = setOf(c); set.delete(owner); if (!set.size) { rcell.delete(c); ownSet.delete(c); } }
+      for (const sh of new Set(prev.rects.map((r) => r.s))) mapOf(sh).delete(owner);
+    }
+    if (!fr) { deps.delete(owner); vol.delete(owner); continue; }
+    deps.set(owner, { cells: fr.cells, rects: fr.rects });
+    for (const c of fr.cells) setOf(c).add(owner);
+    const bySheet = new Map();
+    for (const r of fr.rects) { if (!bySheet.has(r.s)) bySheet.set(r.s, []); bySheet.get(r.s).push(r); }
+    for (const [sh, list] of bySheet) mapOf(sh).set(owner, list);
+    if (volOf(owner)) vol.add(owner); else vol.delete(owner);
+  }
+  return { base, names, deps, rcell, rects, vol };
+}
+// Формулы, зависящие (по цепочке) от изменённых ячеек
+// (limit — больше стольких формул: вернуть null, дешевле пересчитать всё)
+function dependents(entry, changed, extra = [], limit = Infinity) {
+  const seen = new Set(); const queue = [];
+  const add = (o) => { if (!seen.has(o)) { seen.add(o); queue.push(o); } };
+  for (const id of changed) add(id); // сами изменённые (формулы среди них пересчитываются)
+  for (const o of extra) add(o);
+  const visited = new Set();
+  while (queue.length) {
+    const id = queue.pop();
+    if (seen.size > limit) return null;
+    if (visited.has(id)) continue;
+    visited.add(id);
+    const direct = entry.rcell.get(id);
+    if (direct) for (const o of direct) add(o);
+    const bang = id.lastIndexOf('!');
+    const list = entry.rects.get(id.slice(0, bang));
+    if (list && list.size) {
+      const [r, c] = unkey(id.slice(bang + 1));
+      for (const [o, rs] of list) if (!seen.has(o) && rs.some((x) => r >= x.r1 && r <= x.r2 && c >= x.c1 && c <= x.c2)) add(o);
+    }
+  }
+  return seen;
+}
+
+// Ячейки циклов: компоненты сильной связности графа формул (Тарьян), начиная с ячеек, где цикл замечен
+function cycleMembers(g, wb, starts) {
+  const formulas = new Map(); // лист → [[r, c, id]]
+  const byLc = new Map();
+  for (const sh of wb.sheets) {
+    byLc.set(sh.name.toLowerCase(), sh);
+    const list = [];
+    for (const [k, c] of sh.cells) if (c.f != null) { const [r, cc] = unkey(k); list.push([r, cc, cellId(sh.name, k)]); }
+    formulas.set(sh.name.toLowerCase(), list);
+  }
+  const isFormula = (id) => { const bang = id.lastIndexOf('!'); const sh = byLc.get(id.slice(0, bang)); const c = sh && sh.cells.get(id.slice(bang + 1)); return !!(c && c.f != null); };
+  const edges = (id) => {
+    const d = g.deps.get(id);
+    if (!d) return [];
+    const out = [...d.cells].filter(isFormula);
+    for (const x of d.rects) for (const [r, c, fid] of formulas.get(x.s) || []) if (r >= x.r1 && r <= x.r2 && c >= x.c1 && c <= x.c2) out.push(fid);
+    return out;
+  };
+  const index = new Map(); const low = new Map(); const onStack = new Set(); const stack = []; const members = new Set(); let n = 0;
+  for (const s0 of starts) {
+    if (index.has(s0)) continue;
+    const work = [[s0, edges(s0), 0]];
+    index.set(s0, n); low.set(s0, n); n++; stack.push(s0); onStack.add(s0);
+    while (work.length) {
+      const fr = work[work.length - 1];
+      const [v, es] = fr;
+      if (fr[2] < es.length) {
+        const w = es[fr[2]++];
+        if (!index.has(w)) { index.set(w, n); low.set(w, n); n++; stack.push(w); onStack.add(w); work.push([w, edges(w), 0]); }
+        else if (onStack.has(w)) low.set(v, Math.min(low.get(v), index.get(w)));
+        continue;
+      }
+      work.pop();
+      if (work.length) { const u = work[work.length - 1][0]; low.set(u, Math.min(low.get(u), low.get(v))); }
+      if (low.get(v) === index.get(v)) {
+        const comp = [];
+        let w;
+        do { w = stack.pop(); onStack.delete(w); comp.push(w); } while (w !== v);
+        if (comp.length > 1 || es.includes(v)) for (const x of comp) members.add(x);
+      }
+    }
+  }
+  return members;
+}
+
+// Сведения о последнем пересчёте (для тестов): converged — раскладка «разлива» сошлась без принудительных #ЦИКЛ!
+export const recalcInfo = { converged: true, partial: false };
+
+// Пересчёт формул книги: memo по (лист, ячейка), циклические ссылки → #CIRC!
+// opts.full — пересчитать всё (F9, открытие файла). Режим «вручную» (wb.calcMode === 'manual') без full считает
+// только новые и изменённые формулы, остальное — по F9 (wb.calcPending — есть несосчитанные изменения).
+export function recalc(wb, opts = {}) {
+  const prevEntry = opts.full ? null : graphs.get(wb.sheets);
+  const manual = wb.calcMode === 'manual' && !opts.full;
+  let changed = prevEntry ? changesSince(prevEntry, wb) : null;
+  // что считать: null — всё; иначе Set(id формул)
+  let todo = null;
+  let formulaCount = 0;
+  for (const sh of wb.sheets) for (const c of sh.cells.values()) if (c.f != null) formulaCount++;
+  if (manual) {
+    todo = new Set();
+    for (const sh of wb.sheets) for (const [k, c] of sh.cells) if (c.f != null && c.v == null) todo.add(cellId(sh.name, k));
+  } else if (changed) {
+    // ещё не посчитанные формулы (значения нет) — тоже, даже если ячейку изменили в обход операций
+    const fresh = [];
+    // и ячейки циклов (#ЦИКЛ!): цикл мог разорваться не через их собственные ссылки (например, «разлив» заблокирован)
+    for (const sh of wb.sheets) for (const [k, c] of sh.cells) if (c.f != null && (c.v == null || (isErr(c.v) && c.v.error === ERR.CIRC))) fresh.push(cellId(sh.name, k));
+    todo = dependents(prevEntry, new Set([...changed, ...fresh]), prevEntry.vol, Math.max(200, formulaCount / 2));
+    if (!todo) changed = null; // затронуто почти всё — проще пересчитать целиком
+  }
   // лист по имени — словарём (обращений к ячейкам много)
   const byName = new Map();
   for (const sh of wb.sheets) { byName.set(sh.name, sh); byName.set(sh.name.toLowerCase(), sh); }
   const sheetByName = (_wb, name) => byName.get(name) || byName.get(String(name).toLowerCase());
   const memo = new Map();
   const visiting = new Set();
+  // ячейки на пути вычисления; все ячейки найденного цикла — #ЦИКЛ! (не зависит от того, с какой начали)
+  const path = [];
+  const cyclic = new Set();
+  const forced = new Set(); // ячейки циклов (по компонентам графа) — вычисляются (ради зависимостей), результат #ЦИКЛ!
+  // зависимости вычисляемой формулы: стек кадров { cells, rects, quiet } (quiet — внутри диапазона ячейки не пишутся)
+  const frames = [];
+  const newDeps = new Map();
+  const top = () => frames[frames.length - 1];
+  const depRange = (sh, r1, c1, r2, c2) => { const fr = top(); if (fr) { fr.rects.push({ s: String(sh).toLowerCase(), r1, c1, r2, c2 }); fr.quiet++; } };
+  const depDone = () => { const fr = top(); if (fr) fr.quiet--; };
 
   // занятая часть листа (для ссылок на целые столбцы и строки)
   const extents = new Map();
@@ -71,7 +249,7 @@ export function recalc(wb) {
     return wb.sheets.slice(Math.min(i, j), Math.max(i, j) + 1).map((x) => x.name);
   };
   // именованные диапазоны и константы: сначала имя листа (локальное), потом книги
-  const namesBusy = new Set();
+  const namesBusy = new Map(); // имя → длина пути вычисления при входе в него
   const nameValue = (sheetName) => (n) => {
     const list = wb.names || [];
     const lc = n.toLowerCase();
@@ -79,10 +257,10 @@ export function recalc(wb) {
       || list.find((x) => x.name.toLowerCase() === lc && !x.sheet);
     if (!def) return err(ERR.NAME);
     const key0 = `${def.sheet || ''}!${lc}`;
-    if (namesBusy.has(key0)) return err(ERR.CIRC);
+    if (namesBusy.has(key0)) { for (let i = namesBusy.get(key0); i < path.length; i++) cyclic.add(path[i]); return err(ERR.CIRC); }
     const ast = astOf(def.text);
     if (!ast) return err(ERR.NAME);
-    namesBusy.add(key0);
+    namesBusy.set(key0, path.length);
     const v = evaluate(ast, ctxOf(sheetName));
     namesBusy.delete(key0);
     return v;
@@ -91,7 +269,7 @@ export function recalc(wb) {
   const ctxOf = (sheetName) => {
     if (!ctxCache.has(sheetName)) {
       ctxCache.set(sheetName, {
-        get, sheet: sheetName, extent, sheetsBetween, name: nameValue(sheetName), spill: spillRef, markArray, cur: null,
+        get, sheet: sheetName, extent, sheetsBetween, name: nameValue(sheetName), spill: spillRef, markArray, cur: null, depRange, depDone,
         formulaAt: (sh, r, c) => { const s0 = sheetByName(wb, sh); const cell = s0 && s0.cells.get(key(r, c)); return cell && cell.f != null ? cell.f : null; },
         rowHidden: (sh, r) => { const s0 = sheetByName(wb, sh); return !!(s0 && s0.rowInfo && s0.rowInfo[r] && s0.rowInfo[r].hidden); },
         sheetIndex: (name) => wb.sheets.findIndex((x) => x.name.toLowerCase() === String(name).toLowerCase()),
@@ -116,8 +294,11 @@ export function recalc(wb) {
   const evalCell = (sheet, k, cell) => {
     const mk = `${sheet.name}!${k}`;
     if (memo.has(mk)) return memo.get(mk);
-    if (visiting.has(mk)) return { top: err(ERR.CIRC) };
+    if (visiting.has(mk)) { for (let i = path.lastIndexOf(mk); i < path.length; i++) cyclic.add(path[i]); return { top: err(ERR.CIRC) }; }
     visiting.add(mk);
+    path.push(mk);
+    const frame = { cells: new Set(), rects: [], quiet: 0 };
+    frames.push(frame);
     const ast = astOf(cell.f);
     const saved = arrFlag;
     arrFlag = false;
@@ -138,7 +319,11 @@ export function recalc(wb) {
       else { full = v; v = spillOfSheet(sheet.name).blocked.has(k) && !cell.cse ? err(ERR.SPILL) : v[0][0]; }
     }
     if (v == null) v = 0; // пустая ссылка в формуле — 0, как в Excel
+    if (cyclic.has(mk) || forced.has(mk)) { v = err(ERR.CIRC); full = null; }
     const res = { top: v, full, ax };
+    frames.pop();
+    path.pop();
+    newDeps.set(cellId(sheet.name, k), frame);
     visiting.delete(mk);
     memo.set(mk, res);
     return res;
@@ -147,18 +332,41 @@ export function recalc(wb) {
     const sheet = sheetByName(wb, sheetName);
     if (!sheet) return err(ERR.REF);
     const k = key(r, c);
+    const fr = top();
+    if (fr && !fr.quiet) fr.cells.add(cellId(sheet.name, k));
     const cell = sheet.cells.get(k);
     if (!cell || (cell.f == null && cell.v == null)) {
-      const g = spillOfSheet(sheet.name).vals.get(k);
-      return g === undefined ? null : g;
+      const sp = spillOfSheet(sheet.name);
+      const g = sp.vals.get(k);
+      if (g === undefined) return null;
+      // ячейка «разлива» зависит от формулы-якоря: она вычисляется (цикл через «разлив» так обнаруживается)
+      const ak = anchorOf(sp, k);
+      if (ak) {
+        if (fr) fr.cells.add(cellId(sheet.name, ak));
+        const acell = sheet.cells.get(ak);
+        if (acell && acell.f != null) evalCell(sheet, ak, acell);
+      }
+      return g;
     }
     if (cell.f == null) return cell.v ?? null;
     return evalCell(sheet, k, cell).top;
+  };
+  // якорь ячейки «разлива»
+  const anchorMaps = new WeakMap();
+  const anchorOf = (sp, k) => {
+    let m0 = anchorMaps.get(sp);
+    if (!m0) {
+      m0 = new Map();
+      for (const [ak, rg] of sp.at) for (let r = rg.r1; r <= rg.r2; r++) for (let c = rg.c1; c <= rg.c2; c++) m0.set(key(r, c), ak);
+      anchorMaps.set(sp, m0);
+    }
+    return m0.get(k);
   };
   // A1# — весь «разлив» якоря A1
   const spillRef = (sheetName, r, c) => {
     const sheet = sheetByName(wb, sheetName);
     const cell = sheet && sheet.cells.get(key(r, c));
+    if (sheet && top()) top().cells.add(cellId(sheet.name, key(r, c)));
     if (!cell || cell.f == null) return err(ERR.REF);
     const res = evalCell(sheet, key(r, c), cell);
     if (isErr(res.top) && res.top.error === ERR.SPILL) return res.top;
@@ -216,14 +424,103 @@ export function recalc(wb) {
     }
     return true;
   };
-  for (let pass = 0; pass < 4; pass++) {
-    memo.clear();
-    extents.clear();
-    for (const sheet of wb.sheets) for (const [k, cell] of sheet.cells) if (cell.f != null) evalCell(sheet, k, cell);
-    const next = resolve();
-    const done = sameSpill(next, spill) && sameSpill(spill, next);
-    spill = next;
-    if (done) break; // раскладка не изменилась — значения последнего прохода верны
+  // значения формул, которые не пересчитываются, — из прошлого пересчёта
+  const prefill = (skip) => {
+    for (const sheet of wb.sheets) {
+      for (const [k, cell] of sheet.cells) {
+        if (cell.f == null || skip.has(cellId(sheet.name, k))) continue;
+        memo.set(`${sheet.name}!${k}`, { top: cell.v ?? 0, full: cell.arr || null, ax: !!cell.ax });
+      }
+    }
+  };
+  const evalIds = (ids) => {
+    for (const id of ids) {
+      const bang = id.lastIndexOf('!');
+      const sheet = sheetByName(wb, id.slice(0, bang));
+      const k = id.slice(bang + 1);
+      const cell = sheet && sheet.cells.get(k);
+      if (cell && cell.f != null) evalCell(sheet, k, cell);
+    }
+  };
+  // ячейки, у которых изменилось значение «разлива» или блокировка якоря
+  const spillChanges = (a, b) => {
+    const out = new Set();
+    for (const sheet of wb.sheets) {
+      const lc = sheet.name.toLowerCase();
+      const x = a.get(lc) || emptySpill(); const y = b.get(lc) || emptySpill();
+      for (const [k, v] of x.vals) if (!y.vals.has(k) || !sameValue(v, y.vals.get(k))) out.add(cellId(lc, k));
+      for (const k of y.vals.keys()) if (!x.vals.has(k)) out.add(cellId(lc, k));
+      for (const k of x.blocked) if (!y.blocked.has(k)) out.add(cellId(lc, k));
+      for (const k of y.blocked) if (!x.blocked.has(k)) out.add(cellId(lc, k));
+    }
+    return out;
+  };
+  // цикл замечен — все ячейки его компонент становятся #ЦИКЛ!, зависящие от них пересчитываются
+  const memoKey = (id) => { const bang = id.lastIndexOf('!'); const sh = sheetByName(wb, id.slice(0, bang)); return sh ? `${sh.name}!${id.slice(bang + 1)}` : null; };
+  const settleCycles = () => {
+    for (let round = 0; round < 4 && cyclic.size; round++) {
+      const g = updateGraph(todo === null ? null : prevEntry, newDeps, null, null, () => false);
+      const starts = [...cyclic].map((mk) => { const bang = mk.lastIndexOf('!'); return cellId(mk.slice(0, bang), mk.slice(bang + 1)); });
+      cyclic.clear();
+      const fresh = [...cycleMembers(g, wb, starts)].filter((id) => !forced.has(memoKey(id)));
+      if (!fresh.length) return;
+      for (const id of fresh) forced.add(memoKey(id));
+      const again = dependents(g, new Set(fresh));
+      for (const id of again) { const mk = memoKey(id); if (mk) memo.delete(mk); }
+      evalIds(again);
+      for (const id of again) evaluated.add(id);
+    }
+  };
+  const evaluated = new Set();
+  const runFull = () => {
+    // «разлив» может питать сам себя через цепочку формул (раскладка колеблется): если за 4 прохода не сошлось,
+    // все ячейки, побывавшие в цикле, — #ЦИКЛ! (без «разлива»), и проходы продолжаются
+    const ever = new Set();
+    recalcInfo.converged = true;
+    for (let pass = 0; pass < 8; pass++) {
+      if (pass === 4) recalcInfo.converged = false;
+      memo.clear();
+      extents.clear();
+      newDeps.clear();
+      forced.clear(); cyclic.clear(); // циклы — по раскладке «разлива» этого прохода
+      if (pass >= 4) for (const x of ever) forced.add(x);
+      for (const sheet of wb.sheets) for (const [k, cell] of sheet.cells) if (cell.f != null) evalCell(sheet, k, cell);
+      for (const x of cyclic) ever.add(x);
+      settleCycles();
+      for (const x of forced) ever.add(x);
+      const next = resolve();
+      const done = sameSpill(next, spill) && sameSpill(spill, next);
+      spill = next;
+      if (done) break; // раскладка не изменилась — значения последнего прохода верны
+    }
+  };
+  recalcInfo.partial = todo !== null;
+  if (todo === null) runFull();
+  else {
+    recalcInfo.converged = true;
+    let ids = todo;
+    let converged = !ids.size;
+    prefill(ids);
+    for (let pass = 0; pass < 4 && ids.size; pass++) {
+      extents.clear();
+      forced.clear(); cyclic.clear();
+      for (const id of ids) { const bang = id.lastIndexOf('!'); const sh = sheetByName(wb, id.slice(0, bang)); if (sh) memo.delete(`${sh.name}!${id.slice(bang + 1)}`); }
+      evalIds(ids);
+      for (const id of ids) evaluated.add(id);
+      settleCycles();
+      if (manual) { spill = resolve(); converged = true; break; }
+      const next = resolve();
+      const moved = spillChanges(next, spill);
+      spill = next;
+      if (!moved.size) { converged = true; break; }
+      // «разлив» сдвинулся — пересчитать зависящие от изменившихся ячеек (через граф до этого прохода + новые зависимости)
+      const g = updateGraph(prevEntry, newDeps, null, null, () => false);
+      ids = dependents(g, moved);
+      for (const id of moved) { const bang = id.lastIndexOf('!'); const sh = sheetByName(wb, id.slice(0, bang)); const c = sh && sh.cells.get(id.slice(bang + 1)); if (c && c.f != null) ids.add(id); }
+      if (!ids.size) converged = true;
+    }
+    // «разлив» не успокоился за несколько проходов — пересчитать всё (граф тоже строится заново)
+    if (!converged && !manual) { todo = null; changed = null; recalcInfo.partial = false; runFull(); recalcInfo.converged = false; }
   }
   const sheets = wb.sheets.map((sheet) => {
     let changed = false;
@@ -250,7 +547,33 @@ export function recalc(wb) {
     else { delete next.spill; delete next.spillAt; delete next.spillBlocked; }
     return next;
   });
-  return { ...wb, sheets };
+  const out = { ...wb, sheets };
+  const volOf = (id) => { const bang = id.lastIndexOf('!'); const sh = sheetByName(wb, id.slice(0, bang)); const c = sh && sh.cells.get(id.slice(bang + 1)); return !!(c && c.f != null && isVolatile(c.f)); };
+  if (manual) {
+    // граф остаётся прежним: по F9 или при переходе на «авто» изменения посчитаются относительно его листов
+    if (prevEntry) graphs.set(sheets, prevEntry);
+    const pending = !!wb.calcPending || !prevEntry || (changed ? changed.size > 0 : true);
+    if (pending) out.calcPending = true;
+    return out;
+  }
+  delete out.calcPending;
+  if (todo === null) graphs.set(sheets, updateGraph(null, newDeps, sheets, wb.names, volOf));
+  else {
+    const updates = new Map(newDeps);
+    // удалённые формулы — из графа
+    for (const id of changed || []) {
+      const bang = id.lastIndexOf('!'); const sh = sheetByName(wb, id.slice(0, bang)); const c = sh && sh.cells.get(id.slice(bang + 1));
+      if (!c || c.f == null) updates.set(id, null);
+    }
+    graphs.set(sheets, updateGraph(prevEntry, updates, sheets, wb.names, volOf));
+  }
+  return out;
+}
+// Режим вычислений: 'auto' | 'manual'. Переход на «авто» сразу досчитывает отложенное
+export function setCalcMode(wb, mode) {
+  const next = carryGraph({ ...wb, calcMode: mode === 'manual' ? 'manual' : undefined }, wb);
+  if (!next.calcMode) delete next.calcMode;
+  return mode === 'manual' ? next : recalc(next);
 }
 const sameArr = (a, b) => (a === b || (!!a && !!b && JSON.stringify(a) === JSON.stringify(b)));
 // диапазон формулы массива Ctrl+Shift+Enter: «A1:B3»

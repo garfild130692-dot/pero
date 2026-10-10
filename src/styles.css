@@ -472,6 +472,8 @@ p[data-section-break]::after {
 .statusbar .kept { color: #4b6b62; cursor: help; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 40%; }
 .statusbar .warn { color: #a05a00; cursor: help; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 45%; }
 .statusbar input[type=range] { width: 110px; accent-color: var(--accent); }
+.statusbar .status-btn { border: 1px solid #a05a00; background: #fff7ea; color: #a05a00; border-radius: 3px; padding: 0 8px; font: inherit; cursor: pointer; }
+.statusbar .status-btn:hover { background: #ffecd0; }
 .zoom-btn { border: 0; background: transparent; font-size: 15px; cursor: pointer; padding: 0 2px; color: #444; }
 .zoom-val { min-width: 38px; text-align: right; }
 

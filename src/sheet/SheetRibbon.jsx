@@ -332,6 +332,10 @@ export default function SheetRibbon({ api }) {
               <Btn big icon="evaluate" label="Вычислить формулу" onClick={api.evaluateFormula} title="Вычислить формулу по шагам" />
             </Group>
             <Group title="Вычисление">
+              <MenuButton title="Когда пересчитывать формулы" label="Параметры вычислений" items={[
+                ['Автоматически', () => api.setCalcMode('auto'), api.calcMode === 'auto'],
+                ['Вручную', () => api.setCalcMode('manual'), api.calcMode === 'manual'],
+              ]} />
               <Btn big icon="recalc" label="Пересчёт" onClick={api.recalc} title="Пересчитать книгу (F9)" />
             </Group>
             <Group title="Определённые имена">

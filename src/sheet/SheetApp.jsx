@@ -16,7 +16,7 @@ const absRange = (rg) => {
 import { formatValue } from './format.js';
 import {
   DEFAULT_COL_W, DEFAULT_ROW_H, addSheet, autoSumFormula, blockToText, clearRange, collapseGroup, copyBlock, deleteSheet, expandGroup, fill, inputOf,
-  isHidden, isValidName, mergeAt, nameTarget, newWorkbook, recalc, setNames, spillAnchorAt, valueAt, viewContext, pasteBlock, pasteText, renameSheet, setColWidth, setInput, setRowHeight, showLevels, usedRange,
+  isHidden, isValidName, mergeAt, nameTarget, newWorkbook, recalc, setCalcMode, setNames, spillAnchorAt, valueAt, viewContext, pasteBlock, pasteText, renameSheet, setColWidth, setInput, setRowHeight, showLevels, usedRange,
 } from './model.js';
 import { exportXlsx, importXlsx } from './xlsx.js';
 import { exportCsv, importCsv } from './csv.js';
@@ -307,7 +307,10 @@ export default function SheetApp({ initialFile, onOpenOther, onNewDoc, autosaveS
     insertFunction: (en) => setFnDlg({ initial: en }),
     showFormulas, toggleFormulas: () => setShowFormulas((v) => !v),
     precedents, dependents, clearArrows: () => setArrows([]), evaluateFormula,
-    recalc: () => setWb((w) => recalc(w)),
+    // F9 — пересчитать всё (в том числе отложенное в режиме «вручную» и летучие функции); в отмену не попадает
+    recalc: () => setWb((w) => recalc(w, { full: true })),
+    calcMode: wb.calcMode === 'manual' ? 'manual' : 'auto',
+    setCalcMode: (mode) => change((w) => setCalcMode(w, mode)),
     protect: () => setProtectDlg(isProtected(sheet) ? 'unprotect' : 'protect'),
     wb, sheet, si, sel, rg, change, undo, redo, canUndo: history.current.undo.length > 0, canRedo: history.current.redo.length > 0,
     file: { newDocument, newBook, open, openHere, save: () => save(), saveAs: () => write(true), saveCsv, print: () => fileApi.print(), pdf: () => fileApi.exportPdf(doc.name.replace(/\.(xlsx|csv)$/i, '') + '.pdf') },
@@ -326,7 +329,7 @@ export default function SheetApp({ initialFile, onOpenOther, onNewDoc, autosaveS
     const k = e.key;
     if (ctrl && e.code === 'KeyZ') { e.preventDefault(); undo(); return; }
     if (ctrl && (e.code === 'KeyY')) { e.preventDefault(); redo(); return; }
-    if (e.key === 'F9') { e.preventDefault(); setWb((w) => recalc(w)); return; }
+    if (e.key === 'F9') { e.preventDefault(); ribbonApi.recalc(); return; }
     if (ctrl && e.code === 'Backquote') { e.preventDefault(); setShowFormulas((v) => !v); return; }
     if (e.shiftKey && e.key === 'F3') { e.preventDefault(); setFnDlg({}); return; }
     if (ctrl && e.code === 'KeyA') { e.preventDefault(); const u = usedRange(sheet); setSel({ r: 0, c: 0, r2: u ? u.r2 : 0, c2: u ? u.c2 : 0 }); return; }
@@ -468,6 +471,7 @@ export default function SheetApp({ initialFile, onOpenOther, onNewDoc, autosaveS
         )}
         {notice && <span className="warn" role="status">{notice}</span>}
         {!notice && isProtected(sheet) && <span className="kept" title="Заблокированные ячейки этого листа нельзя изменить">Лист защищён</span>}
+        {wb.calcPending && <button type="button" className="status-btn" title="Режим вычислений «вручную»: есть несосчитанные изменения. Пересчитать (F9)" onClick={ribbonApi.recalc}>Вычислить</button>}
         <span className="spacer" />
         {stats.count > 1 && (
           <>

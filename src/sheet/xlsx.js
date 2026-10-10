@@ -449,8 +449,11 @@ export async function importXlsx(data, { recalc: doRecalc = true } = {}) {
   if (!sheets.length) sheets.push(newSheet('Лист1'));
   const view = kid(kid(wbDoc.documentElement, 'bookViews'), 'workbookView');
   const active = Math.min(+(view && view.getAttribute('activeTab')) || 0, sheets.length - 1);
-  const base = { sheets, active, ...(names.length ? { names } : {}) };
-  const wb = doRecalc ? recalc(base) : base;
+  const calcPr = kid(wbDoc.documentElement, 'calcPr');
+  const manual = !!calcPr && calcPr.getAttribute('calcMode') === 'manual';
+  const base = { sheets, active, ...(names.length ? { names } : {}), ...(manual ? { calcMode: 'manual' } : {}) };
+  // при открытии — полный пересчёт (летучие функции, устаревший кеш), в том числе в режиме «вручную»
+  const wb = doRecalc ? recalc(base, { full: true }) : base;
   for (const sh of wb.sheets) if (sh.src) pristine.add(sh);
   if (wb.names) pristine.add(wb.names);
   return { wb, warnings: {}, kept };
@@ -1018,8 +1021,10 @@ async function exportWithSource(wb, source) {
     const t = tag.replace(/\s+(activeTab|firstSheet)="[^"]*"/g, '');
     return wb.active ? `${t} activeTab="${wb.active}"` : t;
   });
-  if (/<calcPr\b/.test(wbXml)) wbXml = wbXml.replace(/<calcPr\b([^>]*?)(\/?)>/, (_, a, sc) => `<calcPr${a.replace(/\s+fullCalcOnLoad="[^"]*"/, '')} fullCalcOnLoad="1"${sc}>`);
-  else wbXml = wbXml.replace(/(<\/definedNames>|<\/sheets>)(?![\s\S]*(<\/definedNames>|<\/sheets>))/, '$1<calcPr fullCalcOnLoad="1"/>');
+  // режим вычислений: calcMode="manual" — как в книге Перо (по умолчанию «авто» — атрибута нет)
+  const calcAttr = wb.calcMode === 'manual' ? ' calcMode="manual"' : '';
+  if (/<calcPr\b/.test(wbXml)) wbXml = wbXml.replace(/<calcPr\b([^>]*?)(\/?)>/, (_, a, sc) => `<calcPr${a.replace(/\s+(fullCalcOnLoad|calcMode)="[^"]*"/g, '')}${calcAttr} fullCalcOnLoad="1"${sc}>`);
+  else wbXml = wbXml.replace(/(<\/definedNames>|<\/sheets>)(?![\s\S]*(<\/definedNames>|<\/sheets>))/, `$1<calcPr${calcAttr} fullCalcOnLoad="1"/>`);
   // ряды диаграмм и источники сводных — по новым именам листов
   if (renames.some(([, nn]) => nn != null) || shifted.length) {
     for (const p of Object.keys(zip.files)) {
@@ -1132,7 +1137,7 @@ export async function exportXlsx(wb, { source = null } = {}) {
 <cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dcterms="http://purl.org/dc/terms/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"><dcterms:created xsi:type="dcterms:W3CDTF">${now}</dcterms:created><dcterms:modified xsi:type="dcterms:W3CDTF">${now}</dcterms:modified></cp:coreProperties>`);
   zip.file('docProps/app.xml', '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties"><Application>Pero</Application></Properties>');
   zip.file('xl/workbook.xml', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<workbook xmlns="${NS}" xmlns:r="${R}"><bookViews><workbookView activeTab="${wb.active || 0}"/></bookViews><sheets>${wb.sheets.map((s, i) => `<sheet name="${esc(s.name)}" sheetId="${i + 1}" r:id="rId${i + 1}"/>`).join('')}</sheets>${freshPrintNames(wb)}<calcPr calcId="191029" fullCalcOnLoad="1"/></workbook>`);
+<workbook xmlns="${NS}" xmlns:r="${R}"><bookViews><workbookView activeTab="${wb.active || 0}"/></bookViews><sheets>${wb.sheets.map((s, i) => `<sheet name="${esc(s.name)}" sheetId="${i + 1}" r:id="rId${i + 1}"/>`).join('')}</sheets>${freshPrintNames(wb)}<calcPr calcId="191029"${wb.calcMode === 'manual' ? ' calcMode="manual"' : ''} fullCalcOnLoad="1"/></workbook>`);
   const n = wb.sheets.length;
   zip.file('xl/_rels/workbook.xml.rels', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${wb.sheets.map((_, i) => `<Relationship Id="rId${i + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet${i + 1}.xml"/>`).join('')}<Relationship Id="rId${n + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/><Relationship Id="rId${n + 2}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/sharedStrings" Target="sharedStrings.xml"/>${dynamic ? `<Relationship Id="rId${n + 3}" Type="${METADATA_REL}" Target="metadata.xml"/>` : ''}</Relationships>`);
