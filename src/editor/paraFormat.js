@@ -75,8 +75,8 @@ export const ParaFormat = Extension.create({
           if (/^[\d.]+$/.test(v)) return Math.round(parseFloat(v) * 240) / 240;
           return cssPt(v);
         }, (a) => (a.lineSpacing != null ? { style: `line-height: ${lineCss(a.lineRule || 'auto', a.lineSpacing)}` } : {})),
-        indentLeft: attr((el) => cssPt(el.style.marginLeft), (a) => (a.indentLeft != null ? { style: `margin-left: ${a.indentLeft}pt` } : {})),
-        indentRight: attr((el) => cssPt(el.style.marginRight), (a) => (a.indentRight != null ? { style: `margin-right: ${a.indentRight}pt` } : {})),
+        indentLeft: attr((el) => cssPt(el.style.marginLeft), (a) => (a.indentLeft != null ? { style: `margin-left: calc(var(--sec-l) + ${a.indentLeft}pt)` } : {}) /* + сдвиг раздела */),
+        indentRight: attr((el) => cssPt(el.style.marginRight), (a) => (a.indentRight != null ? { style: `margin-right: calc(var(--sec-r) + ${a.indentRight}pt)` } : {})),
         indentFirst: attr((el) => cssPt(el.style.textIndent), (a) => (a.indentFirst != null ? { style: `text-indent: ${a.indentFirst}pt` } : {})),
         // Разрыв раздела после этого абзаца: исходный XML w:sectPr (страница, поля, колонтитулы раздела).
         // Не переносится при Enter — иначе раздел «размножился» бы.

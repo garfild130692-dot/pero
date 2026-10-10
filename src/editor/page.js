@@ -203,3 +203,31 @@ export function setHfRefs(sectXml, ids, type = 'default') {
   // ссылки на колонтитулы идут в начале sectPr: header* затем footer* — Word терпит любой порядок внутри группы
   return out;
 }
+
+// ---------- Разделы с разной геометрией листа ----------
+// Рамка экрана для разделов с разными размерами/полями (книжная + альбомная и т.п.): лист на экране шириной с самый
+// широкий раздел, узкие листы — по центру; область текста редактора — от самого левого до самого правого края текста;
+// блоки раздела сдвигаются полями --sec-l/--sec-r (px). Один раздел или одинаковые — сдвигов нет.
+export function sectionFrame(sects) {
+  const list = sects.map((xml) => pagePx(parseSectPr(xml)));
+  const maxW = Math.max(...list.map((p) => p.width));
+  const off = (p) => (maxW - p.width) / 2;
+  const left = Math.min(...list.map((p) => off(p) + p.left));
+  const right = Math.max(...list.map((p) => off(p) + p.width - p.right)); // правый край текста от левого края листа
+  const mixed = list.some((p) => p.width !== list[0].width || p.height !== list[0].height || p.left !== list[0].left || p.right !== list[0].right);
+  return {
+    mixed,
+    width: maxW,
+    padLeft: left,
+    padRight: maxW - right,
+    sections: list.map((p) => ({ ...p, offset: off(p), secL: off(p) + p.left - left, secR: right - (off(p) + p.width - p.right) })),
+  };
+}
+
+// Раздел под курсором: { pos — абзац с его w:sectPr (null — последний раздел, у документа), sectPr }
+export function sectionAt(state) {
+  const top = state.selection.$from.index(0);
+  let found = null;
+  state.doc.forEach((n, pos, idx) => { if (!found && idx >= top && n.attrs && n.attrs.sectPr) found = { pos, sectPr: n.attrs.sectPr }; });
+  return found || { pos: null, sectPr: state.doc.attrs.sectPr };
+}

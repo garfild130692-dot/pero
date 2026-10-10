@@ -19,6 +19,7 @@ import { Opaque } from './opaque.js';
 import { PeroImage } from './image.js';
 import { EMPTY_HF } from './page.js';
 import { Pagination } from './pagination.js';
+import { Sections } from './sections.js';
 import { SearchReplace } from './search.js';
 import { ParagraphStyles, styleOf } from './styles.js';
 import { Comments } from './comments.js';
@@ -212,6 +213,7 @@ export const extensions = [
   RunStyle,
   Opaque,
   PeroImage,
+  Sections,
   Pagination,
   SearchReplace,
   Highlight.configure({ multicolor: true }),

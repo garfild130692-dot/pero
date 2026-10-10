@@ -885,3 +885,33 @@ describe('колонтитулы первой страницы и чётных',
     expect(await z.file('word/settings.xml').async('string')).not.toContain('evenAndOddHeaders');
   });
 });
+
+describe('разделы с разной геометрией листа', () => {
+  it('sectionFrame: лист шириной с самый широкий раздел, узкие — по центру, сдвиги полей раздела', async () => {
+    const { sectionFrame } = await import('../src/editor/page.js');
+    const portrait = '<w:sectPr><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="1134" w:right="850" w:bottom="1134" w:left="1701"/></w:sectPr>';
+    const landscape = '<w:sectPr><w:pgSz w:w="16838" w:h="11906" w:orient="landscape"/><w:pgMar w:top="850" w:right="850" w:bottom="850" w:left="850"/></w:sectPr>';
+    expect(sectionFrame([portrait, portrait]).mixed).toBe(false);
+    const f = sectionFrame([portrait, landscape]);
+    expect(f.mixed).toBe(true);
+    expect(f.width).toBeCloseTo(16838 / 15, 5);
+    const [p, l] = f.sections;
+    expect(p.offset).toBeCloseTo((16838 - 11906) / 30, 5);
+    // область текста редактора — от самого левого до самого правого края текста; у каждого раздела свои сдвиги
+    expect(l.secL).toBeCloseTo(0, 5);
+    expect(f.padLeft + p.secL).toBeCloseTo(p.offset + p.left, 5);
+    expect(f.width - f.padRight - p.secR).toBeCloseTo(p.offset + p.width - p.right, 5);
+  });
+
+  it('round-trip sections.docx (Word): три раздела, ориентация и поля сохраняются', async () => {
+    const src = readFileSync('tests/fixtures/sections.docx');
+    const a = (await importDocx(src)).doc;
+    const sects = [];
+    const walk = (n) => { if (n.attrs && n.attrs.sectPr) sects.push(n.attrs.sectPr); (n.content || []).forEach(walk); };
+    a.content.forEach(walk);
+    expect(sects).toHaveLength(2);
+    expect(sects[1]).toContain('w:orient="landscape"');
+    const b = (await importDocx(await exportDocx(a, { source: src }))).doc;
+    expect(b).toEqual(a);
+  });
+});

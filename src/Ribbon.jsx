@@ -10,6 +10,7 @@ import { LayoutPanel } from './PageControls.jsx';
 import { cssFontStack } from './editor/font.js';
 import { TABLE_STYLES } from './editor/tableFormat.js';
 import { trackInfo } from './editor/track.js';
+import { sectionAt } from './editor/page.js';
 import { FontFamilyBox, FontSizeBox, HighlightButton, TextColorButton, fontState, usePopover } from './FontControls.jsx';
 import { effectivePara } from './editor/paraFormat.js';
 import { LINE_PRESETS, fmtNum } from './editor/paragraph.js';
@@ -201,7 +202,7 @@ export default function Ribbon({ editor, file, onLink, onParagraph, onMargins, o
       para: paraState(e),
       table: e.isActive('table') ? tableState(e) : null,
       image: e.state.selection.node && e.state.selection.node.type.name === 'image' ? e.state.selection.node.attrs : null,
-      page: { sectPr: e.state.doc.attrs.sectPr, hf: e.state.doc.attrs.hf }, // для вкладки «Макет»
+      page: { sectPr: sectionAt(e.state).sectPr, hf: e.state.doc.attrs.hf }, // для вкладки «Макет» — раздел под курсором
       styles: e.state.doc.attrs.styles || [],
       track: trackInfo(e.state),
       styleId: e.state.selection.$from.parent.attrs.styleId || null,

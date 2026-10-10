@@ -5,7 +5,7 @@ import React, { useRef, useState } from 'react';
 import { useEditorState } from '@tiptap/react';
 import { effectivePara } from './editor/paraFormat.js';
 import { PT_PER_CM, cmToPt, fmtNum, ptToCm } from './editor/paragraph.js';
-import { parseSectPr } from './editor/page.js';
+import { parseSectPr, sectionAt } from './editor/page.js';
 import { DEFAULT_TAB } from './editor/tabs.js';
 
 const TAB_TYPES = [['left', 'По левому краю'], ['center', 'По центру'], ['right', 'По правому краю'], ['decimal', 'По разделителю'], ['bar', 'Вертикальная черта']];
@@ -41,7 +41,7 @@ function rulerState(e) {
   if (!['paragraph', 'heading'].includes(node.type.name)) node = null;
   const p = node ? effectivePara(node, e.state.doc.attrs, inList) : null;
   return {
-    sectPr: e.state.doc.attrs.sectPr,
+    sectPr: sectionAt(e.state).sectPr, // раздел под курсором
     active: !!p && !inList && !inTable,
     left: p ? p.indentLeft : 0,
     right: p ? p.indentRight : 0,

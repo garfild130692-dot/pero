@@ -588,7 +588,7 @@ class Importer {
     } else if (this.cell && !level) {
       // абзац в ячейке — как Word: умолчания документа ← стиль таблицы ← стиль абзаца ← прямые;
       // вид ячейки по умолчанию (styles.css) — как у «Сетки таблицы»: без интервалов, одинарный
-      values = { ...this.cell.para, ...style, ...direct };
+      values = { ...this.docPara, ...this.cell.para, ...style, ...direct };
       base = { ...base, spaceBefore: 0, spaceAfter: 0, lineRule: 'auto', lineSpacing: 1 };
     } else values = { ...style, ...direct };
     if (def) Object.assign(base, def.para);

@@ -12,12 +12,13 @@ import { cssFontStack } from './editor/font.js';
 import { NEW_DOC_PARA } from './editor/paragraph.js';
 import { lineCss } from './editor/paraFormat.js';
 import { insertImageFiles } from './insertImage.js';
-import { EMPTY_HF, pagePx, parseSectPr, sectionList } from './editor/page.js';
+import { EMPTY_HF, pagePx, parseSectPr, sectionFrame, sectionList } from './editor/page.js';
 import { pageChrome, pageInfo } from './editor/pagination.js';
 import { HeaderFooterDialog, MarginsDialog, PageChrome, printCss } from './PageControls.jsx';
 import FindBar from './FindBar.jsx';
 import StyleDialog from './StyleDialog.jsx';
 import { styleCss } from './editor/styles.js';
+import { sectionPrintCss } from './editor/sections.js';
 import CommentsPanel from './CommentsPanel.jsx';
 import { orderedComments, commentsKey } from './editor/comments.js';
 import { trackInfo } from './editor/track.js';
@@ -378,12 +379,23 @@ export default function App({ initialFile, onOpenOther, onNewSheet, autosaveSec 
     editor,
     selector: ({ editor: e }) => (e ? {
       family: e.state.doc.attrs.fontFamily, size: e.state.doc.attrs.fontSize, para: e.state.doc.attrs.para,
-      sectPr: e.state.doc.attrs.sectPr, hf: e.state.doc.attrs.hf, total: pageInfo(e.state).total, styles: e.state.doc.attrs.styles, chrome: pageChrome(e.state), firstSect: sectionList(e.state.doc)[0],
+      sectPr: e.state.doc.attrs.sectPr, hf: e.state.doc.attrs.hf, total: pageInfo(e.state).total, styles: e.state.doc.attrs.styles, chrome: pageChrome(e.state), firstSect: sectionList(e.state.doc)[0], sects: sectionList(e.state.doc), sectCss: sectionPrintCss(e.state.doc),
     } : null),
   });
 
   if (!editor) return null;
   const geo = pagePx(parseSectPr(docFont && docFont.sectPr));
+  // разделы с разной геометрией: лист шириной с самый широкий раздел, поля колонтитулов — по первому/последнему разделу
+  const frame = sectionFrame((docFont && docFont.sects) || [docFont && docFont.sectPr]);
+  const firstSec = frame.sections[0];
+  const lastSec = frame.sections[frame.sections.length - 1];
+  const pageGeo = frame.mixed
+    ? { ...geo, width: frame.width, height: firstSec.height, top: firstSec.top, bottom: lastSec.bottom, left: frame.padLeft, right: frame.padRight }
+    : geo;
+  const chromeGeo = frame.mixed
+    ? { head: { ...firstSec, left: firstSec.offset + firstSec.left, right: frame.width - firstSec.offset - firstSec.width + firstSec.right },
+      foot: { ...lastSec, left: lastSec.offset + lastSec.left, right: frame.width - lastSec.offset - lastSec.width + lastSec.right } }
+    : { head: geo, foot: geo };
 
   return (
     <div className="app" onDragOver={(e) => e.preventDefault()} onDrop={onDrop}>
@@ -421,8 +433,8 @@ export default function App({ initialFile, onOpenOther, onNewSheet, autosaveSec 
         {findMode && <FindBar editor={editor} mode={findMode} setMode={setFindMode} />}
         <Ruler editor={editor} zoom={zoom} />
         <PageScaler scale={zoom / 100}>
-          <div className="page" style={{ ...pageVars(docFont), ...pageBox(geo) }}>
-            <PageChrome geo={geo} hf={(docFont && docFont.hf) || EMPTY_HF} chrome={docFont && docFont.chrome} total={(docFont && docFont.total) || 1} />
+          <div className={`page${frame.mixed ? ' pero-multi' : ''}`} style={{ ...pageVars(docFont), ...pageBox(pageGeo) }}>
+            <PageChrome geo={chromeGeo.head} footGeo={chromeGeo.foot} hf={(docFont && docFont.hf) || EMPTY_HF} chrome={docFont && docFont.chrome} total={(docFont && docFont.total) || 1} />
             <EditorContent editor={editor} />
           </div>
         </PageScaler>
@@ -439,7 +451,7 @@ export default function App({ initialFile, onOpenOther, onNewSheet, autosaveSec 
       {/* пользовательские стили абзацев — правила по data-pstyle */}
       <style>{styleCss(docFont && docFont.styles)}</style>
       {/* печать/PDF: размер листа, поля и колонтитулы — правилами @page */}
-      <style>{printCss(docFont && docFont.sectPr, (docFont && docFont.hf) || EMPTY_HF, docFont && docFont.firstSect)}</style>
+      <style>{printCss(docFont && docFont.sectPr, (docFont && docFont.hf) || EMPTY_HF, docFont && docFont.firstSect)}{docFont && docFont.sectCss ? `@media print { ${docFont.sectCss} }` : ''}</style>
       {modal && typeof modal === 'object' && !modal.style && (
         <Modal
           title={modal.title}

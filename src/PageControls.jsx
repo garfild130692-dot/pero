@@ -1,12 +1,21 @@
 // Страница: вкладка «Макет» (поля, ориентация, размер), колонтитулы и номера страниц, CSS для печати/PDF.
 import React, { useState } from 'react';
 import { usePopover } from './FontControls.jsx';
-import { EMPTY_HF, MARGIN_PRESETS, PAPER, TWIPS_PER_CM, hfFor, hfText, pagePx, parseSectPr, patchSectPr, sectionList } from './editor/page.js';
+import { EMPTY_HF, MARGIN_PRESETS, PAPER, TWIPS_PER_CM, hfFor, hfText, pagePx, parseSectPr, patchSectPr, sectionAt, sectionList } from './editor/page.js';
 import { fmtNum } from './editor/paragraph.js';
 
 // Изменить атрибут документа одной транзакцией (с отменой по Ctrl+Z)
 const setDocAttr = (editor, name, value) => editor.chain().focus().command(({ tr }) => { tr.setDocAttribute(name, value); return true; }).run();
-const setPage = (editor, patch) => setDocAttr(editor, 'sectPr', patchSectPr(editor.state.doc.attrs.sectPr, patch));
+// Параметры страницы — раздела под курсором (как в Word): абзац с разрывом раздела или последний раздел документа
+const setPage = (editor, patch) => {
+  const sec = sectionAt(editor.state);
+  if (sec.pos == null) { setDocAttr(editor, 'sectPr', patchSectPr(sec.sectPr, patch)); return; }
+  editor.chain().focus().command(({ tr }) => {
+    const node = tr.doc.nodeAt(sec.pos);
+    tr.setNodeMarkup(sec.pos, undefined, { ...node.attrs, sectPr: patchSectPr(sec.sectPr, patch) });
+    return true;
+  }).run();
+};
 const cm = (tw) => fmtNum(tw / TWIPS_PER_CM, 2);
 const tw = (s) => {
   const v = parseFloat(String(s).replace(',', '.'));
@@ -42,7 +51,7 @@ const NumIcon = () => <S><rect x="5" y="3" width="14" height="18" /><text x="12"
 
 // ---------- Вкладка «Макет» ----------
 export function LayoutPanel({ editor, Group, onMargins, onHf }) {
-  const g = parseSectPr(editor.state.doc.attrs.sectPr);
+  const g = parseSectPr(sectionAt(editor.state).sectPr);
   const same = (p) => Math.abs(p.top - g.top) < 15 && Math.abs(p.right - g.right) < 15 && Math.abs(p.bottom - g.bottom) < 15 && Math.abs(p.left - g.left) < 15;
   const paper = PAPER.find(([, w, h]) => (Math.abs(w - g.w) < 30 && Math.abs(h - g.h) < 30) || (Math.abs(h - g.w) < 30 && Math.abs(w - g.h) < 30));
   const hf = editor.state.doc.attrs.hf || EMPTY_HF;
@@ -107,7 +116,7 @@ export function LayoutPanel({ editor, Group, onMargins, onHf }) {
 
 // ---------- Диалог «Поля» ----------
 export function MarginsDialog({ editor, onClose }) {
-  const g = parseSectPr(editor.state.doc.attrs.sectPr);
+  const g = parseSectPr(sectionAt(editor.state).sectPr);
   const [f, setF] = useState({ top: cm(g.top), bottom: cm(g.bottom), left: cm(g.left), right: cm(g.right), header: cm(g.header), footer: cm(g.footer) });
   const [err, setErr] = useState('');
   const apply = () => {
@@ -242,7 +251,8 @@ export function HeaderFooterDialog({ editor, onClose }) {
 
 // ---------- Колонтитулы первой и последней страницы (остальные рисует слой полос разбиения) ----------
 // chrome — из разбиения: какой вариант колонтитула на первом и последнем листе (первая страница раздела, чётная)
-export function PageChrome({ geo, hf, chrome, total }) {
+// footGeo — геометрия последнего листа (разделы с разной геометрией), иначе как geo
+export function PageChrome({ geo, footGeo = geo, hf, chrome, total }) {
   const head = chrome ? chrome.firstHeader : hf.header;
   const foot = chrome ? chrome.lastFooter : hf.footer;
   const line = (p, i, n) => <div key={i} className={`hf-line hf-${p.align || 'left'}`}>{hfText(p.text, n, total) || ' '}</div>;
@@ -251,7 +261,7 @@ export function PageChrome({ geo, hf, chrome, total }) {
       <div className="pero-hf pero-header page-chrome-top" style={{ height: geo.top, paddingTop: geo.header, paddingLeft: geo.left, paddingRight: geo.right }}>
         {(head || []).map((p, i) => line(p, i, 1))}
       </div>
-      <div className="pero-hf pero-footer page-chrome-bottom" style={{ height: geo.bottom, paddingBottom: geo.footer, paddingLeft: geo.left, paddingRight: geo.right }}>
+      <div className="pero-hf pero-footer page-chrome-bottom" style={{ height: footGeo.bottom, paddingBottom: footGeo.footer, paddingLeft: footGeo.left, paddingRight: footGeo.right }}>
         {(foot || []).map((p, i) => line(p, i, total))}
       </div>
     </>

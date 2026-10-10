@@ -27,8 +27,8 @@ export function styleCss(styles) {
     if (p.spaceBefore != null) decl.push(`margin-top: ${p.spaceBefore}pt`);
     if (p.spaceAfter != null) decl.push(`margin-bottom: ${p.spaceAfter}pt`);
     if (p.lineSpacing != null) decl.push(`line-height: ${lineCss(p.lineRule || 'auto', p.lineSpacing)}`);
-    if (p.indentLeft != null) decl.push(`margin-left: ${p.indentLeft}pt`);
-    if (p.indentRight != null) decl.push(`margin-right: ${p.indentRight}pt`);
+    if (p.indentLeft != null) decl.push(`margin-left: calc(var(--sec-l) + ${p.indentLeft}pt)`); // + сдвиг раздела (sections.js)
+    if (p.indentRight != null) decl.push(`margin-right: calc(var(--sec-r) + ${p.indentRight}pt)`);
     if (p.indentFirst != null) decl.push(`text-indent: ${p.indentFirst}pt`);
     const sel = `.page-content p[data-pstyle="${String(s.id).replace(/"/g, '')}"]`;
     return decl.length ? `${sel} { ${decl.join('; ')} }` : '';

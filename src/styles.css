@@ -1,3 +1,5 @@
+@property --sec-l { syntax: '<length>'; inherits: false; initial-value: 0px; }
+@property --sec-r { syntax: '<length>'; inherits: false; initial-value: 0px; }
 :root {
   --accent: #1f6f5c;          /* фирменный цвет Пера — свой, не «вордовский» синий */
   --accent-dark: #17594a;
@@ -287,8 +289,10 @@ body { background: var(--workspace); overflow: hidden; }
 .pero-bands { position: absolute; left: 0; right: 0; top: 0; height: 0; z-index: 2; pointer-events: none; }
 .pero-page-band {
   position: absolute; left: 0; right: 0;
-  display: flex; flex-direction: column; pointer-events: none; background: #fff;
+  display: flex; flex-direction: column; pointer-events: none; background: transparent;
 }
+/* поля колонтитулов в полосе — белые, ширина и отступы — по листу своего раздела (pagination.js) */
+.pero-page-band > .pero-hf { background: #fff; box-sizing: border-box; flex: none; }
 .pero-page-gap {
   background: var(--workspace); flex: none;
   box-shadow: inset 0 3px 3px -2px rgba(0,0,0,.18), inset 0 -3px 3px -2px rgba(0,0,0,.18);
@@ -356,7 +360,7 @@ body { background: var(--workspace); overflow: hidden; }
    Интервалы до/после — margin: Word между соседними абзацами берёт БОЛЬШИЙ из «после» и «перед» (проверено через
    COM: 20 + 30 → 30, 20 + 10 → 20) — ровно как схлопывание margin в CSS. */
 .page-content p {
-  margin: var(--p-before, 0) var(--p-right, 0) var(--p-after, 8pt) var(--p-left, 0);
+  margin: var(--p-before, 0) calc(var(--sec-r) + var(--p-right, 0px)) var(--p-after, 8pt) calc(var(--sec-l) + var(--p-left, 0px));
   padding: 0;
   text-indent: var(--p-indent, 0);
 }
@@ -365,14 +369,14 @@ body { background: var(--workspace); overflow: hidden; }
   /* межстрочный — как у стилей Heading в Word: множитель 1,08 «одинарного» */
   font-family: 'Calibri Light', Calibri, Carlito, sans-serif; font-weight: normal; margin: 12pt 0 0; line-height: calc(var(--line-ratio, 1.15) * 1.0792);
   /* отступы заголовки наследуют от «Обычного», как в Word */
-  margin-left: var(--p-left, 0); margin-right: var(--p-right, 0); text-indent: var(--p-indent, 0);
+  margin-left: calc(var(--sec-l) + var(--p-left, 0px)); margin-right: calc(var(--sec-r) + var(--p-right, 0px)); text-indent: var(--p-indent, 0);
 }
 .page-content h1 { font-size: 16pt; color: #2f5496; }
 .page-content h2 { font-size: 13pt; color: #2f5496; margin-top: 2pt; }
 .page-content h3 { font-size: 12pt; color: #1f3763; margin-top: 2pt; }
 .page-content h4, .page-content h5, .page-content h6 { font-size: 11pt; color: #2f5496; font-style: italic; margin-top: 2pt; }
 /* интервал перед первым абзацем документа Word сохраняет (в начале следующих страниц — убирает, см. pagination.js) */
-.page-content ul, .page-content ol { margin: 0 0 8pt; padding-left: 36pt; }
+.page-content ul, .page-content ol { margin: 0 var(--sec-r) 8pt var(--sec-l); padding-left: 36pt; }
 .page-content li > p { margin: 0; padding: 0; text-indent: 0; }
 .page-content li > ul, .page-content li > ol { margin: 0; padding-left: 24pt; }
 .page-content ul { list-style: disc; }
@@ -385,7 +389,7 @@ body { background: var(--workspace); overflow: hidden; }
 .page-content sup, .page-content sub { font-size: 65%; line-height: 0; }
 
 /* Таблицы */
-.page-content .tableWrapper { overflow-x: auto; margin: 0 0 8pt; }
+.page-content .tableWrapper { overflow-x: auto; margin: 0 var(--sec-r) 8pt var(--sec-l); }
 .page-content table { border-collapse: collapse; table-layout: fixed; width: 100%; margin: 0; }
 /* Границы: таблица задаёт CSS-переменные (PeroTableView), ячейка берёт внешнюю или внутреннюю по положению;
    переопределённые стороны ячейки — инлайн-стилем поверх. «Нет границы» — бледная сетка, только на экране. */
@@ -578,3 +582,12 @@ p[data-section-break]::after {
 /* под повторённой шапкой над продолжением строки — линия (внутренняя горизонтальная граница таблицы) */
 .pero-header-overlay tr:last-child > td::before, .pero-header-overlay tr:last-child > th::before { border-bottom: var(--cb-bottom, var(--tb-ih, 0.5pt solid #000)); }
 .hf-variants { margin-bottom: 8px; }
+
+/* Разделы с разной геометрией листа (sections.js): на экране — листы своего размера слоем под текстом */
+.page.pero-multi { background: transparent; box-shadow: none; isolation: isolate; }
+.pero-sheets { position: absolute; left: 0; top: 0; right: 0; height: 0; z-index: -1; pointer-events: none; }
+.pero-sheet { position: absolute; background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,.2), 0 0 0 1px rgba(0,0,0,.04); }
+@media print {
+  .pero-sheets { display: none !important; }
+  .page-content [data-section] { --sec-l: 0px !important; --sec-r: 0px !important; }
+}
