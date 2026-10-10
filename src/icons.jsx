@@ -53,6 +53,7 @@ export const Icon = {
   delTable: (p) => <S {...p}><rect x="3" y="4" width="13" height="12" rx="1" /><path d="M3 10h13M9 4v12" /><path d="m16 16 5 5M21 16l-5 5" /></S>,
   merge: (p) => <S {...p}><rect x="3" y="5" width="18" height="14" rx="1" /><path d="m7 12 3-2v4zM17 12l-3-2v4z" fill="currentColor" /></S>,
   split: (p) => <S {...p}><rect x="3" y="5" width="18" height="14" rx="1" /><path d="M12 5v14" /></S>,
+  lock: (p) => <S {...p}><rect x="5" y="10" width="14" height="11" rx="1.5" /><path d="M8 10V7a4 4 0 0 1 8 0v3" /><path d="M12 14v3" /></S>,
   freeze: (p) => <S {...p}><rect x="3" y="3" width="18" height="18" rx="1" /><path d="M3 8h18M8 3v18" strokeWidth="2.4" /><path d="M14 13l3 3M17 13l-3 3" /></S>,
   group: (p) => <S {...p}><path d="M4 4h3v16H4" /><path d="M11 6h10M11 10h10M11 14h10M11 18h10" /></S>,
   ungroup: (p) => <S {...p}><path d="M4 4h3M4 20h3" /><path d="M11 6h10M11 10h10M11 14h10M11 18h10" /><path d="m3 9 5 6M8 9l-5 6" /></S>,

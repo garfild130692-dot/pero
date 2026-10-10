@@ -127,6 +127,9 @@ function parseStyles(doc, theme) {
       if (v === 'center' || v === 'top') s.valign = v;
       if (['1', 'true'].includes(al.getAttribute('wrapText'))) s.wrap = true;
     }
+    const pr = kid(xf, 'protection');
+    if (pr && ['0', 'false'].includes(pr.getAttribute('locked'))) s.unlocked = true;
+    if (pr && ['1', 'true'].includes(pr.getAttribute('hidden'))) s.formulaHidden = true;
     return Object.keys(s).length ? s : null;
   });
 }
@@ -259,6 +262,16 @@ function readPage(root) {
   if (po && isOn(po, 'horizontalCentered')) page.centerH = true;
   return Object.keys(page).length ? page : null;
 }
+// Защита листа: { attrs } — все атрибуты <sheetProtection> (хеш пароля и разрешения), без sheet="1" — не защищён
+function readProtection(root) {
+  const el = kid(root, 'sheetProtection');
+  if (!el || !isOn(el, 'sheet')) return null;
+  const attrs = {};
+  for (let i = 0; i < el.attributes.length; i++) attrs[el.attributes[i].name] = el.attributes[i].value;
+  return { attrs };
+}
+const protectionXml = (p) => (p ? `<sheetProtection${Object.entries(p.attrs).map(([k, v]) => ` ${k}="${esc(v)}"`).join('')}/>` : '');
+
 // Имена печати листа с номером idx (порядок в <sheets>): { printArea, printTitles }
 function readPrintNames(wbDoc, idx) {
   const out = { printArea: null, printTitles: null };
@@ -381,6 +394,8 @@ export async function importXlsx(data) {
     if (freeze) sheet.freeze = freeze;
     const page = readPage(root);
     if (page) sheet.page = page;
+    const prot = readProtection(root);
+    if (prot) sheet.protection = prot;
     const pn = readPrintNames(wbDoc, idx);
     if (pn.printArea) sheet.printArea = pn.printArea;
     if (pn.printTitles) sheet.printTitles = pn.printTitles;
@@ -462,7 +477,9 @@ function buildStyles(wb, base = null) {
     }
     const al = (s.align || s.valign || s.wrap)
       ? `<alignment${s.align ? ` horizontal="${s.align}"` : ''}${s.valign ? ` vertical="${s.valign}"` : ''}${s.wrap ? ' wrapText="1"' : ''}/>` : '';
-    const xml = `<xf numFmtId="${numFmtId}" fontId="${font}" fillId="${fill}" borderId="${border}" xfId="0"${numFmtId ? ' applyNumberFormat="1"' : ''}${font ? ' applyFont="1"' : ''}${fill ? ' applyFill="1"' : ''}${border ? ' applyBorder="1"' : ''}${al ? ' applyAlignment="1">' + al + '</xf>' : '/>'}`;
+    const prot = s.unlocked || s.formulaHidden ? `<protection${s.unlocked ? ' locked="0"' : ''}${s.formulaHidden ? ' hidden="1"' : ''}/>` : '';
+    const inner = al + prot;
+    const xml = `<xf numFmtId="${numFmtId}" fontId="${font}" fillId="${fill}" borderId="${border}" xfId="0"${numFmtId ? ' applyNumberFormat="1"' : ''}${font ? ' applyFont="1"' : ''}${fill ? ' applyFill="1"' : ''}${border ? ' applyBorder="1"' : ''}${al ? ' applyAlignment="1"' : ''}${prot ? ' applyProtection="1"' : ''}${inner ? `>${inner}</xf>` : '/>'}`;
     xfs.push(xml);
     index.set(k, xfs.length - 1);
     return xfs.length - 1;
@@ -625,7 +642,7 @@ function newSheetXml(sheet, active, xfOf, str) {
   const cols = colsXml(sheet, false);
   const xml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<worksheet xmlns="${NS}" xmlns:r="${R}">` +
     `${dimensionXml(sheet)}<sheetViews><sheetView workbookViewId="0"${active ? ' tabSelected="1"' : ''}${sheet.freeze ? `>${paneXml(sheet.freeze)}</sheetView>` : '/>'}</sheetViews>` +
-    `${formatPrXml('<sheetFormatPr defaultRowHeight="15"/>', sheet)}${cols}${sheetDataXml(sheet, (r, c, cell) => cellXml(cell, addr(r, c), xfOf, str), false)}${mergesXml(sheet)}` +
+    `${formatPrXml('<sheetFormatPr defaultRowHeight="15"/>', sheet)}${cols}${sheetDataXml(sheet, (r, c, cell) => cellXml(cell, addr(r, c), xfOf, str), false)}${protectionXml(sheet.protection)}${mergesXml(sheet)}` +
     `${marginsXml((sheet.page && sheet.page.margins) || {})}</worksheet>`;
   return sheet.page ? setPageXml(xml, sheet.page) : xml;
 }
@@ -701,6 +718,7 @@ function patchSheetXml(xml, sheet, active, root, book, xfOf, str) {
   out = selectTab(out, active);
   if (JSON.stringify(readFreeze(root)) !== JSON.stringify(sheet.freeze || null)) out = setFreezeXml(out, sheet.freeze || null);
   if (JSON.stringify(readPage(root)) !== JSON.stringify(sheet.page || null)) out = setPageXml(out, sheet.page || {});
+  if (JSON.stringify(readProtection(root)) !== JSON.stringify(sheet.protection || null)) out = setSheetEl(out, 'sheetProtection', protectionXml(sheet.protection));
   const fp = findEl(out, 'sheetFormatPr');
   if (fp) out = out.slice(0, fp.start) + formatPrXml(out.slice(fp.start, fp.end), sheet) + out.slice(fp.end);
   else if (maxLevel(sheet, 'row') || maxLevel(sheet, 'col')) out = setSheetEl(out, 'sheetFormatPr', formatPrXml('<sheetFormatPr defaultRowHeight="15"/>', sheet));

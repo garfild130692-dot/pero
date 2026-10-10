@@ -93,3 +93,5 @@ input.sheet-tab.editing { width: 120px; background: #fff; border: 1px solid var(
   .sheet-print.grid td { outline: 1px solid #c8c8c8; outline-offset: -1px; } /* «Печать сетки» */
   .sheet-print thead { display: table-header-group; }
 }
+
+.sheet-lock { font-size: 11px; margin-right: 4px; opacity: .75; }

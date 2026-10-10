@@ -361,6 +361,38 @@ print(wb.sheetnames, s['E1'].value, s.freeze_panes, s.row_dimensions[17].hidden,
     expect(pg.printScale(pg.pageOf(back), 2000, 100)).toBeCloseTo(pg.printGeometry(pg.pageOf(back)).contentW / 2000, 6);
   });
 
+  it('защита листа: из файла, запрет правки заблокированных, пароль как у Excel, запись', async () => {
+    const pr = await import('../src/sheet/protect.js');
+    const JSZip = (await import('jszip')).default;
+    const src = readFileSync('tests/fixtures/preserve.xlsx');
+    let wb = (await importXlsx(src)).wb;
+    const sp = wb.sheets[1];
+    expect(sp.protection).toEqual({ attrs: { sheet: '1', objects: '1', scenarios: '1' } });
+    expect(cell(wb, 'B2', 1).s).toEqual({ unlocked: true });
+    expect(pr.protectionViolation(wb, setInput(wb, 1, 1, 1, 'Новое'))).toBe(false);        // B2 — разблокирована
+    expect(pr.protectionViolation(wb, setInput(wb, 1, 1, 0, '7'))).toBe(true);             // A2 — заблокирована
+    expect(pr.protectionViolation(wb, shiftCells(wb, 1, 'row', 1, 1))).toBe(true);         // строки — нельзя
+    expect(pr.protectionViolation(wb, setInput(wb, 0, 1, 1, '7'))).toBe(false);            // другой лист не защищён
+    // пароль: хеш Excel (SHA-512, соль, 100 000 повторов) и старый 16-битный
+    const excel = { attrs: { algorithmName: 'SHA-512', hashValue: 'KL8q5/2CM81gsAaKKmT7d8baZFa4m0ZO1esTnyP/8x//6A8c5jhKAZuTR5knoodPBCWtBu0ddNU+w5XXhnRGiQ==', saltValue: 'AxZYEQJS1HHZGNopHiXLgQ==', spinCount: '100000', sheet: '1' } };
+    expect(await pr.checkPassword(excel, 'Secret1')).toBe(true);
+    expect(await pr.checkPassword(excel, 'secret1')).toBe(false);
+    expect(pr.legacyHash('test')).toBe('CBEB');
+    // снять защиту со «Справочника», защитить «Данные» паролем
+    wb = pr.setProtection(wb, 1, null);
+    wb = pr.setProtection(wb, 0, await pr.makeProtection('пароль'));
+    const out = await exportXlsx(wb, { source: src });
+    const z = await JSZip.loadAsync(out);
+    expect(await z.file('xl/worksheets/sheet2.xml').async('string')).not.toContain('<sheetProtection');
+    expect(await z.file('xl/worksheets/sheet1.xml').async('string')).toMatch(/<\/sheetData><sheetProtection sheet="1" objects="1" scenarios="1" algorithmName="SHA-512" hashValue="[^"]+" saltValue="[^"]+" spinCount="100000"\/><conditionalFormatting/);
+    const back = (await importXlsx(out)).wb;
+    expect(back.sheets[1].protection).toBeUndefined();
+    expect(await pr.checkPassword(back.sheets[0].protection, 'пароль')).toBe(true);
+    // разблокированная ячейка в новой книге
+    const n = setStyle(put(newWorkbook(), { A1: '1' }), 0, { r1: 0, c1: 0, r2: 0, c2: 0 }, { unlocked: true, formulaHidden: true });
+    expect(cell((await importXlsx(await exportXlsx(n))).wb, 'A1').s).toEqual({ unlocked: true, formulaHidden: true });
+  }, 60000); // хеш пароля — 100 000 повторов SHA-512
+
   it('новая книга из модели: русские функции → английские, кэшированные значения', async () => {
     let wb = put(newWorkbook(), { A1: '2', A2: '3', A3: '=СУММ(A1:A2)*10', B1: 'текст', B2: '=ЕСЛИ(A3>40;"да";"нет")' });
     wb = setStyle(wb, 0, { r1: 0, c1: 0, r2: 0, c2: 0 }, { bold: true, numFmt: '0.00' });

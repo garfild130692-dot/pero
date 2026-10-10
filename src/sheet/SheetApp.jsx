@@ -11,6 +11,10 @@ import {
 } from './model.js';
 import { exportXlsx, importXlsx } from './xlsx.js';
 import { pageOf, printGeometry, printScale } from './pageSetup.js';
+import { isLocked, isProtected, protectionViolation, setProtection } from './protect.js';
+import ProtectDialog from './ProtectDialog.jsx';
+
+const PROTECTED_MSG = 'Ячейка на защищённом листе. Чтобы изменить её, снимите защиту: «Рецензирование → Снять защиту листа».';
 import * as fileApi from '../fileApi.js';
 import { useAutosave } from '../autosave.js';
 
@@ -28,6 +32,14 @@ export default function SheetApp({ initialFile, onOpenOther, onNewDoc, autosaveS
   const [kept, setKept] = useState({}); // что Перо не редактирует, но сохраняет как есть
   const source = useRef(null); // байты открытого .xlsx — экспорт строится поверх них
   const [renaming, setRenaming] = useState(null);
+  const [notice, setNotice] = useState(null); // временное сообщение в строке состояния
+  const [protectDlg, setProtectDlg] = useState(null); // 'protect' | 'unprotect'
+  const noticeTimer = useRef(null);
+  const flash = useCallback((text) => {
+    setNotice(text);
+    clearTimeout(noticeTimer.current);
+    noticeTimer.current = setTimeout(() => setNotice(null), 5000);
+  }, []);
   const gridRef = useRef(null);
   const clip = useRef(null); // { block, text } — последний скопированный блок (с формулами и стилями)
   const si = wb.active;
@@ -38,19 +50,21 @@ export default function SheetApp({ initialFile, onOpenOther, onNewDoc, autosaveS
     setWb((cur) => {
       const next = fn(cur);
       if (next === cur) return cur;
+      if (protectionViolation(cur, next)) { setTimeout(() => flash(PROTECTED_MSG)); return cur; }
       history.current.undo.push(cur);
       if (history.current.undo.length > 200) history.current.undo.shift();
       history.current.redo = [];
       setDirty(true);
       return next;
     });
-  }, []);
+  }, [flash]);
   const undo = () => { const h = history.current; if (!h.undo.length) return; h.redo.push(wb); setWb(h.undo.pop()); setDirty(true); };
   const redo = () => { const h = history.current; if (!h.redo.length) return; h.undo.push(wb); setWb(h.redo.pop()); setDirty(true); };
 
   const setSel = useCallback((s) => setSelState((cur) => (typeof s === 'function' ? s(cur) : s)), []);
   const setEditing = (e) => {
     if (!e && gridRef.current) gridRef.current.focus(); // Esc — фокус обратно сетке
+    if (e && isProtected(sheet) && isLocked(sheet.cells.get(key(e.r, e.c)))) { flash(PROTECTED_MSG); return; }
     if (e && e.text === null) e = { ...e, text: inputOf(sheet.cells.get(key(e.r, e.c))) };
     setEditingState(e);
   };
@@ -217,6 +231,7 @@ export default function SheetApp({ initialFile, onOpenOther, onNewDoc, autosaveS
 
   const rg = normSel(sel);
   const ribbonApi = {
+    protect: () => setProtectDlg(isProtected(sheet) ? 'unprotect' : 'protect'),
     wb, sheet, si, sel, rg, change, undo, redo, canUndo: history.current.undo.length > 0, canRedo: history.current.redo.length > 0,
     file: { newDocument, newBook, open, openHere, save: () => save(), saveAs: () => write(true), print: () => fileApi.print(), pdf: () => fileApi.exportPdf(doc.name.replace(/\.xlsx$/i, '') + '.pdf') },
     autoSum: () => {
@@ -289,7 +304,8 @@ export default function SheetApp({ initialFile, onOpenOther, onNewDoc, autosaveS
   }, [sheet.cells, rg.r1, rg.r2, rg.c1, rg.c2]);
 
   const activeCell = sheet.cells.get(key(sel.r, sel.c));
-  const barText = editing && editing.r === sel.r && editing.c === sel.c ? editing.text : inputOf(activeCell);
+  const formulaHidden = isProtected(sheet) && activeCell && activeCell.f != null && activeCell.s && activeCell.s.formulaHidden;
+  const barText = editing && editing.r === sel.r && editing.c === sel.c ? editing.text : formulaHidden ? '' : inputOf(activeCell);
 
   return (
     <div className="app sheet-app" onDragOver={(e) => e.preventDefault()} onDrop={onDrop}>
@@ -314,7 +330,8 @@ export default function SheetApp({ initialFile, onOpenOther, onNewDoc, autosaveS
           onFocus={(e) => e.target.select()} />
         <span className="fx">fx</span>
         <input className="fx-input" aria-label="Строка формул" value={barText}
-          onFocus={() => { if (!editing) { lastRef.current = null; setEditingState({ r: sel.r, c: sel.c, text: inputOf(activeCell), fromBar: true }); } }}
+          readOnly={isProtected(sheet) && isLocked(activeCell)}
+          onFocus={() => { if (!editing && !(isProtected(sheet) && isLocked(activeCell))) { lastRef.current = null; setEditingState({ r: sel.r, c: sel.c, text: inputOf(activeCell), fromBar: true }); } }}
           onChange={(e) => setEditingState({ r: sel.r, c: sel.c, text: e.target.value, fromBar: true })}
           onKeyDown={(e) => {
             if (e.key === 'Enter') { e.preventDefault(); commit(editing ? editing.text : barText, 'down'); }
@@ -335,6 +352,7 @@ export default function SheetApp({ initialFile, onOpenOther, onNewDoc, autosaveS
           <button key={i} type="button" className={`sheet-tab${i === si ? ' active' : ''}`} title="Двойной щелчок — переименовать"
             onClick={() => { setEditingState(null); setWb((w) => ({ ...w, active: i })); setSelState({ r: 0, c: 0, r2: 0, c2: 0 }); }}
             onDoubleClick={() => setRenaming(i)}>
+            {isProtected(s) && <span className="sheet-lock" title="Лист защищён" aria-label="Лист защищён">🔒︎</span>}
             {s.name}
             {i === si && wb.sheets.length > 1 && (
               <span className="sheet-del" title="Удалить лист" onClick={(e) => {
@@ -353,6 +371,8 @@ export default function SheetApp({ initialFile, onOpenOther, onNewDoc, autosaveS
             Сохраняются без изменений: {Object.keys(kept).join(', ')}
           </span>
         )}
+        {notice && <span className="warn" role="status">{notice}</span>}
+        {!notice && isProtected(sheet) && <span className="kept" title="Заблокированные ячейки этого листа нельзя изменить">Лист защищён</span>}
         <span className="spacer" />
         {stats.count > 1 && (
           <>
@@ -364,6 +384,10 @@ export default function SheetApp({ initialFile, onOpenOther, onNewDoc, autosaveS
         {isErr(activeCell && activeCell.v) && <span className="warn">{errorHint(activeCell.v.error)}</span>}
       </div>
       <PrintTable sheet={sheet} />
+      {protectDlg && (
+        <ProtectDialog mode={protectDlg} protection={sheet.protection} onClose={() => { setProtectDlg(null); gridRef.current && gridRef.current.focus(); }}
+          onDone={(p) => { setProtectDlg(null); change((w) => setProtection(w, si, p)); gridRef.current && gridRef.current.focus(); }} />
+      )}
     </div>
   );
 }

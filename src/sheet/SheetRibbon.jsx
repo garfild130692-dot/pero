@@ -1,5 +1,5 @@
 // Лента табличного редактора: Файл / Главная (буфер, шрифт, выравнивание, число, ячейки, редактирование) /
-// Разметка страницы (параметры печати) / Данные (структура) / Вид (закрепление областей).
+// Разметка страницы (параметры печати) / Данные (структура) / Рецензирование (защита листа) / Вид (закрепление областей).
 import React, { useState } from 'react';
 import { Icon } from '../icons.jsx';
 import { clipboard, reportProblem } from '../fileApi.js';
@@ -7,6 +7,7 @@ import RecentButton from '../RecentButton.jsx';
 import { ColorPalette, SplitColor, usePopover } from '../FontControls.jsx';
 import { FORMAT_PRESETS, changeDecimals } from './format.js';
 import { MARGIN_PRESETS, PAPERS, pageOf, setPage, setPrintArea, setPrintTitles } from './pageSetup.js';
+import { isProtected } from './protect.js';
 import { key } from './address.js';
 import {
   clearRange, collapseGroup, expandGroup, groupAt, groupLines, mergeAt, mergeRange, setFreeze, setHidden, setStyle, shiftCells, sortRange, unmergeRange,
@@ -127,7 +128,8 @@ export default function SheetRibbon({ api }) {
   const sameMargins = (m) => ['left', 'right', 'top', 'bottom'].every((k) => Math.abs(page.margins[k] - m[k]) < 0.01);
   const titles = sheet.printTitles || {};
 
-  const tabs = [['file', 'Файл'], ['home', 'Главная'], ['layout', 'Разметка страницы'], ['data', 'Данные'], ['view', 'Вид']];
+  const prot = isProtected(sheet);
+  const tabs = [['file', 'Файл'], ['home', 'Главная'], ['layout', 'Разметка страницы'], ['data', 'Данные'], ['review', 'Рецензирование'], ['view', 'Вид']];
   return (
     <div className="ribbon">
       <div className="rb-tabs">
@@ -244,6 +246,9 @@ export default function SheetRibbon({ api }) {
                 '-',
                 ['Отобразить строки', () => hide('row', false)],
                 ['Отобразить столбцы', () => hide('col', false)],
+                '-',
+                ['Блокировать ячейку (действует при защите листа)', () => style({ unlocked: !s.unlocked }), !s.unlocked],
+                [prot ? 'Снять защиту листа…' : 'Защитить лист…', api.protect],
               ]} />
             </Group>
             <Group title="Редактирование">
@@ -320,6 +325,18 @@ export default function SheetRibbon({ api }) {
               <div className="rb-col">
                 <Btn title="Показать детали группы" onClick={() => detail(true)}><T>+</T> Показать детали</Btn>
                 <Btn title="Скрыть детали группы" onClick={() => detail(false)}><T>−</T> Скрыть детали</Btn>
+              </div>
+            </Group>
+          </>
+        )}
+        {tab === 'review' && (
+          <>
+            <Group title="Защита">
+              <Btn big icon="lock" label={prot ? 'Снять защиту листа' : 'Защитить лист'} onClick={api.protect}
+                title={prot ? 'Снять защиту листа (может потребоваться пароль)' : 'Запретить изменение заблокированных ячеек'} />
+              <div className="rb-col">
+                <Btn title="Блокировать выделенные ячейки (действует при защите листа)" active={!s.unlocked} onClick={() => style({ unlocked: !s.unlocked })}><T>▣</T> Блокировать ячейку</Btn>
+                <Btn title="Скрывать формулы выделенных ячеек при защите листа" active={!!s.formulaHidden} onClick={() => style({ formulaHidden: !s.formulaHidden })}><T>ƒ</T> Скрыть формулы</Btn>
               </div>
             </Group>
           </>
