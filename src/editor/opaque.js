@@ -26,6 +26,7 @@ export const OPAQUE_KINDS = {
 export const OPAQUE_SUMMARY = {
   drawing: 'рисунки', object: 'объекты', footnote: 'сноски', endnote: 'концевые сноски', comment: 'комментарии',
   math: 'формулы', fieldSimple: 'поля', field: 'поля', header: 'колонтитулы',
+  columns: 'колонки текста (на экране — одной колонкой)',
 };
 
 export const Opaque = Node.create({

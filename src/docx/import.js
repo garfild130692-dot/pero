@@ -821,6 +821,8 @@ export async function importDocx(data) {
     }
   }
   if (hf.header || hf.footer || hf.first || hf.even) imp.preserved.header = 1;
+  // колонки текста (w:cols w:num > 1) сохраняются в sectPr, но на экране и при печати — одной колонкой
+  if (sects.some((x) => +((/<w:cols\b[^>]*w:num="(\d+)"/.exec(x || '') || [])[1] || 1) > 1)) imp.preserved.columns = 1;
   // тексты примечаний (связь типа comments)
   const cRel = Object.values(rels).find((r) => /\/comments$/.test(r.type || ''));
   const cPart = cRel && await read(cRel.target.startsWith('/') ? cRel.target.slice(1) : 'word/' + cRel.target);

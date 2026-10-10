@@ -72,7 +72,7 @@ export const pathForFile = (f) => (native && native.pathForFile ? native.pathFor
 // ---------- Окна, последние файлы, автосохранение, журнал (этап 9) ----------
 // Что открыть при загрузке окна; в браузере (отладка) — ?sheet для книги
 export const ready = async () => (native && native.ready ? native.ready() : {
-  kind: /[?&]sheet/.test(window.location.search) ? 'sheet' : 'doc', file: null, recovery: null, notice: null, autosaveSec: 0,
+  kind: /[?&]sheet\b/.test(window.location.search) ? 'sheet' : 'doc', file: null, recovery: null, notice: null, autosaveSec: 0,
 });
 // Новый документ/книга в отдельном окне (как Ctrl+N в Word). false — нет окон (браузер): заменить содержимое текущего
 export const newWindow = (kind) => { if (!native || !native.newWindow) return false; native.newWindow(kind); return true; };
