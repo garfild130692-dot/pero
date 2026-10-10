@@ -7,6 +7,7 @@ import { functions, lazyFunctions } from './fnlib.js';
 import { functions2 } from './fnlib2.js';
 import { functions3 } from './fnlib3.js';
 import { functions4 } from './fnlib4.js';
+import { functions5 } from './fnlib5.js';
 import { EXCEL_RU } from './fnnames.js';
 
 // ---------- Ошибки и значения ----------
@@ -721,6 +722,7 @@ Object.assign(FN, functions(HELPERS));
 Object.assign(FN, functions2(HELPERS));
 Object.assign(FN, functions3(HELPERS));
 Object.assign(FN, functions4(HELPERS));
+Object.assign(FN, functions5(HELPERS));
 const LAZY = lazyFunctions(HELPERS);
 export const FUNCTIONS = Object.keys(FN);
 const SCALAR_FN = new Set(['ABS', 'SIGN', 'INT', 'SQRT', 'POWER', 'MOD', 'ROUND', 'ROUNDUP', 'ROUNDDOWN', 'NOT', 'LEN', 'UPPER', 'LOWER',
