@@ -422,6 +422,8 @@ export function functions6(h) {
     IMAGE: ([src]) => (isErr(src) ? src : VALUE()),
     // вызов функций DLL Excel отключён и сам; в Перо недоступен
     CALL: () => VALUE(),
+    // перевод, определение языка, Copilot, Python — облачные службы Microsoft, в Перо недоступны
+    TRANSLATE: () => VALUE(), DETECTLANGUAGE: () => VALUE(), COPILOT: () => VALUE(), PY: () => VALUE(),
     'REGISTER.ID': () => VALUE(),
   };
   return { ...lambdaHelpers, ...shape, ...regexFns, ...summary, ...other };

@@ -8,9 +8,9 @@ const M365 = {
   LAMBDA: 'LAMBDA', MAP: 'MAP', REDUCE: 'REDUCE', SCAN: 'SCAN', MAKEARRAY: 'MAKEARRAY', BYROW: 'BYROW', BYCOL: 'BYCOL', ISOMITTED: 'ISOMITTED',
   VSTACK: 'ВСТОЛБИК', HSTACK: 'ГСТОЛБИК', TOCOL: 'ПОСТОЛБЦ', TOROW: 'ПОСТРОК', WRAPROWS: 'СВЕРНСТРОК', WRAPCOLS: 'СВЕРНСТОЛБ',
   TAKE: 'ВЗЯТЬ', DROP: 'СБРОСИТЬ', CHOOSECOLS: 'ВЫБОРСТОЛБЦ', CHOOSEROWS: 'ВЫБОРСТРОК', EXPAND: 'РАЗВЕРНУТЬ',
-  TEXTBEFORE: 'ТЕКСТДО', TEXTAFTER: 'ТЕКСТПОСЛЕ', TEXTSPLIT: 'ТЕКСТРАЗД', IMAGE: 'IMAGE',
+  TEXTBEFORE: 'ТЕКСТДО', TEXTAFTER: 'ТЕКСТПОСЛЕ', TEXTSPLIT: 'ТЕКСТРАЗД', IMAGE: 'ИЗОБРАЖЕНИЕ',
   REGEXTEST: 'РЕГТЕСТ', REGEXEXTRACT: 'РЕГИЗВЛЕЧЬ', REGEXREPLACE: 'РЕГЗАМЕНИТЬ', GROUPBY: 'ГРУПППО', PIVOTBY: 'СВОДПО',
-  PERCENTOF: 'ПРОЦЕНТ', TRIMRANGE: 'УРЕЗДИАПАЗОН',
+  PERCENTOF: 'ПРОЦЕНТ', TRIMRANGE: 'УРЕЗДИАПАЗОН', DETECTLANGUAGE: 'ОПРЕДЕЛИТЬЯЗЫК', TRANSLATE: 'TRANSLATE', COPILOT: 'COPILOT', PY: 'PY',
 };
 const all = { ...M365 };
 for (const [en, ru] of Object.entries(excel)) if (ru && ru !== en.replace(/^_xlfn\./, '')) all[en] = ru;

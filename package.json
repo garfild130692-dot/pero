@@ -9,6 +9,7 @@
     "build": "vite build",
     "start": "electron .",
     "test": "vitest run",
+    "scan": "node tools/scan_books.mjs",
     "dist": "vite build && electron-builder --win"
   },
   "//": "Все пакеты — в devDependencies: интерфейс целиком собирает Vite в dist/, а electron-builder упаковывает только dependencies, которых главному процессу не нужно.",
