@@ -20,7 +20,7 @@
 import { Extension } from '@tiptap/core';
 import { Plugin, PluginKey } from '@tiptap/pm/state';
 import { Decoration, DecorationSet } from '@tiptap/pm/view';
-import { EMPTY_HF, hfText, pagePx, parseSectPr } from './page.js';
+import { EMPTY_HF, hfFor, hfText, pagePx, parseSectPr, sectionList } from './page.js';
 
 export const paginationKey = new PluginKey('pagination');
 export const PAGE_GAP = 18; // px между листами на экране
@@ -166,6 +166,7 @@ function collectUnits(view, rootTop, scale) {
     // sb — интервал перед абзацем: в начале листа (кроме первого) Word его не показывает
     return { top, bottom: bottom + (parseFloat(cs.marginBottom) || 0), textBottom, sb: mt + (parseFloat(cs.paddingTop) || 0) };
   };
+  let sect = 0; // номер раздела (абзац с w:sectPr завершает раздел)
   const visit = (node, pos) => {
     if (LIST_TYPES.includes(node.type.name)) {
       node.forEach((item, off) => {
@@ -197,7 +198,7 @@ function collectUnits(view, rootTop, scale) {
       let h = 0; while (h < rows.length && rows[h].header) h++;
       rows.forEach((r, i) => { r.header = i < h; });
       const cols = Math.max(1, ...trs.map((tr) => Array.from(tr.cells).reduce((s, c) => s + (c.colSpan || 1), 0)));
-      units.push({ kind: 'table', pos, node, dom, table, ...box(dom), rows, cols, keepNext: false });
+      units.push({ kind: 'table', pos, node, dom, table, ...box(dom), rows, cols, keepNext: false, sect });
       return;
     }
     const text = node.isTextblock;
@@ -220,9 +221,10 @@ function collectUnits(view, rootTop, scale) {
       forceBefore: text && !!lay.pageBreakBefore,
       forceAfter: !!(node.attrs && node.attrs.sectPr) || breakAtEnd,
       pageBreakAt,
+      sect,
     });
   };
-  view.state.doc.forEach((node, off) => visit(node, off));
+  view.state.doc.forEach((node, off) => { visit(node, off); if (node.attrs && node.attrs.sectPr) sect++; });
   return units;
 }
 
@@ -259,14 +261,14 @@ function paginate(view, units, contentH, rootTop, scale) {
     if (j !== i && firstOnPage(units[j])) j = i; // вся цепочка с начала листа — рвём перед исходной единицей
     const u = units[j];
     const before = j > 0 ? units[j - 1].bottom : 0;
-    breaks.push({ kind: 'block', pos: u.pos, fill: limit() - before, sup: u.sb || 0 });
+    breaks.push({ kind: 'block', pos: u.pos, fill: limit() - before, sup: u.sb || 0, sect: u.sect });
     pageTop = u.top + (u.sb || 0);
     return j;
   };
   const afterForced = (i) => {
     const n = units[i + 1];
     if (!n) return;
-    breaks.push({ kind: 'block', pos: n.pos, fill: limit() - units[i].bottom, sup: n.sb || 0 });
+    breaks.push({ kind: 'block', pos: n.pos, fill: limit() - units[i].bottom, sup: n.sb || 0, sect: n.sect });
     pageTop = n.top + (n.sb || 0);
   };
 
@@ -301,7 +303,7 @@ function paginate(view, units, contentH, rootTop, scale) {
               minTop = Math.min(minTop, line.top + (rowContentBottom - cellBottom));
             }
             if (items.length) {
-              breaks.push({ kind: 'cells', items, headerH: headers.length ? headerH : 0, table: u.pos, headers: headers.length > 0 });
+              breaks.push({ kind: 'cells', items, headerH: headers.length ? headerH : 0, table: u.pos, headers: headers.length > 0, sect: u.sect });
               pageTop = minTop - (headers.length ? headerH : 0);
               continue; // строка продолжается на новом листе; дальнейшие строки — по новому листу
             }
@@ -321,7 +323,7 @@ function paginate(view, units, contentH, rootTop, scale) {
         }
         const row = u.rows[b];
         const repeat = headers.length && !row.header ? headers : [];
-        breaks.push({ kind: 'row', pos: row.pos, fill: limit() - row.top, cols: u.cols, headers: repeat.map((x) => x.dom) });
+        breaks.push({ kind: 'row', pos: row.pos, fill: limit() - row.top, cols: u.cols, headers: repeat.map((x) => x.dom), sect: u.sect });
         pageTop = row.top - (repeat.length ? headerH : 0);
         k = b;
       }
@@ -358,7 +360,7 @@ function paginate(view, units, contentH, rootTop, scale) {
       let k = lines.findIndex((l, idx) => idx >= first && l.bottom > limit() + EPS);
       if (forcedLine > first && (k < 0 || forcedLine < k)) {
         const pos = posAtLine(view, lines[forcedLine]);
-        if (pos != null) breaks.push({ kind: 'line', pos, fill: limit() - lines[forcedLine].top });
+        if (pos != null) breaks.push({ kind: 'line', pos, fill: limit() - lines[forcedLine].top, sect: u.sect });
         pageTop = lines[forcedLine].top;
         first = forcedLine;
         forcedLine = -1;
@@ -380,7 +382,7 @@ function paginate(view, units, contentH, rootTop, scale) {
       if (k <= first) k = first + 1;
       if (k >= n) break;
       const pos = posAtLine(view, lines[k]);
-      if (pos != null) breaks.push({ kind: 'line', pos, fill: limit() - lines[k].top });
+      if (pos != null) breaks.push({ kind: 'line', pos, fill: limit() - lines[k].top, sect: u.sect });
       pageTop = lines[k].top;
       first = k;
     }
@@ -388,7 +390,10 @@ function paginate(view, units, contentH, rootTop, scale) {
     if (u.forceAfter) afterForced(i);
   }
   const lastBottom = units.length ? units[units.length - 1].bottom : 0;
-  return { breaks, trailing: Math.max(0, pageTop + contentH - lastBottom) };
+  // листы: раздел и «первый лист раздела» — для колонтитулов первой страницы
+  const pages = [{ sect: units.length ? units[0].sect : 0, first: true }];
+  for (const b of breaks) pages.push({ sect: b.sect ?? pages[pages.length - 1].sect, first: (b.sect ?? -1) !== pages[pages.length - 1].sect });
+  return { breaks, pages, trailing: Math.max(0, pageTop + contentH - lastBottom) };
 }
 
 function measure(view) {
@@ -407,12 +412,19 @@ function measure(view) {
   // 2. замер чистой раскладки
   const rootRect = view.dom.getBoundingClientRect();
   const scale = pageScale(view.dom); // масштаб страницы (transform)
-  let result = { breaks: [], trailing: 0 };
+  let result = { breaks: [], pages: [{ sect: 0, first: true }], trailing: 0 };
   if (scale && isFinite(scale)) result = paginate(view, collectUnits(view, rootRect.top, scale), contentH, rootRect.top, scale);
-  const { breaks, trailing } = result;
+  const { breaks, pages, trailing } = result;
   const total = breaks.length + 1;
+  // колонтитулы каждого листа (первая страница раздела, чётные — по правилам Word)
+  const titlePgs = sectionList(doc).map((x) => parseSectPr(x).titlePg);
+  const hfOf = (kind, n) => {
+    const p = pages[n - 1] || pages[pages.length - 1];
+    return hfFor(hf, kind, { page: n, firstOfSection: p.first, sectTitlePg: titlePgs[p.sect] ?? titlePgs[titlePgs.length - 1] });
+  };
+  const chrome = { firstHeader: hfOf('header', 1), lastFooter: hfOf('footer', total), hfOf };
   const sig = breaks.map((b) => `${b.kind}:${b.pos}:${Math.round(b.fill)}:${(b.items || []).map((x) => `${x.pos}/${Math.round(x.fill)}`).join(',')}:${(b.headers ? 1 : 0)}`).join('|');
-  const key = JSON.stringify([sig, Math.round(trailing), total, geo, hf]);
+  const key = JSON.stringify([sig, Math.round(trailing), total, geo, hf, pages]);
 
   // 3. поставить распорки (те же — если ничего не изменилось)
   let deco = prev.deco;
@@ -440,9 +452,11 @@ function measure(view) {
     }, { side: 1, key: `tail:${Math.round(trailing)}`, ignoreSelection: true }));
     deco = DecorationSet.create(view.state.doc, decos);
   }
-  view.dispatch(view.state.tr.setMeta(paginationKey, { key, deco, breaks: pageStarts(breaks), total }).setMeta('addToHistory', false));
+  view.dispatch(view.state.tr.setMeta(paginationKey, {
+    key, deco, breaks: pageStarts(breaks), total, chrome: { firstHeader: chrome.firstHeader, lastFooter: chrome.lastFooter },
+  }).setMeta('addToHistory', false));
   if (scroller && scroller.scrollTop !== scrollTop) scroller.scrollTop = scrollTop;
-  placeBands(view, geo, hf, total);
+  placeBands(view, geo, chrome.hfOf, total);
 }
 
 // Полосы стоят там, где сейчас распорки? (раскладка могла сдвинуться позже замера: шрифты, стили документа)
@@ -467,7 +481,8 @@ function bandsAligned(view) {
 const pageStarts = (breaks) => breaks.map((b) => (b.kind === 'cells' ? Math.min(...b.items.map((x) => x.pos)) : b.pos));
 
 // ---------- Слой полос между листами ----------
-function placeBands(view, geo, hf, total) {
+// hfOf(kind, n) — абзацы колонтитула kind ('header' | 'footer') на листе n
+function placeBands(view, geo, hfOf, total) {
   const page = view.dom.closest('.page');
   if (!page) return;
   let layer = page.querySelector(':scope > .pero-bands');
@@ -491,7 +506,7 @@ function placeBands(view, geo, hf, total) {
   }
   spacers.sort((a, b) => a.top - b.top);
   const bandH = geo.bottom + PAGE_GAP + geo.top;
-  const sig = JSON.stringify([spacers.map((s) => Math.round(s.top)), geo, hf, total]);
+  const sig = JSON.stringify([spacers.map((s) => Math.round(s.top)), geo, total, spacers.map((s, i) => [hfOf('footer', i + 1), hfOf('header', i + 2)])]);
   if (layer.dataset.sig === sig) return;
   layer.dataset.sig = sig;
   layer.textContent = '';
@@ -504,7 +519,7 @@ function placeBands(view, geo, hf, total) {
     foot.className = 'pero-hf pero-footer';
     foot.style.height = `${geo.bottom}px`;
     foot.style.paddingBottom = `${geo.footer}px`;
-    renderHf(foot, hf.footer, i + 1, total);
+    renderHf(foot, hfOf('footer', i + 1), i + 1, total);
     const gap = document.createElement('div');
     gap.className = 'pero-page-gap';
     gap.style.height = `${PAGE_GAP}px`;
@@ -513,7 +528,7 @@ function placeBands(view, geo, hf, total) {
     head.className = 'pero-hf pero-header';
     head.style.height = `${geo.top}px`;
     head.style.paddingTop = `${geo.header}px`;
-    renderHf(head, hf.header, i + 2, total);
+    renderHf(head, hfOf('header', i + 2), i + 2, total);
     b.append(foot, gap, head);
     layer.appendChild(b);
     // разделённая строка таблицы: линия под её первой частью и над продолжением (как рисует Word)
@@ -564,7 +579,7 @@ export const Pagination = Extension.create({
     return [new Plugin({
       key: paginationKey,
       state: {
-        init: () => ({ key: null, deco: DecorationSet.empty, breaks: [], total: 1 }),
+        init: () => ({ key: null, deco: DecorationSet.empty, breaks: [], total: 1, chrome: null }),
         apply(tr, old) {
           const meta = tr.getMeta(paginationKey);
           if (meta) return meta;
@@ -619,4 +634,10 @@ export function pageInfo(state) {
   if (!p) return { page: 1, total: 1 };
   const at = state.selection.from;
   return { page: 1 + p.breaks.filter((b) => b <= at).length, total: p.total };
+}
+
+// Колонтитулы первого листа (верхний) и последнего (нижний) — их рисует App (PageChrome), остальные — слой полос
+export function pageChrome(state) {
+  const p = paginationKey.getState(state);
+  return (p && p.chrome) || null;
 }

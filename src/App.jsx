@@ -12,8 +12,8 @@ import { cssFontStack } from './editor/font.js';
 import { NEW_DOC_PARA } from './editor/paragraph.js';
 import { lineCss } from './editor/paraFormat.js';
 import { insertImageFiles } from './insertImage.js';
-import { EMPTY_HF, pagePx, parseSectPr } from './editor/page.js';
-import { pageInfo } from './editor/pagination.js';
+import { EMPTY_HF, pagePx, parseSectPr, sectionList } from './editor/page.js';
+import { pageChrome, pageInfo } from './editor/pagination.js';
 import { HeaderFooterDialog, MarginsDialog, PageChrome, printCss } from './PageControls.jsx';
 import FindBar from './FindBar.jsx';
 import StyleDialog from './StyleDialog.jsx';
@@ -378,7 +378,7 @@ export default function App({ initialFile, onOpenOther, onNewSheet, autosaveSec 
     editor,
     selector: ({ editor: e }) => (e ? {
       family: e.state.doc.attrs.fontFamily, size: e.state.doc.attrs.fontSize, para: e.state.doc.attrs.para,
-      sectPr: e.state.doc.attrs.sectPr, hf: e.state.doc.attrs.hf, total: pageInfo(e.state).total, styles: e.state.doc.attrs.styles,
+      sectPr: e.state.doc.attrs.sectPr, hf: e.state.doc.attrs.hf, total: pageInfo(e.state).total, styles: e.state.doc.attrs.styles, chrome: pageChrome(e.state), firstSect: sectionList(e.state.doc)[0],
     } : null),
   });
 
@@ -422,7 +422,7 @@ export default function App({ initialFile, onOpenOther, onNewSheet, autosaveSec 
         <Ruler editor={editor} zoom={zoom} />
         <PageScaler scale={zoom / 100}>
           <div className="page" style={{ ...pageVars(docFont), ...pageBox(geo) }}>
-            <PageChrome geo={geo} hf={(docFont && docFont.hf) || EMPTY_HF} total={(docFont && docFont.total) || 1} />
+            <PageChrome geo={geo} hf={(docFont && docFont.hf) || EMPTY_HF} chrome={docFont && docFont.chrome} total={(docFont && docFont.total) || 1} />
             <EditorContent editor={editor} />
           </div>
         </PageScaler>
@@ -439,7 +439,7 @@ export default function App({ initialFile, onOpenOther, onNewSheet, autosaveSec 
       {/* пользовательские стили абзацев — правила по data-pstyle */}
       <style>{styleCss(docFont && docFont.styles)}</style>
       {/* печать/PDF: размер листа, поля и колонтитулы — правилами @page */}
-      <style>{printCss(docFont && docFont.sectPr, (docFont && docFont.hf) || EMPTY_HF)}</style>
+      <style>{printCss(docFont && docFont.sectPr, (docFont && docFont.hf) || EMPTY_HF, docFont && docFont.firstSect)}</style>
       {modal && typeof modal === 'object' && !modal.style && (
         <Modal
           title={modal.title}

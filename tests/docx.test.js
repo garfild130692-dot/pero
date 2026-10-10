@@ -489,7 +489,9 @@ describe('страницы и колонтитулы', () => {
     const { doc } = await importDocx(readFileSync('tests/fixtures/long.docx'));
     expect(doc.attrs.hf.header).toEqual([{ text: 'ООО «Перо» — внутренний документ', align: 'left' }]);
     expect(doc.attrs.hf.footer).toEqual([{ text: '{PAGE}', align: 'center' }]);
-    expect(doc.attrs.hf.own).toEqual({ header: false, footer: false });
+    expect(doc.attrs.hf.own).toEqual({ header: false, footer: false, first: false, even: false, titlePg: false, evenOdd: false });
+    expect(doc.attrs.hf.first).toBeNull(); // в long.docx нет колонтитулов первой и чётных страниц
+    expect(doc.attrs.hf.evenOdd).toBe(false);
   });
 
   it('свои колонтитулы в новом документе: части, связи, ссылки в sectPr', async () => {
@@ -816,5 +818,70 @@ for p in d.paragraphs:
     // repr() в Python печатает табуляцию как «\t» (два символа)
     expect(out).toMatch(/'Глава 1\. Введение\\t5' \[\(431\.5, 'RIGHT', 'DOTS'\)\]/);
     expect(out).toMatch(/'Стиль без 4 см:\\tдевять' \[\(113\.4, 'CLEAR', 'SPACES'\)\]/);
+  });
+});
+
+describe('колонтитулы первой страницы и чётных', () => {
+  it('импорт hf.docx (создан Word): варианты first/even, evenAndOddHeaders', async () => {
+    const { doc } = await importDocx(readFileSync('tests/fixtures/hf.docx'));
+    const h = doc.attrs.hf;
+    expect(h.header).toEqual([{ text: 'Нечётная страница', align: 'right' }]);
+    expect(h.footer).toEqual([{ text: 'Стр. {PAGE}', align: 'center' }]);
+    expect(h.first.header).toEqual([{ text: 'Титульный лист', align: 'left' }]);
+    expect(h.first.footer).toEqual([]);
+    expect(h.even.header).toEqual([{ text: 'Чётная страница', align: 'left' }]);
+    expect(h.evenOdd).toBe(true);
+    expect(h.own).toEqual({ header: false, footer: false, first: false, even: false, titlePg: false, evenOdd: false });
+  });
+
+  it('hfFor: правила Word для первой, чётных и остальных страниц', async () => {
+    const { hfFor } = await import('../src/editor/page.js');
+    const { doc } = await importDocx(readFileSync('tests/fixtures/hf.docx'));
+    const h = doc.attrs.hf;
+    const t = (kind, page, first) => (hfFor(h, kind, { page, firstOfSection: first, sectTitlePg: true })[0] || {}).text || '';
+    expect([t('header', 1, true), t('header', 2, false), t('header', 3, false), t('header', 4, false)])
+      .toEqual(['Титульный лист', 'Чётная страница', 'Нечётная страница', 'Чётная страница']);
+    expect([t('footer', 1, true), t('footer', 2, false)]).toEqual(['', 'Стр. {PAGE}']);
+  });
+
+  it('новый документ: свои варианты — части, ссылки first/even, titlePg, evenAndOddHeaders', async () => {
+    const doc = {
+      type: 'doc',
+      attrs: {
+        hf: {
+          header: [{ text: 'Все', align: 'center' }], footer: null,
+          first: { header: [{ text: 'Первая', align: 'left' }], footer: null },
+          even: { header: [{ text: 'Чётная', align: 'left' }], footer: [{ text: '{PAGE}', align: 'right' }] },
+          titlePg: true, evenOdd: true,
+          own: { header: true, footer: false, first: true, even: true, titlePg: true, evenOdd: true },
+        },
+      },
+      content: [{ type: 'paragraph', content: [{ type: 'text', text: 'Текст' }] }],
+    };
+    const bytes = await exportDocx(doc);
+    const zip = await JSZip.loadAsync(bytes);
+    const xml = await zip.file('word/document.xml').async('string');
+    expect(xml).toMatch(/<w:headerReference w:type="default" r:id="rIdPeroH"\/>/);
+    expect(xml).toMatch(/<w:headerReference w:type="first" r:id="rIdPeroHFirst"\/>/);
+    expect(xml).toMatch(/<w:headerReference w:type="even" r:id="rIdPeroHEven"\/>/);
+    expect(xml).toMatch(/<w:footerReference w:type="even" r:id="rIdPeroFEven"\/>/);
+    expect(xml).toContain('<w:titlePg/>');
+    expect(await zip.file('word/settings.xml').async('string')).toContain('<w:evenAndOddHeaders/>');
+    const back = (await importDocx(bytes)).doc.attrs.hf;
+    expect(back.first.header[0].text).toBe('Первая');
+    expect(back.even.footer[0].text).toBe('{PAGE}');
+    expect(back.evenOdd).toBe(true);
+  });
+
+  it('выключенные в Пере флажки убираются из файла Word; без правок файл не меняется', async () => {
+    const src = readFileSync('tests/fixtures/hf.docx');
+    const a = (await importDocx(src)).doc;
+    const same = await JSZip.loadAsync(await exportDocx(a, { source: src }));
+    const orig = await JSZip.loadAsync(src);
+    expect(await same.file('word/settings.xml').async('string')).toBe(await orig.file('word/settings.xml').async('string'));
+    a.attrs.hf = { ...a.attrs.hf, titlePg: false, evenOdd: false, own: { ...a.attrs.hf.own, titlePg: true, evenOdd: true } };
+    const z = await JSZip.loadAsync(await exportDocx(a, { source: src }));
+    expect(await z.file('word/document.xml').async('string')).not.toContain('<w:titlePg/>');
+    expect(await z.file('word/settings.xml').async('string')).not.toContain('evenAndOddHeaders');
   });
 });

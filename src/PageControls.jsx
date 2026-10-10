@@ -1,7 +1,7 @@
 // Страница: вкладка «Макет» (поля, ориентация, размер), колонтитулы и номера страниц, CSS для печати/PDF.
 import React, { useState } from 'react';
 import { usePopover } from './FontControls.jsx';
-import { EMPTY_HF, MARGIN_PRESETS, PAPER, TWIPS_PER_CM, hfText, pagePx, parseSectPr, patchSectPr } from './editor/page.js';
+import { EMPTY_HF, MARGIN_PRESETS, PAPER, TWIPS_PER_CM, hfFor, hfText, pagePx, parseSectPr, patchSectPr, sectionList } from './editor/page.js';
 import { fmtNum } from './editor/paragraph.js';
 
 // Изменить атрибут документа одной транзакцией (с отменой по Ctrl+Z)
@@ -157,41 +157,77 @@ const toParas = (text, align) => {
   return lines.length ? lines.map((t) => ({ text: t, align })) : null;
 };
 
+// Диалог «Колонтитулы»: обычные (все/нечётные страницы), особые для первой страницы, для чётных страниц
 export function HeaderFooterDialog({ editor, onClose }) {
-  const hf = editor.state.doc.attrs.hf || EMPTY_HF;
-  const own = hf.own || {};
-  const [head, setHead] = useState(toText(hf.header));
-  const [foot, setFoot] = useState(toText(hf.footer));
-  const [headAlign, setHeadAlign] = useState((hf.header && hf.header[0] && hf.header[0].align) || 'center');
-  const [footAlign, setFootAlign] = useState((hf.footer && hf.footer[0] && hf.footer[0].align) || 'center');
-  const fromFile = (!own.header && hf.header) || (!own.footer && hf.footer);
+  const hf = { ...EMPTY_HF, ...(editor.state.doc.attrs.hf || {}) };
+  const own = { ...EMPTY_HF.own, ...(hf.own || {}) };
+  const sectTitlePg = parseSectPr(sectionList(editor.state.doc)[0]).titlePg;
+  const initTitlePg = own.titlePg ? !!hf.titlePg : sectTitlePg;
+  // поле формы: текст и выравнивание варианта/вида колонтитула
+  const init = (paras) => ({ text: toText(paras), align: (paras && paras[0] && paras[0].align) || 'center' });
+  const [f, setF] = useState(() => ({
+    header: init(hf.header), footer: init(hf.footer),
+    firstHeader: init(hf.first && hf.first.header), firstFooter: init(hf.first && hf.first.footer),
+    evenHeader: init(hf.even && hf.even.header), evenFooter: init(hf.even && hf.even.footer),
+  }));
+  const [titlePg, setTitlePg] = useState(initTitlePg);
+  const [evenOdd, setEvenOdd] = useState(!!hf.evenOdd);
+  const [tab, setTab] = useState('main');
+  const set = (k, patch) => setF((x) => ({ ...x, [k]: { ...x[k], ...patch } }));
+  const changed = (k, paras) => f[k].text !== toText(paras) || (paras && paras[0] && f[k].align !== paras[0].align);
+  const fromFile = (!own.header && hf.header) || (!own.footer && hf.footer) || (!own.first && hf.first) || (!own.even && hf.even);
+
   const apply = () => {
-    const next = { header: hf.header, footer: hf.footer, own: { header: !!own.header, footer: !!own.footer } };
-    if (head !== toText(hf.header) || (hf.header && headAlign !== hf.header[0].align)) { next.header = toParas(head, headAlign); next.own.header = true; }
-    if (foot !== toText(hf.footer) || (hf.footer && footAlign !== hf.footer[0].align)) { next.footer = toParas(foot, footAlign); next.own.footer = true; }
+    const next = { ...hf, own: { ...own } };
+    if (changed('header', hf.header)) { next.header = toParas(f.header.text, f.header.align); next.own.header = true; }
+    if (changed('footer', hf.footer)) { next.footer = toParas(f.footer.text, f.footer.align); next.own.footer = true; }
+    const fh = hf.first || {};
+    if (changed('firstHeader', fh.header) || changed('firstFooter', fh.footer)) {
+      next.first = { header: toParas(f.firstHeader.text, f.firstHeader.align), footer: toParas(f.firstFooter.text, f.firstFooter.align) };
+      next.own.first = true;
+    }
+    const eh = hf.even || {};
+    if (changed('evenHeader', eh.header) || changed('evenFooter', eh.footer)) {
+      next.even = { header: toParas(f.evenHeader.text, f.evenHeader.align), footer: toParas(f.evenFooter.text, f.evenFooter.align) };
+      next.own.even = true;
+    }
+    if (titlePg !== initTitlePg) { next.titlePg = titlePg; next.own.titlePg = true; }
+    if (evenOdd !== !!hf.evenOdd) { next.evenOdd = evenOdd; next.own.evenOdd = true; }
     setDocAttr(editor, 'hf', next);
     onClose();
   };
-  const block = (label, value, set, align, setAlign, id) => (
+  const block = (label, k, id) => (
     <fieldset>
       <legend>{label}</legend>
-      <textarea id={id} className="hf-text" rows={2} value={value} onChange={(e) => set(e.target.value)} placeholder="Текст колонтитула (каждая строка — абзац)" />
+      <textarea id={id} className="hf-text" rows={2} value={f[k].text} onChange={(e) => set(k, { text: e.target.value })} placeholder="Текст колонтитула (каждая строка — абзац)" />
       <div className="hf-tools">
-        <select value={align} onChange={(e) => setAlign(e.target.value)} aria-label={`${label}: выравнивание`}>
+        <select value={f[k].align} onChange={(e) => set(k, { align: e.target.value })} aria-label={`${label}: выравнивание`}>
           <option value="left">По левому краю</option><option value="center">По центру</option><option value="right">По правому краю</option>
         </select>
-        <button type="button" className="btn small" onClick={() => set(`${value}{PAGE}`)}>+ номер страницы</button>
-        <button type="button" className="btn small" onClick={() => set(`${value}{NUMPAGES}`)}>+ всего страниц</button>
+        <button type="button" className="btn small" onClick={() => set(k, { text: `${f[k].text}{PAGE}` })}>+ номер страницы</button>
+        <button type="button" className="btn small" onClick={() => set(k, { text: `${f[k].text}{NUMPAGES}` })}>+ всего страниц</button>
       </div>
     </fieldset>
   );
+  const tabs = [['main', evenOdd ? 'Нечётные страницы' : 'Все страницы'], titlePg && ['first', 'Первая страница'], evenOdd && ['even', 'Чётные страницы']].filter(Boolean);
+  const cur = tabs.some(([k]) => k === tab) ? tab : 'main';
   return (
     <div className="modal-backdrop" onMouseDown={onClose}>
       <div className="modal pd" role="dialog" aria-label="Колонтитулы" onMouseDown={(e) => e.stopPropagation()} onKeyDown={(e) => { if (e.key === 'Escape') onClose(); }}>
         <div className="modal-title">Колонтитулы</div>
         <div className="modal-body">
-          {block('Верхний колонтитул', head, setHead, headAlign, setHeadAlign, 'hf-head')}
-          {block('Нижний колонтитул', foot, setFoot, footAlign, setFootAlign, 'hf-foot')}
+          <div className="pd-checks hf-variants">
+            <label className="pd-check"><input type="checkbox" checked={titlePg} onChange={(e) => setTitlePg(e.target.checked)} /> Особый колонтитул для первой страницы</label>
+            <label className="pd-check"><input type="checkbox" checked={evenOdd} onChange={(e) => setEvenOdd(e.target.checked)} /> Разные колонтитулы для чётных и нечётных страниц</label>
+          </div>
+          {tabs.length > 1 && (
+            <div className="pd-tabs" role="tablist">
+              {tabs.map(([k, label]) => <button key={k} type="button" role="tab" className={cur === k ? 'active' : ''} onClick={() => setTab(k)}>{label}</button>)}
+            </div>
+          )}
+          {cur === 'main' && <>{block('Верхний колонтитул', 'header', 'hf-head')}{block('Нижний колонтитул', 'footer', 'hf-foot')}</>}
+          {cur === 'first' && <>{block('Верхний колонтитул первой страницы', 'firstHeader', 'hf-first-head')}{block('Нижний колонтитул первой страницы', 'firstFooter', 'hf-first-foot')}</>}
+          {cur === 'even' && <>{block('Верхний колонтитул чётных страниц', 'evenHeader', 'hf-even-head')}{block('Нижний колонтитул чётных страниц', 'evenFooter', 'hf-even-foot')}</>}
           <div className="hf-hint">{'{PAGE}'} — номер страницы, {'{NUMPAGES}'} — всего страниц.</div>
           {fromFile && <div className="hf-hint warn">Колонтитул из файла при изменении заменится простым текстом: рисунки и оформление в нём не сохранятся. Неизменённый колонтитул сохраняется как был.</div>}
         </div>
@@ -204,16 +240,19 @@ export function HeaderFooterDialog({ editor, onClose }) {
   );
 }
 
-// ---------- Колонтитулы первой и последней страницы (остальные рисуют распорки разбиения) ----------
-export function PageChrome({ geo, hf, total }) {
+// ---------- Колонтитулы первой и последней страницы (остальные рисует слой полос разбиения) ----------
+// chrome — из разбиения: какой вариант колонтитула на первом и последнем листе (первая страница раздела, чётная)
+export function PageChrome({ geo, hf, chrome, total }) {
+  const head = chrome ? chrome.firstHeader : hf.header;
+  const foot = chrome ? chrome.lastFooter : hf.footer;
   const line = (p, i, n) => <div key={i} className={`hf-line hf-${p.align || 'left'}`}>{hfText(p.text, n, total) || ' '}</div>;
   return (
     <>
       <div className="pero-hf pero-header page-chrome-top" style={{ height: geo.top, paddingTop: geo.header, paddingLeft: geo.left, paddingRight: geo.right }}>
-        {(hf.header || []).map((p, i) => line(p, i, 1))}
+        {(head || []).map((p, i) => line(p, i, 1))}
       </div>
       <div className="pero-hf pero-footer page-chrome-bottom" style={{ height: geo.bottom, paddingBottom: geo.footer, paddingLeft: geo.left, paddingRight: geo.right }}>
-        {(hf.footer || []).map((p, i) => line(p, i, total))}
+        {(foot || []).map((p, i) => line(p, i, total))}
       </div>
     </>
   );
@@ -225,18 +264,30 @@ function marginBox(paras, page = 'counter(page)', pages = 'counter(pages)') {
   return paras.map((p) => String(p.text).split(/(\{PAGE\}|\{NUMPAGES\})/).filter(Boolean)
     .map((x) => (x === '{PAGE}' ? page : x === '{NUMPAGES}' ? pages : cssString(x))).join(' ')).join(' "\\A" ');
 }
-export function printCss(sectPr, hf) {
+// firstSectPr — XML первого раздела (w:titlePg — «особый колонтитул первой страницы»)
+export function printCss(sectPr, hf, firstSectPr = sectPr) {
   const g = parseSectPr(sectPr);
   const px = pagePx(g);
-  const boxes = [];
-  for (const [kind, where] of [['header', 'top'], ['footer', 'bottom']]) {
-    const paras = (hf && hf[kind]) || [];
-    for (const align of ['left', 'center', 'right']) {
-      const ps = paras.filter((p) => (p.align || 'left') === align && p.text);
-      if (!ps.length) continue;
-      const pad = kind === 'header' ? `padding-top: ${px.header}px; vertical-align: top;` : `padding-bottom: ${px.footer}px; vertical-align: bottom;`;
-      boxes.push(`@${where}-${align} { content: ${marginBox(ps)}; white-space: pre; font: 10pt Calibri, Carlito, sans-serif; ${pad} }`);
+  const h = hf || EMPTY_HF;
+  // поля полей страницы (@top-left…@bottom-right) для варианта колонтитулов; force — гасить пустые (перекрывают умолчание)
+  const boxesOf = (pick, force) => {
+    const out = [];
+    for (const [kind, where] of [['header', 'top'], ['footer', 'bottom']]) {
+      const paras = pick(kind) || [];
+      for (const align of ['left', 'center', 'right']) {
+        const ps = paras.filter((p) => (p.align || 'left') === align && p.text);
+        if (!ps.length) { if (force) out.push(`@${where}-${align} { content: none; }`); continue; }
+        const pad = kind === 'header' ? `padding-top: ${px.header}px; vertical-align: top;` : `padding-bottom: ${px.footer}px; vertical-align: bottom;`;
+        out.push(`@${where}-${align} { content: ${marginBox(ps)}; white-space: pre; font: 10pt Calibri, Carlito, sans-serif; ${pad} }`);
+      }
     }
-  }
-  return `@media print { @page { size: ${px.width}px ${px.height}px; margin: ${px.top}px ${px.right}px ${px.bottom}px ${px.left}px; ${boxes.join(' ')} } }`;
+    return out.join(' ');
+  };
+  const sectTitlePg = parseSectPr(firstSectPr).titlePg;
+  let css = `@page { size: ${px.width}px ${px.height}px; margin: ${px.top}px ${px.right}px ${px.bottom}px ${px.left}px; ${boxesOf((k) => h[k], false)} }`;
+  // чётные страницы — левые (первая — правая), первая страница — :first (объявлена последней: перекрывает :left/:right)
+  if (h.evenOdd) css += ` @page :left { ${boxesOf((k) => hfFor(h, k, { page: 2, firstOfSection: false, sectTitlePg }), true)} }`;
+  const titlePg = h.own && h.own.titlePg ? !!h.titlePg : sectTitlePg;
+  if (titlePg) css += ` @page :first { ${boxesOf((k) => hfFor(h, k, { page: 1, firstOfSection: true, sectTitlePg }), true)} }`;
+  return `@media print { ${css} }`;
 }

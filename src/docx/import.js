@@ -6,7 +6,7 @@ import { HIGHLIGHTS, headingDefaults, normalizeColor } from '../editor/font.js';
 import { WORD_FALLBACK_PARA, paraBase, paraDiff, twipsToPt } from '../editor/paragraph.js';
 import { CELL_SIDES, NO_BORDERS, TABLE_SIDES, TWIPS_PER_PX, borderFromOoxml } from '../editor/table.js';
 import { EMU_PER_PX, bytesToBase64, mimeOf } from '../editor/image.js';
-import { readHfPart } from '../editor/page.js';
+import { EMPTY_HF, readHfPart } from '../editor/page.js';
 import { readComments } from '../editor/comments.js';
 import { layoutAttrs, readLayoutProps } from '../editor/paraLayout.js';
 import { applyTabLayer, readTabs } from '../editor/tabs.js';
@@ -799,20 +799,28 @@ export async function importDocx(data) {
   const walkSect = (n) => { if (n.attrs && n.attrs.sectPr) sects.push(n.attrs.sectPr); (n.content || []).forEach(walkSect); };
   content.forEach(walkSect);
   if (imp.bodySectPr) sects.push(imp.bodySectPr);
-  const hf = { header: null, footer: null, own: { header: false, footer: false } };
-  for (const kind of ['header', 'footer']) {
-    for (const sx of sects) {
-      const ref = new RegExp(`<w:${kind}Reference\\b[^>]*>`, 'g');
-      const tag = (sx.match(ref) || []).find((t) => /w:type="default"/.test(t));
-      const rid = tag && (/r:id="([^"]+)"/.exec(tag) || [])[1];
-      const rel = rid && rels[rid];
-      if (!rel) continue;
-      const part = await read(rel.target.startsWith('/') ? rel.target.slice(1) : 'word/' + rel.target);
-      if (part) hf[kind] = readHfPart(part);
-      break;
+  // варианты: «по умолчанию», первой страницы (w:titlePg раздела), чётных (w:evenAndOddHeaders в settings.xml)
+  const hf = { ...EMPTY_HF, own: { ...EMPTY_HF.own } };
+  hf.evenOdd = !!(settings && child(settings.documentElement, 'evenAndOddHeaders') && onOff(child(settings.documentElement, 'evenAndOddHeaders')));
+  for (const type of ['default', 'first', 'even']) {
+    for (const kind of ['header', 'footer']) {
+      for (const sx of sects) {
+        const ref = new RegExp(`<w:${kind}Reference\\b[^>]*>`, 'g');
+        const tag = (sx.match(ref) || []).find((t) => new RegExp(`w:type="${type}"`).test(t));
+        const rid = tag && (/r:id="([^"]+)"/.exec(tag) || [])[1];
+        const rel = rid && rels[rid];
+        if (!rel) continue;
+        const part = await read(rel.target.startsWith('/') ? rel.target.slice(1) : 'word/' + rel.target);
+        if (part) {
+          const paras = readHfPart(part);
+          if (type === 'default') hf[kind] = paras;
+          else hf[type] = { ...(hf[type] || { header: null, footer: null }), [kind]: paras };
+        }
+        break;
+      }
     }
   }
-  if (hf.header || hf.footer) imp.preserved.header = 1;
+  if (hf.header || hf.footer || hf.first || hf.even) imp.preserved.header = 1;
   // тексты примечаний (связь типа comments)
   const cRel = Object.values(rels).find((r) => /\/comments$/.test(r.type || ''));
   const cPart = cRel && await read(cRel.target.startsWith('/') ? cRel.target.slice(1) : 'word/' + cRel.target);

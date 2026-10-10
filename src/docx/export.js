@@ -5,7 +5,7 @@ import { DEFAULT_FONT, DEFAULT_SIZE, highlightName, normalizeColor, parseSize } 
 import { NEW_DOC_PARA, ptToTwips } from '../editor/paragraph.js';
 import { CELL_SIDES, GRID_BORDERS, TABLE_SIDES, TWIPS_PER_PX, borderToOoxml } from '../editor/table.js';
 import { EMU_PER_PX, dataUrlToBytes, extOf } from '../editor/image.js';
-import { setHfRefs, writeHfPart } from '../editor/page.js';
+import { setHfRefs, setTitlePg, writeHfPart } from '../editor/page.js';
 import { commentsXml } from '../editor/comments.js';
 import { layoutXmlHead, layoutXmlTail } from '../editor/paraLayout.js';
 import { DEFAULT_TAB, tabsXml } from '../editor/tabs.js';
@@ -389,10 +389,23 @@ const ROOT_RELS = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 </Relationships>`;
 
 // Параметры документа нового файла: шаг табуляции и режим Word 2013+ (без него Word открывает файл в режиме совместимости)
-function settingsXml(defaultTab) {
+function settingsXml(defaultTab, evenOdd) {
   return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<w:settings ${NS}>` +
-    `<w:defaultTabStop w:val="${Math.round((defaultTab || DEFAULT_TAB) * 20)}"/><w:characterSpacingControl w:val="doNotCompress"/>` +
+    `<w:defaultTabStop w:val="${Math.round((defaultTab || DEFAULT_TAB) * 20)}"/>${evenOdd ? '<w:evenAndOddHeaders/>' : ''}<w:characterSpacingControl w:val="doNotCompress"/>` +
     '<w:compat><w:compatSetting w:name="compatibilityMode" w:uri="http://schemas.microsoft.com/office/word" w:val="15"/></w:compat></w:settings>';
+}
+
+// w:evenAndOddHeaders в settings.xml — на своём месте по схеме (после defaultTabStop… defaultTableStyle)
+function setEvenAndOdd(xml, on) {
+  let out = xml.replace(/<w:evenAndOddHeaders\b[^>]*\/>/g, '');
+  if (!on) return out;
+  const before = ['defaultTableStyle', 'clickAndTypeStyle', 'summaryLength', 'showEnvelope', 'doNotHyphenateCaps', 'hyphenationZone',
+    'consecutiveHyphenLimit', 'autoHyphenation', 'defaultTabStop'];
+  for (const tag of before) {
+    const m = new RegExp(`<w:${tag}\\b[^>]*(?:/>|>[\\s\\S]*?</w:${tag}>)`).exec(out);
+    if (m) return out.slice(0, m.index + m[0].length) + '<w:evenAndOddHeaders/>' + out.slice(m.index + m[0].length);
+  }
+  return out.replace(/(<w:settings\b[^>]*>)/, '$1<w:evenAndOddHeaders/>');
 }
 
 function coreXml() {
@@ -595,19 +608,39 @@ function addOverride(ct, partName, type) {
  */
 export async function exportDocx(doc, { source } = {}) {
   const da = doc.attrs || {};
-  // Свои колонтитулы (созданы в Пере): части header_pero.xml/footer_pero.xml и ссылки на них во всех разделах.
+  // Свои колонтитулы (созданы в Пере): части header_pero*.xml/footer_pero*.xml и ссылки на них во всех разделах —
+  // «по умолчанию», первой страницы (first), чётных (even); «особый для первой» (titlePg) — во всех разделах.
   // Колонтитулы из файла (own = false) не трогаем — они уже в пакете.
   const hf = da.hf || {};
   const own = hf.own || {};
-  const hfIds = {};
-  if (own.header) hfIds.header = hf.header && hf.header.length ? 'rIdPeroH' : null;
-  if (own.footer) hfIds.footer = hf.footer && hf.footer.length ? 'rIdPeroF' : null;
-  const sect = (x) => (own.header || own.footer ? setHfRefs(x, hfIds) : x);
+  const variants = [
+    // [тип ссылки, изменён ли в Пере, абзацы верхнего, нижнего, суффикс имени части, суффикс id]
+    ['default', own.header || own.footer, own.header ? hf.header : undefined, own.footer ? hf.footer : undefined, '', ''],
+    ['first', own.first, hf.first && hf.first.header, hf.first && hf.first.footer, '_first', 'First'],
+    ['even', own.even, hf.even && hf.even.header, hf.even && hf.even.footer, '_even', 'Even'],
+  ];
+  const hfParts = [];
+  const refs = []; // [тип, { header?, footer? }]
+  for (const [type, changed, head, foot, fsuf, isuf] of variants) {
+    if (!changed) continue;
+    const ids = {};
+    for (const [kind, paras, tag] of [['header', head, 'hdr'], ['footer', foot, 'ftr']]) {
+      if (paras === undefined) continue; // этот колонтитул в Пере не менялся
+      if (paras && paras.length) {
+        const id = `rIdPero${kind === 'header' ? 'H' : 'F'}${isuf}`;
+        hfParts.push({ id, file: `${kind}_pero${fsuf}.xml`, xml: writeHfPart(tag, paras, NS), type: kind });
+        ids[kind] = id;
+      } else ids[kind] = null;
+    }
+    refs.push([type, ids]);
+  }
+  const sect = (x) => {
+    let out = x;
+    for (const [type, ids] of refs) out = setHfRefs(out, ids, type);
+    if (own.titlePg) out = setTitlePg(out, !!hf.titlePg);
+    return out;
+  };
   const sectPr = sect(da.sectPr || DEFAULT_SECTPR);
-  const hfParts = [
-    hfIds.header && { id: 'rIdPeroH', file: 'header_pero.xml', xml: writeHfPart('hdr', hf.header, NS), type: 'header' },
-    hfIds.footer && { id: 'rIdPeroF', file: 'footer_pero.xml', xml: writeHfPart('ftr', hf.footer, NS), type: 'footer' },
-  ].filter(Boolean);
   const hfRels = hfParts.map((p) => `<Relationship Id="${p.id}" Type="${relType(p.type)}" Target="${p.file}"/>`).join('');
   const addHfTypes = (ct, prefix) => hfParts.reduce((acc, p) => addOverride(acc, prefix + p.file,
     `application/vnd.openxmlformats-officedocument.wordprocessingml.${p.type}+xml`), ct);
@@ -642,7 +675,7 @@ ${(da.comments || []).length ? `<Relationship Id="rIdPeroC" Type="${relType('com
     zip.file('word/styles.xml', stylesXml(da.fontFamily || DEFAULT_FONT, parseSize(da.fontSize) || DEFAULT_SIZE, { ...NEW_DOC_PARA, ...(da.para || {}) })
       .replace('</w:styles>', `${customs.map((s) => customStyleXml(s, 'Normal')).join('')}</w:styles>`));
     zip.file('word/numbering.xml', numberingXml(ex.orderedNums));
-    zip.file('word/settings.xml', settingsXml(da.defaultTab));
+    zip.file('word/settings.xml', settingsXml(da.defaultTab, !!hf.evenOdd));
     zip.file('word/_rels/document.xml.rels', docRels);
     return zip.generateAsync({ type: 'uint8array', compression: 'DEFLATE' });
   }
@@ -717,9 +750,14 @@ ${(da.comments || []).length ? `<Relationship Id="rIdPeroC" Type="${relType('com
   const linkRels = ex.links.map((href, i) => `<Relationship Id="rIdPeroL${i + 1}" Type="${relType('hyperlink')}" Target="${esc(href)}" TargetMode="External"/>`).join('');
   const imgRels = ex.images.map((img) => `<Relationship Id="${img.rid}" Type="${relType('image')}" Target="${img.path}"/>`).join('');
   // ссылки Пера пересоздаются заново; картинки прошлых сохранений остаются (на них ссылаются рисунки)
-  rels = rels.replace(/<Relationship\b[^>]*Id="rIdPero(?:L\d+|H|F)"[^>]*\/>/g, '').replace('</Relationships>', linkRels + imgRels + hfRels + '</Relationships>');
+  rels = rels.replace(/<Relationship\b[^>]*Id="rIdPero(?:L\d+|[HF](?:First|Even)?)"[^>]*\/>/g, '').replace('</Relationships>', linkRels + imgRels + hfRels + '</Relationships>');
   for (const img of ex.images) zip.file(prefix + img.path, img.bytes);
-  for (const name of ['header_pero.xml', 'footer_pero.xml']) if (!hfParts.some((p) => p.file === name)) zip.remove(prefix + name);
+  for (const name of ['header_pero.xml', 'footer_pero.xml', 'header_pero_first.xml', 'footer_pero_first.xml', 'header_pero_even.xml', 'footer_pero_even.xml']) {
+    if (!hfParts.some((p) => p.file === name)) {
+      zip.remove(prefix + name);
+      ct = ct.replace(new RegExp(`<Override\\b[^>]*PartName="/${(prefix + name).replace(/[.*+?^${}()|[\]\\/]/g, '\\$&')}"[^>]*/>`), '');
+    }
+  }
   for (const p of hfParts) zip.file(prefix + p.file, p.xml);
   ct = addHfTypes(ct, prefix);
 
@@ -750,15 +788,20 @@ ${(da.comments || []).length ? `<Relationship Id="rIdPeroC" Type="${relType('com
   // шаг табуляции изменён в Пере — правим только w:defaultTabStop в исходном settings.xml
   const sm = /<Relationship\b[^>]*Type="[^"]*\/settings"[^>]*\/>/.exec(rels);
   const st = sm && /Target="([^"]+)"/.exec(sm[0]);
-  if (st && da.defaultTab) {
+  if (st) {
     const sPath = resolvePart(src.dir, st[1]);
-    const sx = zip.file(sPath) ? await zip.file(sPath).async('string') : null;
-    const want = Math.round(da.defaultTab * 20);
-    const cur = sx && /<w:defaultTabStop\b[^>]*w:val="(\d+)"/.exec(sx);
-    if (sx && (!cur || +cur[1] !== want)) {
-      zip.file(sPath, cur ? sx.replace(cur[0], cur[0].replace(/w:val="\d+"/, `w:val="${want}"`))
-        : sx.replace(/(<w:settings\b[^>]*>)/, `$1<w:defaultTabStop w:val="${want}"/>`));
+    let sx = zip.file(sPath) ? await zip.file(sPath).async('string') : null;
+    const orig = sx;
+    if (sx && da.defaultTab) {
+      const want = Math.round(da.defaultTab * 20);
+      const cur = /<w:defaultTabStop\b[^>]*w:val="(\d+)"/.exec(sx);
+      if (!cur || +cur[1] !== want) {
+        sx = cur ? sx.replace(cur[0], cur[0].replace(/w:val="\d+"/, `w:val="${want}"`))
+          : sx.replace(/(<w:settings\b[^>]*>)/, `$1<w:defaultTabStop w:val="${want}"/>`);
+      }
     }
+    if (sx && own.evenOdd) sx = setEvenAndOdd(sx, !!hf.evenOdd);
+    if (sx && sx !== orig) zip.file(sPath, sx);
   }
   ct = addImageTypes(ct, ex.images);
   zip.file(src.relsPath, rels);

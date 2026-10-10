@@ -577,3 +577,4 @@ p[data-section-break]::after {
 .pero-split-line { position: absolute; height: 0; pointer-events: none; z-index: 1; }
 /* под повторённой шапкой над продолжением строки — линия (внутренняя горизонтальная граница таблицы) */
 .pero-header-overlay tr:last-child > td::before, .pero-header-overlay tr:last-child > th::before { border-bottom: var(--cb-bottom, var(--tb-ih, 0.5pt solid #000)); }
+.hf-variants { margin-bottom: 8px; }

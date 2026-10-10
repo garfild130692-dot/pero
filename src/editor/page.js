@@ -75,11 +75,45 @@ export function patchSectPr(xml, { w, h, orient, top, right, bottom, left, heade
 }
 
 // ---------- Колонтитулы ----------
-// Модель: { header: Para[] | null, footer: Para[] | null, own: { header: bool, footer: bool } }
+// Модель: { header, footer: Para[] | null — «по умолчанию» (нечётные/все страницы),
+//           first: { header, footer } | null — первая страница раздела (если у раздела w:titlePg),
+//           even: { header, footer } | null — чётные страницы (если в settings.xml w:evenAndOddHeaders),
+//           titlePg: bool, evenOdd: bool — «особый для первой» (значение из Пера, см. own) и «разные для чётных»,
+//           own: { header, footer, first, even, titlePg, evenOdd } — что изменено в Пере }
 // Para: { text, align: 'left'|'center'|'right' } — в тексте поля {PAGE} (номер страницы) и {NUMPAGES} (всего страниц).
-// own — колонтитул задан в Пере: при сохранении пишется своя часть и ссылки на неё во всех разделах.
-// Колонтитулы из файла (own = false) только показываются; их части сохраняются из пакета без изменений.
-export const EMPTY_HF = { header: null, footer: null, own: { header: false, footer: false } };
+// own — задано в Пере: при сохранении пишутся свои части и ссылки на них во всех разделах (titlePg — во всех разделах,
+// evenOdd — в settings.xml). Колонтитулы из файла (own = false) только показываются; их части сохраняются как были.
+export const EMPTY_HF = {
+  header: null, footer: null, first: null, even: null, titlePg: false, evenOdd: false,
+  own: { header: false, footer: false, first: false, even: false, titlePg: false, evenOdd: false },
+};
+
+// Какой колонтитул на странице (правила Word): первая страница раздела с «особым для первой» — first (не задан — пусто),
+// чётная при «разных для чётных и нечётных» — even (не задан — пусто), иначе — «по умолчанию».
+// page — номер страницы (с 1), firstOfSection — страница первая в разделе, sectTitlePg — w:titlePg раздела в файле.
+export function hfFor(hf, kind, { page, firstOfSection, sectTitlePg }) {
+  const h = hf || EMPTY_HF;
+  const own = h.own || {};
+  const titlePg = own.titlePg ? !!h.titlePg : !!sectTitlePg;
+  if (firstOfSection && titlePg) return (h.first && h.first[kind]) || [];
+  if (h.evenOdd && page % 2 === 0) return (h.even && h.even[kind]) || [];
+  return h[kind] || [];
+}
+
+// Включить/выключить «особый колонтитул для первой страницы» в XML sectPr
+export function setTitlePg(sectXml, on) {
+  let out = sectXml.replace(/<w:titlePg\b[^>]*\/>/g, '');
+  if (on) out = /<w:docGrid\b/.test(out) ? out.replace(/<w:docGrid\b/, '<w:titlePg/><w:docGrid') : out.replace(/<\/w:sectPr>/, '<w:titlePg/></w:sectPr>');
+  return out;
+}
+
+// Разделы документа по порядку: XML sectPr (абзацы с разрывом раздела, затем последний — у документа)
+export function sectionList(doc) {
+  const list = [];
+  doc.forEach((n) => { if (n.attrs && n.attrs.sectPr) list.push(n.attrs.sectPr); });
+  list.push(doc.attrs.sectPr || null);
+  return list;
+}
 
 // Текст колонтитула для страницы n из total
 export const hfText = (text, n, total) => String(text || '').replace(/\{PAGE\}/g, String(n)).replace(/\{NUMPAGES\}/g, String(total));
@@ -158,13 +192,13 @@ export function writeHfPart(kind, paras, ns) {
   return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<w:${kind} ${ns}>${body}</w:${kind}>`;
 }
 
-// Заменить ссылки на колонтитулы «по умолчанию» в XML sectPr; ids: { header?, footer? } (null — убрать)
-export function setHfRefs(sectXml, ids) {
+// Заменить ссылки на колонтитулы типа type (default | first | even) в XML sectPr; ids: { header?, footer? } (null — убрать)
+export function setHfRefs(sectXml, ids, type = 'default') {
   let out = sectXml;
   for (const kind of ['header', 'footer']) {
     if (!(kind in ids)) continue;
-    out = out.replace(new RegExp(`<w:${kind}Reference\\b[^>]*w:type="default"[^>]*/>`, 'g'), '');
-    if (ids[kind]) out = out.replace(/(<w:sectPr\b[^>]*>)/, `$1<w:${kind}Reference w:type="default" r:id="${ids[kind]}"/>`);
+    out = out.replace(new RegExp(`<w:${kind}Reference\\b[^>]*w:type="${type}"[^>]*/>`, 'g'), '');
+    if (ids[kind]) out = out.replace(/(<w:sectPr\b[^>]*>)/, `$1<w:${kind}Reference w:type="${type}" r:id="${ids[kind]}"/>`);
   }
   // ссылки на колонтитулы идут в начале sectPr: header* затем footer* — Word терпит любой порядок внутри группы
   return out;
