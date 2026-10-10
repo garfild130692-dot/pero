@@ -188,12 +188,31 @@ export function shiftCells(wb, si, axis, at, count) {
         next[dim] = sizes;
       }
       next.merges = sheet.merges.map((m) => shiftMerge(m, axis, at, count)).filter(Boolean);
+      // область печати и сквозные строки/столбцы
+      const [k1, k2] = axis === 'row' ? ['r1', 'r2'] : ['c1', 'c2'];
+      if (sheet.printArea) {
+        const span = shiftSpan(sheet.printArea[k1], sheet.printArea[k2], at, count);
+        next.printArea = span ? { ...sheet.printArea, [k1]: span[0], [k2]: span[1] } : null;
+        if (!span) delete next.printArea;
+      }
+      const tk = axis === 'row' ? 'rows' : 'cols';
+      if (sheet.printTitles && sheet.printTitles[tk]) {
+        const span = shiftSpan(sheet.printTitles[tk][0], sheet.printTitles[tk][1], at, count);
+        next.printTitles = { ...sheet.printTitles, [tk]: span };
+      }
       // лист из файла: сдвиг запоминается — экспорт сдвинет диапазоны условного форматирования, проверки, ссылок
       if (sheet.src) next.src = { ...sheet.src, shifts: [...(sheet.src.shifts || []), { axis, at, count }] };
     }
     return next;
   });
   return recalc({ ...wb, sheets });
+}
+// Отрезок a..b после вставки (count > 0) / удаления строк или столбцов; удалён целиком — null
+function shiftSpan(a, b, at, count) {
+  if (count > 0) return [a >= at ? a + count : a, b >= at ? b + count : b];
+  const n = -count; const end = at + n - 1;
+  if (a >= at && b <= end) return null;
+  return [a > end ? a - n : a >= at ? at : a, b > end ? b - n : b >= at ? at - 1 : b];
 }
 function shiftMerge(m, axis, at, count) {
   const [a, b] = axis === 'row' ? ['r1', 'r2'] : ['c1', 'c2'];

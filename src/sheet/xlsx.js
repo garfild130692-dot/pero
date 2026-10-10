@@ -5,6 +5,7 @@ import { addr, colIndex, key, MAX_COLS, parseRange, rangeName, unkey } from './a
 import { canonical, isErr, offsetFormula, shiftFormula } from './formula.js';
 import { BUILTIN_FMT } from './format.js';
 import { maxLevel, newSheet, recalc, DEFAULT_COL_W, DEFAULT_ROW_H } from './model.js';
+import { parsePrintArea, parsePrintTitles, printAreaText, printTitlesText } from './pageSetup.js';
 
 const NS = 'http://schemas.openxmlformats.org/spreadsheetml/2006/main';
 const R = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships';
@@ -232,6 +233,86 @@ function readFreeze(root) {
   const cols = Math.round(+(pane.getAttribute('xSplit') || 0));
   return rows || cols ? { rows, cols } : null;
 }
+// Параметры страницы листа (только то, что записано в файле)
+function readPage(root) {
+  const page = {};
+  const ps = kid(root, 'pageSetup');
+  if (ps) {
+    if (ps.getAttribute('orientation') === 'landscape') page.orientation = 'landscape';
+    if (ps.getAttribute('paperSize')) page.paper = +ps.getAttribute('paperSize');
+    const sc = +(ps.getAttribute('scale') || 100);
+    if (sc !== 100) page.scale = sc;
+  }
+  const spr = kid(kid(root, 'sheetPr'), 'pageSetUpPr');
+  if (spr && isOn(spr, 'fitToPage')) {
+    page.fitWidth = ps && ps.getAttribute('fitToWidth') != null ? +ps.getAttribute('fitToWidth') : 1;
+    page.fitHeight = ps && ps.getAttribute('fitToHeight') != null ? +ps.getAttribute('fitToHeight') : 1;
+  }
+  const pm = kid(root, 'pageMargins');
+  if (pm) {
+    const m = {};
+    for (const n of ['left', 'right', 'top', 'bottom', 'header', 'footer']) if (pm.getAttribute(n) != null) m[n] = +pm.getAttribute(n);
+    page.margins = m;
+  }
+  const po = kid(root, 'printOptions');
+  if (po && isOn(po, 'gridLines')) page.gridLines = true;
+  if (po && isOn(po, 'horizontalCentered')) page.centerH = true;
+  return Object.keys(page).length ? page : null;
+}
+// Имена печати листа с номером idx (порядок в <sheets>): { printArea, printTitles }
+function readPrintNames(wbDoc, idx) {
+  const out = { printArea: null, printTitles: null };
+  for (const n of kids(kid(wbDoc.documentElement, 'definedNames'), 'definedName')) {
+    if (n.getAttribute('localSheetId') !== String(idx)) continue;
+    if (n.getAttribute('name') === '_xlnm.Print_Area') out.printArea = parsePrintArea(n.textContent);
+    if (n.getAttribute('name') === '_xlnm.Print_Titles') out.printTitles = parsePrintTitles(n.textContent);
+  }
+  return out;
+}
+// Атрибуты элемента (строка тега): null — удалить
+function setAttrs(tag, attrs) {
+  let t = tag;
+  for (const [k, v] of Object.entries(attrs)) {
+    t = t.replace(new RegExp(`\\s${k}="[^"]*"`), '');
+    if (v != null) t = t.replace(/\s*(\/?)>$/, ` ${k}="${v}"$1>`);
+  }
+  return t;
+}
+const pageSetupAttrs = (page) => {
+  const fit = page.fitWidth != null || page.fitHeight != null;
+  return {
+    paperSize: page.paper ?? null, scale: page.scale && page.scale !== 100 ? page.scale : null,
+    fitToWidth: fit ? page.fitWidth ?? 0 : null, fitToHeight: fit ? page.fitHeight ?? 0 : null,
+    orientation: page.orientation === 'landscape' ? 'landscape' : page.orientation ? 'portrait' : null,
+  };
+};
+const marginsXml = (m) => `<pageMargins left="${m.left ?? 0.7}" right="${m.right ?? 0.7}" top="${m.top ?? 0.75}" bottom="${m.bottom ?? 0.75}" header="${m.header ?? 0.3}" footer="${m.footer ?? 0.3}"/>`;
+// Параметры страницы поверх исходного XML листа: прочие атрибуты (r:id настроек принтера и т. п.) — как были
+function setPageXml(xml, page) {
+  let out = xml;
+  const fit = page.fitWidth != null || page.fitHeight != null;
+  // флаг «вписать» — в sheetPr/pageSetUpPr
+  const sp = findEl(out, 'sheetPr');
+  if (sp) {
+    let el = out.slice(sp.start, sp.end);
+    if (/<pageSetUpPr\b/.test(el)) el = el.replace(/<pageSetUpPr\b[^>]*?\/>/, (t) => setAttrs(t, { fitToPage: fit ? 1 : null }));
+    else if (fit) el = el.includes('</sheetPr>') ? el.replace('</sheetPr>', '<pageSetUpPr fitToPage="1"/></sheetPr>') : el.replace(/\s*\/>$/, '><pageSetUpPr fitToPage="1"/></sheetPr>');
+    out = out.slice(0, sp.start) + el + out.slice(sp.end);
+  } else if (fit) out = setSheetEl(out, 'sheetPr', '<sheetPr><pageSetUpPr fitToPage="1"/></sheetPr>');
+  // печать сетки и центрирование
+  const po = findEl(out, 'printOptions');
+  const poAttrs = { gridLines: page.gridLines ? 1 : null, horizontalCentered: page.centerH ? 1 : null };
+  if (po) {
+    const t = setAttrs(out.slice(po.start, po.end), poAttrs);
+    out = out.slice(0, po.start) + (/^<printOptions\s*\/>$/.test(t) ? '' : t) + out.slice(po.end);
+  } else if (page.gridLines || page.centerH) out = setSheetEl(out, 'printOptions', setAttrs('<printOptions/>', poAttrs));
+  if (page.margins) out = setSheetEl(out, 'pageMargins', marginsXml(page.margins));
+  const ps = findEl(out, 'pageSetup');
+  if (ps) out = out.slice(0, ps.start) + setAttrs(out.slice(ps.start, ps.end), pageSetupAttrs(page)) + out.slice(ps.end);
+  else out = setSheetEl(out, 'pageSetup', setAttrs('<pageSetup/>', pageSetupAttrs(page)));
+  return out;
+}
+
 // <pane> и <selection> для закрепления
 function paneXml(f) {
   if (!f) return '';
@@ -265,7 +346,7 @@ export async function importXlsx(data) {
   const kept = {};
   const keep = (k) => { kept[k] = (kept[k] || 0) + 1; };
   const sheets = [];
-  for (const info of book.sheets) {
+  for (const [idx, info] of book.sheets.entries()) {
     const sheet = newSheet(info.name);
     if (!info.worksheet) { keep('листы диаграмм'); continue; }
     const doc = await read(info.target);
@@ -298,6 +379,11 @@ export async function importXlsx(data) {
     }
     const freeze = readFreeze(root);
     if (freeze) sheet.freeze = freeze;
+    const page = readPage(root);
+    if (page) sheet.page = page;
+    const pn = readPrintNames(wbDoc, idx);
+    if (pn.printArea) sheet.printArea = pn.printArea;
+    if (pn.printTitles) sheet.printTitles = pn.printTitles;
     if (kid(root, 'conditionalFormatting')) keep('условное форматирование');
     if (kid(root, 'dataValidations')) keep('проверка данных');
     if (kid(root, 'drawing')) keep('рисунки и диаграммы');
@@ -537,10 +623,11 @@ function setFreezeXml(xml, f) {
 // Новый лист целиком
 function newSheetXml(sheet, active, xfOf, str) {
   const cols = colsXml(sheet, false);
-  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<worksheet xmlns="${NS}" xmlns:r="${R}">` +
+  const xml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<worksheet xmlns="${NS}" xmlns:r="${R}">` +
     `${dimensionXml(sheet)}<sheetViews><sheetView workbookViewId="0"${active ? ' tabSelected="1"' : ''}${sheet.freeze ? `>${paneXml(sheet.freeze)}</sheetView>` : '/>'}</sheetViews>` +
     `${formatPrXml('<sheetFormatPr defaultRowHeight="15"/>', sheet)}${cols}${sheetDataXml(sheet, (r, c, cell) => cellXml(cell, addr(r, c), xfOf, str), false)}${mergesXml(sheet)}` +
-    '<pageMargins left="0.7" right="0.7" top="0.75" bottom="0.75" header="0.3" footer="0.3"/></worksheet>';
+    `${marginsXml((sheet.page && sheet.page.margins) || {})}</worksheet>`;
+  return sheet.page ? setPageXml(xml, sheet.page) : xml;
 }
 
 // Сдвиг диапазонов sqref/ref после вставки/удаления строк и столбцов (удалённые целиком — пропадают)
@@ -613,6 +700,7 @@ function patchSheetXml(xml, sheet, active, root, book, xfOf, str) {
   out = setSheetEl(out, 'dimension', dimensionXml(sheet));
   out = selectTab(out, active);
   if (JSON.stringify(readFreeze(root)) !== JSON.stringify(sheet.freeze || null)) out = setFreezeXml(out, sheet.freeze || null);
+  if (JSON.stringify(readPage(root)) !== JSON.stringify(sheet.page || null)) out = setPageXml(out, sheet.page || {});
   const fp = findEl(out, 'sheetFormatPr');
   if (fp) out = out.slice(0, fp.start) + formatPrXml(out.slice(fp.start, fp.end), sheet) + out.slice(fp.end);
   else if (maxLevel(sheet, 'row') || maxLevel(sheet, 'col')) out = setSheetEl(out, 'sheetFormatPr', formatPrXml('<sheetFormatPr defaultRowHeight="15"/>', sheet));
@@ -786,6 +874,30 @@ async function exportWithSource(wb, source) {
     for (const [nm, sh] of shifted) b = xmlEsc(shiftRefs(xmlUnesc(b), nm, sh));
     return `<definedName${a}>${b}</definedName>`;
   }).replace(/<definedNames>\s*<\/definedNames>/, '');
+  // область печати и сквозные строки: у изменённых в Пере листов — заново
+  const printNames = [];
+  wb.sheets.forEach((sheet, i) => {
+    const orig = sheet.src ? book.sheets.findIndex((x) => x.rid === sheet.src.rid) : -1;
+    const was = orig >= 0 ? readPrintNames(book.wbDoc, orig) : { printArea: null, printTitles: null };
+    const area = sheet.printArea || null;
+    const titles = sheet.printTitles && (sheet.printTitles.rows || sheet.printTitles.cols) ? sheet.printTitles : null;
+    if (JSON.stringify(was.printArea) !== JSON.stringify(area) || orig < 0) {
+      wbXml = wbXml.replace(new RegExp(`<definedName name="_xlnm\\.Print_Area" localSheetId="${i}"[^>]*>[\\s\\S]*?</definedName>`), '');
+      if (area) printNames.push(`<definedName name="_xlnm.Print_Area" localSheetId="${i}">${xmlEsc(printAreaText(sheet.name, area))}</definedName>`);
+    }
+    if (JSON.stringify(was.printTitles) !== JSON.stringify(titles) || orig < 0) {
+      wbXml = wbXml.replace(new RegExp(`<definedName name="_xlnm\\.Print_Titles" localSheetId="${i}"[^>]*>[\\s\\S]*?</definedName>`), '');
+      if (titles) printNames.push(`<definedName name="_xlnm.Print_Titles" localSheetId="${i}">${xmlEsc(printTitlesText(sheet.name, titles))}</definedName>`);
+    }
+  });
+  if (printNames.length) {
+    if (/<definedNames>/.test(wbXml)) wbXml = wbXml.replace('<definedNames>', `<definedNames>${printNames.join('')}`);
+    else {
+      const after = /<\/externalReferences>/.test(wbXml) ? '</externalReferences>' : '</sheets>';
+      wbXml = wbXml.replace(after, `${after}<definedNames>${printNames.join('')}</definedNames>`);
+    }
+  }
+  wbXml = wbXml.replace(/<definedNames>\s*<\/definedNames>/, '');
   // активный лист; пересчёт при открытии (кэш формул мог устареть)
   wbXml = wbXml.replace(/<workbookView\b[^>]*?(?=\/?>)/, (tag) => {
     const t = tag.replace(/\s+(activeTab|firstSheet)="[^"]*"/g, '');
@@ -874,6 +986,15 @@ async function exportWithSource(wb, source) {
   return zip.generateAsync({ type: 'uint8array', compression: 'DEFLATE' });
 }
 
+function freshPrintNames(wb) {
+  const out = [];
+  wb.sheets.forEach((s, i) => {
+    if (s.printArea) out.push(`<definedName name="_xlnm.Print_Area" localSheetId="${i}">${xmlEsc(printAreaText(s.name, s.printArea))}</definedName>`);
+    if (s.printTitles && (s.printTitles.rows || s.printTitles.cols)) out.push(`<definedName name="_xlnm.Print_Titles" localSheetId="${i}">${xmlEsc(printTitlesText(s.name, s.printTitles))}</definedName>`);
+  });
+  return out.length ? `<definedNames>${out.join('')}</definedNames>` : '';
+}
+
 /** source — байты исходного .xlsx: всё, что Перо не редактирует, переносится из него */
 export async function exportXlsx(wb, { source = null } = {}) {
   if (source) return exportWithSource(wb, source);
@@ -894,7 +1015,7 @@ export async function exportXlsx(wb, { source = null } = {}) {
 <cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dcterms="http://purl.org/dc/terms/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"><dcterms:created xsi:type="dcterms:W3CDTF">${now}</dcterms:created><dcterms:modified xsi:type="dcterms:W3CDTF">${now}</dcterms:modified></cp:coreProperties>`);
   zip.file('docProps/app.xml', '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties"><Application>Pero</Application></Properties>');
   zip.file('xl/workbook.xml', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<workbook xmlns="${NS}" xmlns:r="${R}"><bookViews><workbookView activeTab="${wb.active || 0}"/></bookViews><sheets>${wb.sheets.map((s, i) => `<sheet name="${esc(s.name)}" sheetId="${i + 1}" r:id="rId${i + 1}"/>`).join('')}</sheets><calcPr calcId="191029" fullCalcOnLoad="1"/></workbook>`);
+<workbook xmlns="${NS}" xmlns:r="${R}"><bookViews><workbookView activeTab="${wb.active || 0}"/></bookViews><sheets>${wb.sheets.map((s, i) => `<sheet name="${esc(s.name)}" sheetId="${i + 1}" r:id="rId${i + 1}"/>`).join('')}</sheets>${freshPrintNames(wb)}<calcPr calcId="191029" fullCalcOnLoad="1"/></workbook>`);
   const n = wb.sheets.length;
   zip.file('xl/_rels/workbook.xml.rels', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${wb.sheets.map((_, i) => `<Relationship Id="rId${i + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet${i + 1}.xml"/>`).join('')}<Relationship Id="rId${n + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/><Relationship Id="rId${n + 2}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/sharedStrings" Target="sharedStrings.xml"/></Relationships>`);

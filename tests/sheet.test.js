@@ -326,6 +326,41 @@ print(wb.sheetnames, s['E1'].value, s.freeze_panes, s.row_dimensions[17].hidden,
     expect(s1).toMatch(/<sheetFormatPr defaultRowHeight="15" x14ac:dyDescent="0.25" outlineLevelRow="1" outlineLevelCol="1"\/>/);
   });
 
+  it('параметры страницы, область печати и сквозные строки: файл Excel, правка, новая книга', async () => {
+    const pg = await import('../src/sheet/pageSetup.js');
+    const JSZip = (await import('jszip')).default;
+    const src = readFileSync('tests/fixtures/preserve.xlsx');
+    let wb = (await importXlsx(src)).wb;
+    const s0 = wb.sheets[0];
+    expect(s0.page).toMatchObject({ orientation: 'landscape', paper: 9, fitWidth: 1, fitHeight: 0 });
+    expect(s0.page.margins.left).toBeCloseTo(1.5 / 2.54, 6);
+    expect(s0.printArea).toEqual({ r1: 0, c1: 0, r2: 13, c2: 3 });
+    expect(s0.printTitles).toEqual({ rows: [0, 0], cols: null });
+    // вставка строк сдвигает область печати; правка параметров — только нужные атрибуты
+    wb = shiftCells(wb, 0, 'row', 0, 1);
+    expect(wb.sheets[0].printArea).toEqual({ r1: 1, c1: 0, r2: 14, c2: 3 });
+    expect(wb.sheets[0].printTitles.rows).toEqual([1, 1]);
+    wb = pg.setPage(wb, 0, { orientation: 'portrait', fitWidth: null, fitHeight: null, scale: 75, gridLines: true });
+    const z = await JSZip.loadAsync(await exportXlsx(wb, { source: src }));
+    const s1 = await z.file('xl/worksheets/sheet1.xml').async('string');
+    expect(s1).toContain('<pageSetup r:id="rId2" paperSize="9" scale="75" orientation="portrait"/>');
+    expect(s1).toContain('<sheetPr><pageSetUpPr/></sheetPr>');
+    expect(s1).toContain('<printOptions gridLines="1"/><pageMargins');
+    const names = await z.file('xl/workbook.xml').async('string');
+    expect(names).toContain('<definedName name="_xlnm.Print_Area" localSheetId="0">Данные!$A$2:$D$15</definedName>');
+    expect(names).toContain('<definedName name="_xlnm.Print_Titles" localSheetId="0">Данные!$2:$2</definedName>');
+    // новая книга
+    let n = put(newWorkbook(), { A1: 'шапка', A2: '1' });
+    n = pg.setPage(n, 0, { orientation: 'landscape', fitWidth: 1, fitHeight: 0, paper: 8, margins: pg.MARGIN_PRESETS.narrow });
+    n = pg.setPrintArea(n, 0, { r1: 0, c1: 0, r2: 1, c2: 0 });
+    n = pg.setPrintTitles(n, 0, { rows: [0, 0] });
+    const back = (await importXlsx(await exportXlsx(n))).wb.sheets[0];
+    expect(back.page).toMatchObject({ orientation: 'landscape', paper: 8, fitWidth: 1, fitHeight: 0, margins: { left: 0.25, top: 0.75 } });
+    expect(back.printArea).toEqual({ r1: 0, c1: 0, r2: 1, c2: 0 });
+    expect(back.printTitles).toEqual({ rows: [0, 0], cols: null });
+    expect(pg.printScale(pg.pageOf(back), 2000, 100)).toBeCloseTo(pg.printGeometry(pg.pageOf(back)).contentW / 2000, 6);
+  });
+
   it('новая книга из модели: русские функции → английские, кэшированные значения', async () => {
     let wb = put(newWorkbook(), { A1: '2', A2: '3', A3: '=СУММ(A1:A2)*10', B1: 'текст', B2: '=ЕСЛИ(A3>40;"да";"нет")' });
     wb = setStyle(wb, 0, { r1: 0, c1: 0, r2: 0, c2: 0 }, { bold: true, numFmt: '0.00' });

@@ -1,11 +1,12 @@
 // Лента табличного редактора: Файл / Главная (буфер, шрифт, выравнивание, число, ячейки, редактирование) /
-// Данные (структура) / Вид (закрепление областей).
+// Разметка страницы (параметры печати) / Данные (структура) / Вид (закрепление областей).
 import React, { useState } from 'react';
 import { Icon } from '../icons.jsx';
 import { clipboard, reportProblem } from '../fileApi.js';
 import RecentButton from '../RecentButton.jsx';
 import { ColorPalette, SplitColor, usePopover } from '../FontControls.jsx';
 import { FORMAT_PRESETS, changeDecimals } from './format.js';
+import { MARGIN_PRESETS, PAPERS, pageOf, setPage, setPrintArea, setPrintTitles } from './pageSetup.js';
 import { key } from './address.js';
 import {
   clearRange, collapseGroup, expandGroup, groupAt, groupLines, mergeAt, mergeRange, setFreeze, setHidden, setStyle, shiftCells, sortRange, unmergeRange,
@@ -118,7 +119,15 @@ export default function SheetRibbon({ api }) {
   });
   const frozen = sheet.freeze || null;
 
-  const tabs = [['file', 'Файл'], ['home', 'Главная'], ['data', 'Данные'], ['view', 'Вид']];
+  // параметры страницы
+  const page = pageOf(sheet);
+  const setPg = (patch) => change((w) => setPage(w, si, patch));
+  const fitMode = page.fitWidth == null && page.fitHeight == null ? 'none'
+    : page.fitWidth === 1 && page.fitHeight === 1 ? 'page' : page.fitWidth === 1 && !page.fitHeight ? 'cols' : !page.fitWidth && page.fitHeight === 1 ? 'rows' : 'custom';
+  const sameMargins = (m) => ['left', 'right', 'top', 'bottom'].every((k) => Math.abs(page.margins[k] - m[k]) < 0.01);
+  const titles = sheet.printTitles || {};
+
+  const tabs = [['file', 'Файл'], ['home', 'Главная'], ['layout', 'Разметка страницы'], ['data', 'Данные'], ['view', 'Вид']];
   return (
     <div className="ribbon">
       <div className="rb-tabs">
@@ -248,6 +257,48 @@ export default function SheetRibbon({ api }) {
                 ['Очистить форматы', () => change((w) => clearRange(w, si, rg, 'formats'))],
                 ['Очистить содержимое', () => change((w) => clearRange(w, si, rg, 'contents'))],
               ]} />
+            </Group>
+          </>
+        )}
+        {tab === 'layout' && (
+          <>
+            <Group title="Параметры страницы">
+              <MenuButton title="Поля" label="Поля" items={Object.values(MARGIN_PRESETS).map((m) => [m.name, () => setPg({ margins: { left: m.left, right: m.right, top: m.top, bottom: m.bottom, header: m.header, footer: m.footer } }), sameMargins(m)])} />
+              <MenuButton title="Ориентация" label="Ориентация" items={[
+                ['Книжная', () => setPg({ orientation: 'portrait' }), page.orientation !== 'landscape'],
+                ['Альбомная', () => setPg({ orientation: 'landscape' }), page.orientation === 'landscape'],
+              ]} />
+              <MenuButton title="Размер бумаги" label="Размер" items={Object.entries(PAPERS).map(([code, p]) => [`${p.name} (${p.w} × ${p.h} мм)`, () => setPg({ paper: +code }), page.paper === +code])} />
+              <MenuButton title="Область печати" label="Область печати" items={[
+                ['Задать (выделенный диапазон)', () => change((w) => setPrintArea(w, si, rg))],
+                ['Убрать', () => change((w) => setPrintArea(w, si, null)), false],
+              ]} />
+              <MenuButton title="Сквозные строки и столбцы: печатаются на каждой странице" label="Печатать заголовки" items={[
+                ['Сквозные строки — выделенные строки', () => change((w) => setPrintTitles(w, si, { ...titles, rows: [rg.r1, rg.r2] })), !!titles.rows],
+                ['Сквозные столбцы — выделенные столбцы', () => change((w) => setPrintTitles(w, si, { ...titles, cols: [rg.c1, rg.c2] })), !!titles.cols],
+                '-',
+                ['Убрать сквозные строки и столбцы', () => change((w) => setPrintTitles(w, si, null))],
+              ]} />
+            </Group>
+            <Group title="Вписать">
+              <MenuButton title="Масштаб при печати" label={fitMode === 'none' ? `Масштаб ${page.scale || 100}%` : 'Вписать'} items={[
+                ['Текущий размер', () => setPg({ fitWidth: null, fitHeight: null, scale: 100 }), fitMode === 'none' && (page.scale || 100) === 100],
+                ['Вписать лист на одну страницу', () => setPg({ fitWidth: 1, fitHeight: 1 }), fitMode === 'page'],
+                ['Вписать все столбцы на одну страницу', () => setPg({ fitWidth: 1, fitHeight: 0 }), fitMode === 'cols'],
+                ['Вписать все строки на одну страницу', () => setPg({ fitWidth: 0, fitHeight: 1 }), fitMode === 'rows'],
+                '-',
+                ...[90, 75, 50].map((k) => [`Масштаб ${k}%`, () => setPg({ fitWidth: null, fitHeight: null, scale: k }), fitMode === 'none' && page.scale === k]),
+              ]} />
+            </Group>
+            <Group title="Параметры листа">
+              <div className="rb-col">
+                <Btn title="Печатать линии сетки" active={page.gridLines} onClick={() => setPg({ gridLines: !page.gridLines })}><T>▦</T> Печать сетки</Btn>
+                <Btn title="Центрировать на странице по горизонтали" active={page.centerH} onClick={() => setPg({ centerH: !page.centerH })}><T>↔</T> По центру</Btn>
+              </div>
+            </Group>
+            <Group title="Печать">
+              <Btn big icon="print" label="Печать" onClick={file.print} title="Печать (Ctrl+P)" />
+              <Btn big icon="pdf" label="PDF" onClick={file.pdf} title="Экспорт в PDF" />
             </Group>
           </>
         )}

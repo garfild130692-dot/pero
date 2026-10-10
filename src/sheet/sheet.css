@@ -88,6 +88,8 @@ input.sheet-tab.editing { width: 120px; background: #fff; border: 1px solid var(
 .sheet-print { display: none; }
 @media print {
   .sheet-app .formula-bar, .sheet-app .sheet-main, .sheet-app .sheet-tabs { display: none !important; }
-  .sheet-print { display: table; border-collapse: collapse; font-family: Calibri, Carlito, sans-serif; font-size: 10pt; table-layout: fixed; }
-  .sheet-print td { border: 1px solid #bbb; padding: 1px 4px; white-space: pre-wrap; vertical-align: bottom; }
+  .sheet-print { display: table; border-collapse: collapse; font-family: Calibri, Carlito, sans-serif; font-size: 11pt; table-layout: fixed; }
+  .sheet-print td { padding: 0 3px; overflow: hidden; line-height: 1.2; }
+  .sheet-print.grid td { outline: 1px solid #c8c8c8; outline-offset: -1px; } /* «Печать сетки» */
+  .sheet-print thead { display: table-header-group; }
 }

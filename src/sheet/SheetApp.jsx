@@ -6,10 +6,11 @@ import { addr, key, parseRange, rangeName } from './address.js';
 import { isErr } from './formula.js';
 import { formatValue } from './format.js';
 import {
-  DEFAULT_COL_W, addSheet, autoSumFormula, blockToText, clearRange, collapseGroup, copyBlock, deleteSheet, expandGroup, fill, inputOf,
+  DEFAULT_COL_W, DEFAULT_ROW_H, addSheet, autoSumFormula, blockToText, clearRange, collapseGroup, copyBlock, deleteSheet, expandGroup, fill, inputOf,
   isHidden, mergeAt, newWorkbook, pasteBlock, pasteText, renameSheet, setColWidth, setInput, setRowHeight, showLevels, usedRange,
 } from './model.js';
 import { exportXlsx, importXlsx } from './xlsx.js';
+import { pageOf, printGeometry, printScale } from './pageSetup.js';
 import * as fileApi from '../fileApi.js';
 import { useAutosave } from '../autosave.js';
 
@@ -362,7 +363,6 @@ export default function SheetApp({ initialFile, onOpenOther, onNewDoc, autosaveS
         )}
         {isErr(activeCell && activeCell.v) && <span className="warn">{errorHint(activeCell.v.error)}</span>}
       </div>
-      <style>{'@media print { @page { size: A4 landscape; margin: 15mm; } }'}</style>
       <PrintTable sheet={sheet} />
     </div>
   );
@@ -375,33 +375,56 @@ function errorHint(code) {
   }[code] || code;
 }
 
-// Для печати/PDF — таблица использованной области листа (видна только при печати)
+// Для печати/PDF — таблица области печати листа (видна только при печати): параметры страницы, «вписать»,
+// сквозные строки (в <thead> — Chromium повторяет его на каждом листе), скрытые строки/столбцы не печатаются
+const BORDER_CSS = { thin: '1px solid', medium: '2px solid', thick: '3px solid', dashed: '1px dashed', dotted: '1px dotted', double: '3px double', hair: '1px dotted' };
+const bcss = (b) => (b ? `${BORDER_CSS[b.style] || '1px solid'} ${b.color || '#000'}` : undefined);
 function PrintTable({ sheet }) {
-  const u = usedRange(sheet);
-  if (!u) return null;
-  const widths = Array.from({ length: u.c2 + 1 }, (_, c) => sheet.colW[c] ?? DEFAULT_COL_W);
-  const rows = [];
-  for (let r = 0; r <= u.r2; r++) {
+  const page = pageOf(sheet);
+  const area = sheet.printArea || usedRange(sheet);
+  if (!area) return null;
+  const visCols = [];
+  for (let c = area.c1; c <= area.c2; c++) if (!isHidden(sheet, 'col', c)) visCols.push(c);
+  const visRows = (a, b) => { const out = []; for (let r = a; r <= b; r++) if (!isHidden(sheet, 'row', r)) out.push(r); return out; };
+  const t = sheet.printTitles && sheet.printTitles.rows;
+  const headRows = t ? visRows(t[0], t[1]) : [];
+  const bodyRows = visRows(area.r1, area.r2).filter((r) => !headRows.includes(r));
+  const widths = visCols.map((c) => sheet.colW[c] ?? DEFAULT_COL_W);
+  const heightOf = (r) => sheet.rowH[r] ?? DEFAULT_ROW_H;
+  const tableW = widths.reduce((a, b) => a + b, 0);
+  const tableH = [...headRows, ...bodyRows].reduce((a, r) => a + heightOf(r), 0);
+  const zoom = printScale(page, tableW, tableH);
+  const row = (r) => {
     const tds = [];
-    for (let c = 0; c <= u.c2; c++) {
+    for (const c of visCols) {
       const m = mergeAt(sheet, r, c);
       if (m && (m.r1 !== r || m.c1 !== c)) continue;
       const cell = sheet.cells.get(key(r, c));
       const s = (cell && cell.s) || {};
+      const b = s.border || {};
       tds.push(
-        <td key={c} rowSpan={m ? m.r2 - m.r1 + 1 : undefined} colSpan={m ? m.c2 - m.c1 + 1 : undefined}
+        <td key={c} rowSpan={m ? m.r2 - m.r1 + 1 : undefined} colSpan={m ? visCols.filter((x) => x >= m.c1 && x <= m.c2).length : undefined}
           style={{ fontWeight: s.bold ? 'bold' : undefined, fontStyle: s.italic ? 'italic' : undefined, background: s.fill, color: s.color,
-            textAlign: s.align || (cell && typeof cell.v === 'number' ? 'right' : 'left') }}>
+            textDecoration: [s.underline && 'underline', s.strike && 'line-through'].filter(Boolean).join(' ') || undefined,
+            fontSize: s.fontSize ? `${s.fontSize}pt` : undefined, fontFamily: s.fontFamily || undefined,
+            textAlign: s.align || (cell && typeof cell.v === 'number' ? 'right' : 'left'),
+            verticalAlign: s.valign === 'top' ? 'top' : s.valign === 'center' ? 'middle' : 'bottom',
+            whiteSpace: s.wrap ? 'pre-wrap' : 'pre',
+            borderTop: bcss(b.top), borderBottom: bcss(b.bottom), borderLeft: bcss(b.left), borderRight: bcss(b.right) }}>
           {cellText(cell)}
         </td>,
       );
     }
-    rows.push(<tr key={r}>{tds}</tr>);
-  }
+    return <tr key={r} style={{ height: heightOf(r) }}>{tds}</tr>;
+  };
   return (
-    <table className="sheet-print" style={{ width: widths.reduce((a, b) => a + b, 0) }}>
-      <colgroup>{widths.map((w, c) => <col key={c} style={{ width: w }} />)}</colgroup>
-      <tbody>{rows}</tbody>
-    </table>
+    <>
+      <style>{`@media print { ${printGeometry(page).css} }`}</style>
+      <table className={`sheet-print${page.gridLines ? ' grid' : ''}`} style={{ width: tableW, zoom, margin: page.centerH ? '0 auto' : undefined }}>
+        <colgroup>{widths.map((w, i) => <col key={visCols[i]} style={{ width: w }} />)}</colgroup>
+        {headRows.length > 0 && <thead>{headRows.map(row)}</thead>}
+        <tbody>{bodyRows.map(row)}</tbody>
+      </table>
+    </>
   );
 }
