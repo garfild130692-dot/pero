@@ -4,6 +4,7 @@
 // десятичная точка. При вводе принимаются и русские имена (СУММ, ЕСЛИ…) и «;» — они приводятся к хранимому виду.
 import { colIndex, colName, MAX_COLS, MAX_ROWS } from './address.js';
 import { functions, lazyFunctions } from './fnlib.js';
+import { functions2 } from './fnlib2.js';
 import { EXCEL_RU } from './fnnames.js';
 
 // ---------- Ошибки и значения ----------
@@ -711,10 +712,11 @@ const FN = {
 // Библиотека функций (fnlib.js) — помощники движка передаются ей явно
 const HELPERS = {
   ERR, err, isErr, toNum, toText, toBool, flat, nums, firstErr, criterion, compare, exactMatcher, wildcard, dateToSerial, serialToDate,
-  toArr, numText, textToNum, round, colName, FN, approxIndex,
+  toArr, numText, textToNum, round, colName, FN, approxIndex, errText,
   evaluate: (...a) => evaluate(...a), parse: (...a) => parse(...a), localize: (...a) => localize(...a), sheetPrefix: (...a) => sheetPrefix(...a),
 };
 Object.assign(FN, functions(HELPERS));
+Object.assign(FN, functions2(HELPERS));
 const LAZY = lazyFunctions(HELPERS);
 export const FUNCTIONS = Object.keys(FN);
 const SCALAR_FN = new Set(['ABS', 'SIGN', 'INT', 'SQRT', 'POWER', 'MOD', 'ROUND', 'ROUNDUP', 'ROUNDDOWN', 'NOT', 'LEN', 'UPPER', 'LOWER',

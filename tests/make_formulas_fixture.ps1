@@ -51,6 +51,9 @@ try {
   $d.Range('G9').Value2 = [double]-2
   $d.Range('G10').Value2 = 'текст'
   $d.Range('G11').Value2 = [double]0
+  # диапазоны критериев для функций баз данных: J1:K2 — «И», L1:L3 — «ИЛИ»
+  $d.Range('J1').Value2 = 'Отдел'; $d.Range('J2').Value2 = 'Склад'; $d.Range('K1').Value2 = 'Сумма'; $d.Range('K2').Value2 = '>500'
+  $d.Range('L1').Value2 = 'Отдел'; $d.Range('L2').Value2 = 'Продажи'; $d.Range('L3').Value2 = 'Склад'
   # трёхмерные ссылки
   $prev = $d
   foreach ($q in 1..3) {
