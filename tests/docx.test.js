@@ -741,3 +741,77 @@ for p in d.paragraphs:
     expect(out).toContain("'Заголовок, который можно отрывать' False None None None");
   });
 });
+
+describe('табуляция', () => {
+  const tabsOf = (doc, t) => {
+    let found = null;
+    const walk = (n) => { if (found) return; if (n.type === 'paragraph' && (n.content || []).map((c) => (c.type === 'tab' ? '\t' : c.text)).join('') === t) found = n; (n.content || []).forEach(walk); };
+    walk(doc);
+    if (!found) throw new Error(`нет абзаца «${t}»`);
+    return found;
+  };
+  it('импорт: узлы tab, позиции с выравниванием и заполнителем, стиль и clear, шаг из settings.xml', async () => {
+    const { doc } = await importDocx(readFileSync('tests/fixtures/layout.docx'));
+    Node.fromJSON(schema, doc).check();
+    expect(doc.attrs.defaultTab).toBe(36); // python-docx: w:defaultTabStop 720
+    const p = tabsOf(doc, 'Москва\t10 октября 2026 г.');
+    expect(p.content.map((c) => c.type)).toEqual(['text', 'tab', 'text']);
+    expect(p.attrs.tabs).toEqual([{ pos: 431.5, align: 'right', leader: 'none' }]);
+    expect(tabsOf(doc, 'Глава 1. Введение\t5').attrs.tabs).toEqual([{ pos: 431.5, align: 'right', leader: 'dot' }]);
+    expect(tabsOf(doc, '\tПо центру').attrs.tabs[0].align).toBe('center');
+    expect(tabsOf(doc, 'Итого:\t1234,56').attrs.tabs[0].align).toBe('decimal');
+    expect(tabsOf(doc, 'а\tб\tв\tг').attrs.tabs ?? null).toBeNull();
+    expect(tabsOf(doc, 'Стиль:\tчетыре\tдевять').attrs.tabs.map((t) => [t.pos, t.align])).toEqual([[113.4, 'left'], [255.1, 'right']]);
+    expect(tabsOf(doc, 'Стиль без 4 см:\tдевять').attrs.tabs.map((t) => t.pos)).toEqual([255.1]); // clear убрал позицию стиля
+  });
+
+  it('round-trip; позиция стиля, убранная в абзаце, пишется как clear; совпадающие со стилем не дублируются', async () => {
+    const a = (await importDocx(readFileSync('tests/fixtures/layout.docx'))).doc;
+    const bytes = await exportDocx(a, { source: readFileSync('tests/fixtures/layout.docx') });
+    writeFileSync('tests/out/layout-tabs.docx', bytes);
+    const b = (await importDocx(bytes)).doc;
+    expect(b).toEqual(a);
+    const xml = await (await JSZip.loadAsync(bytes)).file('word/document.xml').async('string');
+    expect(xml).toMatch(/<w:tabs><w:tab w:val="clear" w:pos="2268"\/><\/w:tabs>/);
+    expect(xml).toMatch(/<w:tabs><w:tab w:val="right" w:leader="dot" w:pos="8630"\/><\/w:tabs>/);
+    expect(xml).toContain('<w:tab/>');
+    // без исходного пакета — тот же результат
+    const c = (await importDocx(await exportDocx(a))).doc;
+    expect(c.content).toEqual(a.content);
+  });
+
+  it('новый документ: settings.xml с шагом 1,25 см и режимом Word 2013+', async () => {
+    const bytes = await exportDocx({ type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text: 'а' }, { type: 'tab' }, { type: 'text', text: 'б' }] }] });
+    const zip = await JSZip.loadAsync(bytes);
+    expect(await zip.file('word/settings.xml').async('string')).toMatch(/<w:defaultTabStop w:val="708"\/>.*compatibilityMode.*w:val="15"/);
+    expect(await zip.file('word/_rels/document.xml.rels').async('string')).toContain('Target="settings.xml"');
+    expect(await zip.file('[Content_Types].xml').async('string')).toContain('/word/settings.xml');
+    const back = (await importDocx(bytes)).doc;
+    expect(back.attrs.defaultTab).toBe(35.4);
+    expect(back.content[0].content.map((c) => c.type)).toEqual(['text', 'tab', 'text']);
+  });
+
+  it('изменённый шаг по умолчанию правит только w:defaultTabStop исходного settings.xml', async () => {
+    const src = readFileSync('tests/fixtures/layout.docx');
+    const a = (await importDocx(src)).doc;
+    a.attrs.defaultTab = 28.35; // 1 см
+    const zip = await JSZip.loadAsync(await exportDocx(a, { source: src }));
+    const orig = await (await JSZip.loadAsync(src)).file('word/settings.xml').async('string');
+    const now = await zip.file('word/settings.xml').async('string');
+    expect(now).toContain('<w:defaultTabStop w:val="567"/>');
+    expect(now.replace('w:val="567"', '')).toBe(orig.replace(/(<w:defaultTabStop\b[^>]*)w:val="\d+"/, '$1'));
+  });
+
+  it('python-docx видит позиции табуляции', () => {
+    const out = execFileSync(PYTHON, ['-c', `
+import docx
+d = docx.Document('tests/out/layout-tabs.docx')
+for p in d.paragraphs:
+    ts = p.paragraph_format.tab_stops
+    if len(ts): print(repr(p.text), [(round(t.position.pt, 2), str(t.alignment).split('.')[-1].split(' ')[0], str(t.leader).split('.')[-1].split(' ')[0]) for t in ts])
+`], { env: { ...process.env, PYTHONIOENCODING: 'utf-8' } }).toString('utf8');
+    // repr() в Python печатает табуляцию как «\t» (два символа)
+    expect(out).toMatch(/'Глава 1\. Введение\\t5' \[\(431\.5, 'RIGHT', 'DOTS'\)\]/);
+    expect(out).toMatch(/'Стиль без 4 см:\\tдевять' \[\(113\.4, 'CLEAR', 'SPACES'\)\]/);
+  });
+});

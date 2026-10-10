@@ -13,6 +13,7 @@ import {
 import { NEW_DOC_PARA } from './paragraph.js';
 import { ParaFormat } from './paraFormat.js';
 import { ParaLayout } from './paraLayout.js';
+import { DEFAULT_TAB, TabNode, Tabs } from './tabs.js';
 import { PeroTable, PeroTableCell, PeroTableHeader, PeroTableRow, TableFormat } from './tableFormat.js';
 import { Opaque } from './opaque.js';
 import { PeroImage } from './image.js';
@@ -41,6 +42,7 @@ const PeroDocument = Document.extend({
       defaultsModified: { default: false }, // «Обычный» изменён в Пере — при сохранении переписать docDefaults
       comments: { default: [] },       // примечания: [{ id, author, initials, date, text }] (см. comments.js)
       commentsEdited: { default: false }, // примечания менялись — при сохранении comments.xml пишется заново
+      defaultTab: { default: DEFAULT_TAB }, // шаг позиций табуляции по умолчанию, pt (settings.xml w:defaultTabStop)
     };
   },
 });
@@ -51,7 +53,7 @@ export function loadDocument(editor, json) {
   editor.commands.setContent(json, { emitUpdate: false });
   const attrs = {
     fontFamily: DEFAULT_FONT, fontSize: DEFAULT_SIZE, para: NEW_DOC_PARA, sectPr: null, hf: EMPTY_HF, styles: [], defaultsModified: false,
-    comments: [], commentsEdited: false,
+    comments: [], commentsEdited: false, defaultTab: DEFAULT_TAB,
     ...((json && json.attrs) || {}),
   };
   const { tr } = editor.state;
@@ -195,6 +197,8 @@ export const extensions = [
   TextAlign.configure({ types: ['heading', 'paragraph'] }),
   ParaFormat,
   ParaLayout,
+  TabNode,
+  Tabs,
   ParagraphStyles,
   Comments,
   Insertion,

@@ -1,9 +1,21 @@
-// Горизонтальная линейка над страницей: деления в см от левого поля и маркеры отступов абзаца.
+// Горизонтальная линейка над страницей: деления в см от левого поля, маркеры отступов абзаца и позиции табуляции.
+// Табуляция как в Word: тип — кнопка в углу линейки; щелчок по линейке — новая позиция, перетаскивание — сдвиг,
+// увод вниз с линейки — удалить; серые засечки — позиции по умолчанию.
 import React, { useRef, useState } from 'react';
 import { useEditorState } from '@tiptap/react';
 import { effectivePara } from './editor/paraFormat.js';
 import { PT_PER_CM, cmToPt, fmtNum, ptToCm } from './editor/paragraph.js';
 import { parseSectPr } from './editor/page.js';
+import { DEFAULT_TAB } from './editor/tabs.js';
+
+const TAB_TYPES = [['left', 'По левому краю'], ['center', 'По центру'], ['right', 'По правому краю'], ['decimal', 'По разделителю'], ['bar', 'Вертикальная черта']];
+// Значок позиции табуляции (как на линейке Word)
+function TabMark({ align, size = 9 }) {
+  const d = {
+    left: 'M2 1v7h6', right: 'M7 1v7H1', center: 'M4.5 1v7M1 8h7', decimal: 'M4.5 1v7M1 8h7M6.5 4.5h.1', bar: 'M4.5 0v9',
+  }[align] || 'M2 1v7h6';
+  return <svg width={size} height={size} viewBox="0 0 9 9" aria-hidden="true"><path d={d} fill="none" stroke="currentColor" strokeWidth="1.6" /></svg>;
+}
 
 const SNAP = PT_PER_CM / 4;         // привязка к 0,25 см
 
@@ -34,6 +46,8 @@ function rulerState(e) {
     left: p ? p.indentLeft : 0,
     right: p ? p.indentRight : 0,
     first: p ? p.indentFirst : 0,
+    tabs: node ? node.attrs.tabs || [] : [],
+    defaultTab: e.state.doc.attrs.defaultTab || DEFAULT_TAB,
   };
 }
 
@@ -59,6 +73,7 @@ export default function Ruler({ editor, zoom }) {
   const s = useEditorState({ editor, selector: ({ editor: e }) => rulerState(e) });
   const { PAGE_W, MARGIN_L, MARGIN_R, TEXT_W } = geometry(s.sectPr);
   const [drag, setDrag] = useState(null); // { kind, x } — x в pt от левого края текста
+  const [tabType, setTabType] = useState('left');
   const boxRef = useRef(null);
   const scale = zoom / 100;
 
@@ -95,6 +110,49 @@ export default function Ruler({ editor, zoom }) {
     window.addEventListener('mouseup', up);
   };
 
+  // ---------- Табуляция ----------
+  const ptAt = (clientX, alt) => {
+    const rect = boxRef.current.getBoundingClientRect();
+    const pt = (clientX - rect.left) / (rect.width / PAGE_W) - MARGIN_L;
+    return alt ? pt : Math.round(pt / SNAP) * SNAP;
+  };
+  const r2 = (v) => cmToPt(ptToCm(v));
+  // щелчок по свободному месту линейки — новая позиция выбранного типа
+  const addTab = (ev) => {
+    if (!s.active || ev.button !== 0 || ev.target.closest('.rm, .rt')) return;
+    ev.preventDefault();
+    const pt = ptAt(ev.clientX, ev.altKey);
+    if (pt <= 0 || pt > TEXT_W + 0.5) return;
+    editor.chain().focus().addTabStop({ pos: r2(pt), align: tabType }).run();
+  };
+  const startTabDrag = (stop) => (ev) => {
+    ev.preventDefault();
+    ev.stopPropagation();
+    const rect = boxRef.current.getBoundingClientRect();
+    let cur = stop.pos;
+    let off = false;
+    setDrag({ kind: 'tab', x: cur, align: stop.align, from: stop.pos });
+    const move = (e) => {
+      off = e.clientY > rect.bottom + 18 || e.clientY < rect.top - 18; // увели с линейки — удалить
+      cur = Math.min(Math.max(ptAt(e.clientX, e.altKey), 0), TEXT_W);
+      setDrag({ kind: 'tab', x: cur, align: stop.align, from: stop.pos, off });
+    };
+    const up = () => {
+      window.removeEventListener('mousemove', move);
+      window.removeEventListener('mouseup', up);
+      setDrag(null);
+      if (off) editor.chain().focus().removeTabStop(stop.pos).run();
+      else if (Math.abs(cur - stop.pos) > 0.01) editor.chain().focus().moveTabStop(stop.pos, r2(cur)).run();
+      else editor.commands.focus();
+    };
+    window.addEventListener('mousemove', move);
+    window.addEventListener('mouseup', up);
+  };
+  const lastCustom = s.tabs.reduce((m, t) => Math.max(m, t.pos), 0);
+  const defaults = [];
+  for (let x = s.defaultTab; x < TEXT_W; x += s.defaultTab) if (x > lastCustom + 0.3) defaults.push(x);
+  const typeIdx = TAB_TYPES.findIndex(([t]) => t === tabType);
+
   // Позиции маркеров (во время перетаскивания — предварительные)
   let { left, right, first } = s;
   if (drag) {
@@ -108,7 +166,12 @@ export default function Ruler({ editor, zoom }) {
 
   return (
     <div className="ruler-bar">
-      <div className="ruler" ref={boxRef} style={{ width: `${(PAGE_W / 0.75) * scale}px` }}>
+      <div className="ruler" ref={boxRef} style={{ width: `${(PAGE_W / 0.75) * scale}px` }} onMouseDown={addTab}>
+        <button type="button" className="ruler-tabtype" title={`Тип табуляции: ${TAB_TYPES[typeIdx][1]} (щёлкните, чтобы сменить; щелчок по линейке — поставить)`}
+          onMouseDown={(e) => { e.preventDefault(); e.stopPropagation(); }}
+          onClick={() => setTabType(TAB_TYPES[(typeIdx + 1) % TAB_TYPES.length][0])}>
+          <TabMark align={tabType} size={11} />
+        </button>
         <svg viewBox={`0 0 ${PAGE_W} 16`} aria-hidden="true">
           <rect x={0} y={2} width={MARGIN_L} height={12} className="ruler-margin" />
           <rect x={MARGIN_L} y={2} width={TEXT_W} height={12} className="ruler-text" />
@@ -121,9 +184,17 @@ export default function Ruler({ editor, zoom }) {
             <div className="rm rm-hanging" style={at(left)} title={tip('Выступ', -first)} onMouseDown={startDrag('hanging')} />
             <div className="rm rm-left" style={at(left)} title={tip('Отступ слева', left)} onMouseDown={startDrag('left')} />
             <div className="rm rm-right" style={at(TEXT_W - right)} title={tip('Отступ справа', right)} onMouseDown={startDrag('right')} />
+            {defaults.map((x) => <div key={`d${x}`} className="rt-default" style={at(x)} />)}
+            {s.tabs.filter((t) => !(drag && drag.kind === 'tab' && Math.abs(t.pos - (drag.from ?? -1)) < 0.01)).map((t) => (
+              <div key={`t${t.pos}`} className={`rt rt-${t.align}`} style={at(t.pos)} title={`${tip(TAB_TYPES.find(([a]) => a === t.align)?.[1] || 'Табуляция', t.pos)}. Перетащите вниз, чтобы удалить`}
+                onMouseDown={startTabDrag(t)}>
+                <TabMark align={t.align} />
+              </div>
+            ))}
           </>
         )}
-        {drag && <div className="ruler-guide" style={at(drag.x)} />}
+        {drag && drag.kind === 'tab' && !drag.off && <div className={`rt rt-${drag.align}`} style={at(drag.x)}><TabMark align={drag.align} /></div>}
+        {drag && <div className={`ruler-guide${drag.off ? ' off' : ''}`} style={at(drag.x)} />}
       </div>
     </div>
   );

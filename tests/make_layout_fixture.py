@@ -1,8 +1,11 @@
-# Генерирует tests/fixtures/layout.docx средствами python-docx: положение абзаца на странице, границы и заливка абзаца.
+# Генерирует tests/fixtures/layout.docx средствами python-docx: положение абзаца на странице, границы и заливка абзаца,
+# позиции табуляции (выравнивание, заполнитель, стиль, удаление позиции стиля, шаг по умолчанию).
 # Запуск: python tests/make_layout_fixture.py tests/fixtures/layout.docx
 import sys
 from docx import Document
 from docx.enum.style import WD_STYLE_TYPE
+from docx.enum.text import WD_TAB_ALIGNMENT, WD_TAB_LEADER
+from docx.shared import Cm, Twips
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 
@@ -55,5 +58,26 @@ p = d.add_paragraph('Нижняя граница двойная красная.'
 p = d.add_paragraph('Заливка жёлтым.'); shade(p, 'FFFF00')
 p = d.add_paragraph('Рамка с заливкой, первый абзац группы.'); border(p, ['top', 'left', 'bottom', 'right', 'between']); shade(p, 'DEEBF7')
 p = d.add_paragraph('Второй абзац группы.'); border(p, ['top', 'left', 'bottom', 'right', 'between']); shade(p, 'DEEBF7')
+
+# ---------- Табуляция ----------
+d.add_heading('Табуляция', 1)
+p = d.add_paragraph('Москва\t10 октября 2026 г.')
+p.paragraph_format.tab_stops.add_tab_stop(Twips(8630), WD_TAB_ALIGNMENT.RIGHT)
+p = d.add_paragraph('Глава 1. Введение\t5')
+p.paragraph_format.tab_stops.add_tab_stop(Twips(8630), WD_TAB_ALIGNMENT.RIGHT, WD_TAB_LEADER.DOTS)
+p = d.add_paragraph('\tПо центру')
+p.paragraph_format.tab_stops.add_tab_stop(Cm(8), WD_TAB_ALIGNMENT.CENTER)
+p = d.add_paragraph('Итого:\t1234,56')
+p.paragraph_format.tab_stops.add_tab_stop(Cm(10), WD_TAB_ALIGNMENT.DECIMAL)
+d.add_paragraph('а\tб\tв\tг')  # позиции по умолчанию
+p = d.add_paragraph('Слева 3 см:\tтекст\tдальше по умолчанию')
+p.paragraph_format.tab_stops.add_tab_stop(Cm(3))
+ts = d.styles.add_style('Реквизиты Перо', WD_STYLE_TYPE.PARAGRAPH)
+ts.base_style = d.styles['Normal']
+ts.paragraph_format.tab_stops.add_tab_stop(Cm(4))
+ts.paragraph_format.tab_stops.add_tab_stop(Cm(9), WD_TAB_ALIGNMENT.RIGHT)
+d.add_paragraph('Стиль:\tчетыре\tдевять', style='Реквизиты Перо')
+p = d.add_paragraph('Стиль без 4 см:\tдевять', style='Реквизиты Перо')
+p.paragraph_format.tab_stops.add_tab_stop(Cm(4), WD_TAB_ALIGNMENT.CLEAR)
 
 d.save(sys.argv[1])

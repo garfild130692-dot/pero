@@ -69,7 +69,7 @@ body { background: var(--workspace); overflow: hidden; }
 .glyph { font-size: 15px; font-family: Georgia, 'Times New Roman', serif; min-width: 12px; }
 .glyph.serif { font-style: italic; }
 
-.style-gallery { max-width: 430px; overflow-x: auto; display: flex; gap: 3px; background: #fff; border: 1px solid var(--line); padding: 3px; border-radius: 3px; }
+.style-gallery { max-width: clamp(170px, calc(100vw - 880px), 430px); /* узкое окно — галерея сжимается, лента не прокручивается */ overflow-x: auto; display: flex; gap: 3px; background: #fff; border: 1px solid var(--line); padding: 3px; border-radius: 3px; }
 .style-card {
   width: 76px; height: 58px; border: 1px solid transparent; background: #fff; cursor: pointer;
   display: flex; flex-direction: column; justify-content: center; align-items: flex-start; padding: 2px 6px; border-radius: 2px;
@@ -514,3 +514,33 @@ p[data-section-break]::after {
 .pd-tabs button.active { color: var(--accent); border-bottom-color: var(--accent); font-weight: 600; }
 .pd-checks { display: grid; gap: 8px; padding: 4px 0; }
 .pd-check { display: flex; align-items: center; gap: 8px; cursor: pointer; }
+
+/* ---------- Табуляция (tabs.js): ширину выставляет раскладка по позициям ---------- */
+.page-content .pero-tab { display: inline-block; position: relative; width: 2em; overflow: hidden; white-space: nowrap; vertical-align: bottom; line-height: inherit; text-indent: 0; }
+/* заполнитель — поверх метки, высоту строки не меняет */
+.page-content .pero-tab[class*="tab-leader-"]::after { position: absolute; left: 0; right: 0; top: 0; white-space: nowrap; overflow: hidden; letter-spacing: 0; text-align: right; }
+.page-content .pero-tab.tab-leader-dot::after { content: '................................................................................................................................................................................................................................................................................................'; }
+.page-content .pero-tab.tab-leader-middleDot::after { content: '································································································································································'; }
+.page-content .pero-tab.tab-leader-hyphen::after { content: '--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------'; }
+.page-content .pero-tab.tab-leader-underscore::after, .page-content .pero-tab.tab-leader-heavy::after { content: ''; top: auto; bottom: 0.15em; border-bottom: 1px solid currentColor; }
+.page-content .pero-tab.tab-leader-heavy::after { border-bottom-width: 2px; }
+/* Позиции табуляции на линейке */
+.ruler-tabtype { position: absolute; left: -26px; top: 1px; width: 18px; height: 18px; padding: 0; border: 1px solid #b9b9b9; background: #fff; border-radius: 2px; display: grid; place-items: center; cursor: pointer; color: #333; }
+.ruler-tabtype:hover { border-color: var(--accent); color: var(--accent); }
+.rt { position: absolute; bottom: 1px; width: 11px; height: 11px; transform: translateX(-2px); color: #333; cursor: ew-resize; line-height: 0; }
+.rt-right { transform: translateX(-9px); }
+.rt-center, .rt-decimal, .rt-bar { transform: translateX(-5.5px); }
+.rt:hover { color: var(--accent); }
+.rt-default { position: absolute; bottom: 0; width: 1px; height: 3px; background: #9a9a9a; pointer-events: none; }
+.ruler-guide.off { border-left-color: #c00000; }
+/* Диалог «Табуляция» */
+.modal.tabs-dlg { width: 520px; }
+.tabs-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.tabs-list { margin-top: 6px; border: 1px solid #c4c4c4; height: 150px; overflow-y: auto; background: #fff; }
+.tabs-list button { display: block; width: 100%; text-align: left; border: 0; background: transparent; padding: 3px 8px; font: inherit; cursor: pointer; }
+.tabs-list button:hover { background: var(--accent-soft); }
+.tabs-list button.on { background: var(--accent); color: #fff; }
+.tabs-empty { padding: 6px 8px; color: var(--muted); }
+.tabs-actions { display: flex; gap: 6px; margin-top: 10px; }
+.tabs-dlg fieldset { margin-top: 8px; }
+.tabs-dlg .pd-check { margin: 2px 0; }

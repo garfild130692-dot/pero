@@ -4,6 +4,7 @@ import React, { useEffect, useState } from 'react';
 import { effectivePara } from './editor/paraFormat.js';
 import { cmToPt, fmtNum, ptToCm } from './editor/paragraph.js';
 import { LAYOUT_KEYS, effectiveLayout } from './editor/paraLayout.js';
+import TabsDialog from './TabsDialog.jsx';
 
 const LINE_TYPES = [
   ['single', 'Одинарный'], ['1.5', '1,5 строки'], ['double', 'Двойной'],
@@ -76,16 +77,18 @@ export default function ParagraphDialog({ editor, onClose }) {
     };
   });
   const [tab, setTab] = useState('indent');
+  const [tabsOpen, setTabsOpen] = useState(false);
   const [f, setF] = useState(init);
   const set = (k) => (v) => setF((s) => ({ ...s, [k]: v }));
   const [error, setError] = useState('');
 
   useEffect(() => { setError(''); }, [f]);
 
-  const apply = () => {
+  // then — что сделать после применения (по умолчанию закрыть); при ошибке ввода диалог остаётся открытым
+  const apply = (then = onClose) => {
     const changed = (k) => f[k] !== init[k];
     const patch = {};
-    const bad = (msg) => { setError(msg); return true; };
+    const bad = (msg) => { setError(msg); return false; };
 
     if (changed('left')) { const v = num(f.left); if (v === null || Math.abs(v) > 55) return bad('Отступ слева: число от −55 до 55 см'); patch.indentLeft = cmToPt(v); }
     if (changed('right')) { const v = num(f.right); if (v === null || Math.abs(v) > 55) return bad('Отступ справа: число от −55 до 55 см'); patch.indentRight = cmToPt(v); }
@@ -118,7 +121,7 @@ export default function ParagraphDialog({ editor, onClose }) {
     if (Object.keys(layout).length) chain.setParagraphLayout(layout);
     if (changed('align')) chain.setTextAlign(f.align);
     chain.run();
-    onClose();
+    then();
     return true;
   };
 
@@ -130,6 +133,7 @@ export default function ParagraphDialog({ editor, onClose }) {
   }));
   const onFirstType = (t) => setF((s) => ({ ...s, firstType: t, firstBy: t === 'none' ? '' : s.firstBy || '1,25' }));
 
+  if (tabsOpen) return <TabsDialog editor={editor} onClose={onClose} />;
   return (
     <div className="modal-backdrop" onMouseDown={onClose}>
       <div className="modal pd" role="dialog" aria-label="Абзац" onMouseDown={(e) => e.stopPropagation()}
@@ -202,7 +206,9 @@ export default function ParagraphDialog({ editor, onClose }) {
           {error && <div className="pd-error" role="alert">{error}</div>}
         </div>
         <div className="modal-actions">
-          <button className="btn primary" onClick={apply}>ОК</button>
+          <button className="btn" onClick={() => apply(() => setTabsOpen(true))} title="Применить и открыть позиции табуляции">Табуляция…</button>
+          <span className="spacer" />
+          <button className="btn primary" onClick={() => apply()}>ОК</button>
           <button className="btn" onClick={onClose}>Отмена</button>
         </div>
       </div>

@@ -8,6 +8,7 @@ import { EMU_PER_PX, dataUrlToBytes, extOf } from '../editor/image.js';
 import { setHfRefs, writeHfPart } from '../editor/page.js';
 import { commentsXml } from '../editor/comments.js';
 import { layoutXmlHead, layoutXmlTail } from '../editor/paraLayout.js';
+import { DEFAULT_TAB, tabsXml } from '../editor/tabs.js';
 
 const COMMENTS_TYPE = 'application/vnd.openxmlformats-officedocument.wordprocessingml.comments+xml';
 
@@ -23,7 +24,7 @@ function customStyleXml(st, normalId) {
   if (r.fontSize) rPr += `<w:sz w:val="${Math.round(r.fontSize * 2)}"/><w:szCs w:val="${Math.round(r.fontSize * 2)}"/>`;
   if (r.underline) rPr += '<w:u w:val="single"/>';
   const jc = { center: 'center', right: 'right', justify: 'both' }[st.align];
-  const pPr = spacingXml(p) + indXml(p) + (jc ? `<w:jc w:val="${jc}"/>` : '');
+  const pPr = tabsXml(st.tabs) + spacingXml(p) + indXml(p) + (jc ? `<w:jc w:val="${jc}"/>` : '');
   return `<w:style w:type="paragraph" w:customStyle="1" w:styleId="${esc(st.id)}"><w:name w:val="${esc(st.name || st.id)}"/>` +
     `${normalId ? `<w:basedOn w:val="${esc(normalId)}"/>` : ''}<w:qFormat/>${pPr ? `<w:pPr>${pPr}</w:pPr>` : ''}${rPr ? `<w:rPr>${rPr}</w:rPr>` : ''}</w:style>`;
 }
@@ -105,7 +106,8 @@ const DEFAULT_SECTPR = `<w:sectPr><w:pgSz w:w="${PAGE.w}" w:h="${PAGE.h}"/>` +
   '<w:cols w:space="708"/><w:docGrid w:linePitch="360"/></w:sectPr>';
 
 class Exporter {
-  constructor({ styleIds = OUR_STYLE_IDS, numBase = 1, relTargets = null, imgBase = 0, sect = (x) => x, customStyles = [] } = {}) {
+  constructor({ styleIds = OUR_STYLE_IDS, numBase = 1, relTargets = null, imgBase = 0, sect = (x) => x, customStyles = [], styleTabs = {} } = {}) {
+    this.styleTabs = styleTabs; // id пользовательского стиля → его позиции табуляции (убранные в абзаце пишутся как clear)
     this.sect = sect;             // преобразование XML sectPr (подстановка ссылок на свои колонтитулы)
     this.customStyles = new Set(customStyles); // id пользовательских стилей документа
     this.imgBase = imgBase;       // номера картинок Пера, уже занятые в исходном пакете
@@ -132,7 +134,7 @@ class Exporter {
     if (node.type === 'opaque') return node.attrs.xml || ''; // сохраняемый фрагмент — как был
     if (node.type === 'image') return this.image(node);
     if (node.type === 'hardBreak') return '<w:r><w:br/></w:r>';
-    if (node.type !== 'text') return '';
+    if (node.type !== 'text' && node.type !== 'tab') return '';
     const marks = node.marks || [];
     const has = (t) => marks.some((m) => m.type === t);
     const attrs = (t) => (marks.find((m) => m.type === t) || {}).attrs || {};
@@ -163,12 +165,16 @@ class Exporter {
     const del = marks.find((m) => m.type === 'deletion');
     const ins = marks.find((m) => m.type === 'insertion');
     const tTag = del ? 'w:delText' : 'w:t'; // удалённый текст — w:delText
-    const parts = node.text.split('\t');
     let inner = '';
-    parts.forEach((p, i) => {
-      if (i > 0) inner += '<w:tab/>';
-      if (p) inner += `<${tTag} xml:space="preserve">${esc(p)}</${tTag}>`;
-    });
+    if (node.type === 'tab') {
+      const pt = node.attrs && node.attrs.ptab;
+      inner = pt ? `<w:ptab w:relativeTo="${esc(pt.relativeTo || 'margin')}" w:alignment="${esc(pt.alignment || 'left')}" w:leader="${esc(pt.leader || 'none')}"/>` : '<w:tab/>';
+    } else {
+      node.text.split('\t').forEach((p, i) => {
+        if (i > 0) inner += '<w:tab/>';
+        if (p) inner += `<${tTag} xml:space="preserve">${esc(p)}</${tTag}>`;
+      });
+    }
     let r = `<w:r>${rPrXml}${inner}</w:r>`;
     // исправления: w:ins / w:del вокруг прогона (гиперссылка — снаружи)
     const rev = del || ins;
@@ -214,10 +220,11 @@ class Exporter {
     const pStyle = style || (node.type === 'heading' ? this.styleIds['Heading' + Math.min(Math.max(attrs.level || 1, 1), 6)]
       : (attrs.styleId && this.customStyles.has(attrs.styleId) ? attrs.styleId : null));
     if (pStyle) pPr += `<w:pStyle w:val="${pStyle}"/>`;
-    // порядок в pPr по схеме: pStyle, keepNext, keepLines, pageBreakBefore, widowControl, numPr, pBdr, shd, spacing, ind, jc
+    // порядок в pPr по схеме: pStyle, keepNext, keepLines, pageBreakBefore, widowControl, numPr, pBdr, shd, tabs, spacing, ind, jc
     pPr += layoutXmlHead(attrs);
     if (numPr) pPr += `<w:numPr><w:ilvl w:val="${numPr.ilvl}"/><w:numId w:val="${numPr.numId}"/></w:numPr>`;
     pPr += layoutXmlTail(attrs);
+    pPr += tabsXml(attrs.tabs, (pStyle && this.styleTabs[pStyle]) || []);
     pPr += spacingXml(attrs) + indXml(attrs);
     const jc = { center: 'center', right: 'right', justify: 'both' }[attrs.textAlign];
     if (jc) pPr += `<w:jc w:val="${jc}"/>`;
@@ -365,6 +372,7 @@ const CONTENT_TYPES = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
 <Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/>
 <Override PartName="/word/numbering.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.numbering+xml"/>
+<Override PartName="/word/settings.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.settings+xml"/>
 <Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/>
 <Override PartName="/docProps/app.xml" ContentType="application/vnd.openxmlformats-officedocument.extended-properties+xml"/>
 </Types>`;
@@ -375,6 +383,13 @@ const ROOT_RELS = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties" Target="docProps/core.xml"/>
 <Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/extended-properties" Target="docProps/app.xml"/>
 </Relationships>`;
+
+// Параметры документа нового файла: шаг табуляции и режим Word 2013+ (без него Word открывает файл в режиме совместимости)
+function settingsXml(defaultTab) {
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<w:settings ${NS}>` +
+    `<w:defaultTabStop w:val="${Math.round((defaultTab || DEFAULT_TAB) * 20)}"/><w:characterSpacingControl w:val="doNotCompress"/>` +
+    '<w:compat><w:compatSetting w:name="compatibilityMode" w:uri="http://schemas.microsoft.com/office/word" w:val="15"/></w:compat></w:settings>';
+}
 
 function coreXml() {
   const now = new Date().toISOString().replace(/\.\d+Z$/, 'Z');
@@ -593,8 +608,9 @@ export async function exportDocx(doc, { source } = {}) {
   const addHfTypes = (ct, prefix) => hfParts.reduce((acc, p) => addOverride(acc, prefix + p.file,
     `application/vnd.openxmlformats-officedocument.wordprocessingml.${p.type}+xml`), ct);
   const customs = da.styles || [];
+  const styleTabs = Object.fromEntries(customs.filter((s) => s.tabs).map((s) => [s.id, s.tabs]));
   if (!source) {
-    const ex = new Exporter({ sect, customStyles: customs.map((s) => s.id) });
+    const ex = new Exporter({ sect, customStyles: customs.map((s) => s.id), styleTabs });
     let body = ex.blocks(doc.content || []);
     if (!body) body = '<w:p/>';
     const documentXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<w:document ${NS}><w:body>${body}${sectPr}</w:body></w:document>`;
@@ -602,6 +618,7 @@ export async function exportDocx(doc, { source } = {}) {
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
 <Relationship Id="rId1" Type="${relType('styles')}" Target="styles.xml"/>
 <Relationship Id="rId2" Type="${relType('numbering')}" Target="numbering.xml"/>
+<Relationship Id="rId3" Type="${relType('settings')}" Target="settings.xml"/>
 ${ex.links.map((href, i) => `<Relationship Id="rIdPeroL${i + 1}" Type="${relType('hyperlink')}" Target="${esc(href)}" TargetMode="External"/>`).join('\n')}
 ${ex.images.map((img) => `<Relationship Id="${img.rid}" Type="${relType('image')}" Target="${img.path}"/>`).join('\n')}
 ${hfRels}
@@ -621,6 +638,7 @@ ${(da.comments || []).length ? `<Relationship Id="rIdPeroC" Type="${relType('com
     zip.file('word/styles.xml', stylesXml(da.fontFamily || DEFAULT_FONT, parseSize(da.fontSize) || DEFAULT_SIZE, { ...NEW_DOC_PARA, ...(da.para || {}) })
       .replace('</w:styles>', `${customs.map((s) => customStyleXml(s, 'Normal')).join('')}</w:styles>`));
     zip.file('word/numbering.xml', numberingXml(ex.orderedNums));
+    zip.file('word/settings.xml', settingsXml(da.defaultTab));
     zip.file('word/_rels/document.xml.rels', docRels);
     return zip.generateAsync({ type: 'uint8array', compression: 'DEFLATE' });
   }
@@ -669,7 +687,7 @@ ${(da.comments || []).length ? `<Relationship Id="rIdPeroC" Type="${relType('com
   // картинки, добавленные Пером при прошлых сохранениях, остаются; новые нумеруются дальше
   const imgBase = Math.max(0, ...Object.keys(zip.files).map((n) => +((/\/media\/pero_image(\d+)\.\w+$/.exec(n) || [])[1] || 0)),
     ...[...src.rels.matchAll(/Id="rIdPeroImg(\d+)"/g)].map((m) => +m[1]));
-  const ex = new Exporter({ styleIds, numBase, relTargets: src.relTargets, imgBase, sect, customStyles: customs.map((s) => s.id) });
+  const ex = new Exporter({ styleIds, numBase, relTargets: src.relTargets, imgBase, sect, customStyles: customs.map((s) => s.id), styleTabs });
   let body = ex.blocks(doc.content || []);
   if (!body) body = '<w:p/>';
   body = stripRootNs(body + sectPr, src.rootNs);
@@ -722,6 +740,19 @@ ${(da.comments || []).length ? `<Relationship Id="rIdPeroC" Type="${relType('com
       zip.remove(cPath);
       rels = rels.replace(cm[0], '');
       ct = ct.replace(new RegExp(`<Override\\b[^>]*PartName="/${cPath.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&')}"[^>]*/>`), '');
+    }
+  }
+  // шаг табуляции изменён в Пере — правим только w:defaultTabStop в исходном settings.xml
+  const sm = /<Relationship\b[^>]*Type="[^"]*\/settings"[^>]*\/>/.exec(rels);
+  const st = sm && /Target="([^"]+)"/.exec(sm[0]);
+  if (st && da.defaultTab) {
+    const sPath = resolvePart(src.dir, st[1]);
+    const sx = zip.file(sPath) ? await zip.file(sPath).async('string') : null;
+    const want = Math.round(da.defaultTab * 20);
+    const cur = sx && /<w:defaultTabStop\b[^>]*w:val="(\d+)"/.exec(sx);
+    if (sx && (!cur || +cur[1] !== want)) {
+      zip.file(sPath, cur ? sx.replace(cur[0], cur[0].replace(/w:val="\d+"/, `w:val="${want}"`))
+        : sx.replace(/(<w:settings\b[^>]*>)/, `$1<w:defaultTabStop w:val="${want}"/>`));
     }
   }
   ct = addImageTypes(ct, ex.images);

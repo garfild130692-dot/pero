@@ -9,6 +9,7 @@ import { EMU_PER_PX, bytesToBase64, mimeOf } from '../editor/image.js';
 import { readHfPart } from '../editor/page.js';
 import { readComments } from '../editor/comments.js';
 import { layoutAttrs, readLayoutProps } from '../editor/paraLayout.js';
+import { applyTabLayer, readTabs } from '../editor/tabs.js';
 
 const W = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main';
 const R = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships';
@@ -101,6 +102,7 @@ function parseStyles(doc, theme) {
       marks: readRunMarks(rPr, theme),
       para: readParaProps(pPr),
       layout: readLayoutProps(pPr, child, wAttr), // «не отрывать», границы, заливка…
+      tabs: child(pPr, 'tabs') ? readTabs(child(pPr, 'tabs'), children, wAttr) : null, // позиции табуляции
       tblBorders: readBorders(child(child(st, 'tblPr'), 'tblBorders'), TABLE_SIDES), // у стилей таблиц
     };
     const isDefault = ['1', 'true', 'on'].includes(String(wAttr(st, 'default')).toLowerCase());
@@ -109,6 +111,7 @@ function parseStyles(doc, theme) {
   const rPrDefault = child(child(child(root, 'docDefaults'), 'rPrDefault'), 'rPr');
   defaults.marks = readRunMarks(rPrDefault, theme);
   defaults.para = readParaProps(child(child(child(root, 'docDefaults'), 'pPrDefault'), 'pPr'));
+  defaults.tabs = readTabs(child(child(child(child(root, 'docDefaults'), 'pPrDefault'), 'pPr'), 'tabs'), children, wAttr);
   defaults.layout = readLayoutProps(child(child(child(root, 'docDefaults'), 'pPrDefault'), 'pPr'), child, wAttr);
   return { map, defaults, defaultPara };
 }
@@ -128,6 +131,12 @@ function resolvedStyle(styles, styleId, cache, key) {
 const resolvedStyleMarks = (styles, id, cache) => resolvedStyle(styles, id, cache, 'marks');
 const resolvedStylePara = (styles, id, cache) => resolvedStyle(styles, id, cache, 'para');
 const resolvedStyleLayout = (styles, id, cache) => resolvedStyle(styles, id, cache, 'layout');
+// Позиции табуляции стиля с учётом basedOn: слои применяются от корня (clear убирает позицию родителя)
+function resolvedStyleTabs(styles, styleId, base = []) {
+  const chain = [];
+  for (let id = styleId; id && styles[id] && chain.length < 10 && !chain.includes(id); id = styles[id].basedOn) chain.push(id);
+  return chain.reverse().reduce((list, id) => applyTabLayer(list, styles[id].tabs), base);
+}
 
 // ---------- Границы таблиц и ячеек ----------
 // <w:tblBorders>/<w:tcBorders> → { сторона: граница } только для заданных сторон (start/end = left/right)
@@ -364,6 +373,7 @@ class Importer {
     this.docDefaults = ctx.docDefaults;
     this.docPara = ctx.docPara;
     this.docLayout = ctx.docLayout;
+    this.docTabs = ctx.docTabs;
     this.usedStyles = {};  // пользовательские стили абзацев, на которые ссылается документ
     this.rev = null;       // текущая правка (внутри w:ins / w:del)
     this.fontBase = null;  // шрифт/размер, от которых считается прямое форматирование в текущем абзаце
@@ -455,7 +465,13 @@ class Importer {
     for (const n of children(r)) {
       switch (ln(n)) {
         case 't': case 'delText': text(n.textContent); break;
-        case 'tab': case 'ptab': text('\t'); break;
+        case 'tab': push(marks.length ? { type: 'tab', marks } : { type: 'tab' }); break;
+        case 'ptab': {
+          // абсолютная табуляция (колонтитулы): выравнивание относительно полей
+          const ptab = { alignment: wAttr(n, 'alignment') || 'left', relativeTo: wAttr(n, 'relativeTo') || 'margin', leader: wAttr(n, 'leader') || 'none' };
+          push(marks.length ? { type: 'tab', attrs: { ptab }, marks } : { type: 'tab', attrs: { ptab } });
+          break;
+        }
         case 'noBreakHyphen': text('‑'); break;
         case 'softHyphen': text('\u00ad'); break;
         case 'br': {
@@ -517,7 +533,8 @@ class Importer {
     const para = Object.fromEntries(Object.entries(diff).filter(([, v]) => v != null));
     const jc = styleProp(this.styles, id, 'jc');
     const align = { center: 'center', right: 'right', end: 'right', both: 'justify', distribute: 'justify' }[jc] || null;
-    const def = { id, name: this.styles[id].displayName, para, run, align, origin: 'file', modified: false };
+    const tabs = resolvedStyleTabs(this.styles, id, applyTabLayer([], this.docTabs));
+    const def = { id, name: this.styles[id].displayName, para, run, align, origin: 'file', modified: false, ...(tabs.length ? { tabs } : {}) };
     this.usedStyles[id] = def;
     return def;
   }
@@ -567,6 +584,10 @@ class Importer {
     const para = paraDiff(values, base);
 
     // Положение на странице, границы, заливка: умолчания документа ← стиль (с basedOn) ← прямые
+    // Позиции табуляции: умолчания документа ← стиль ← прямые (действующий список целиком)
+    const tabs = applyTabLayer(resolvedStyleTabs(this.styles, styleId, applyTabLayer([], this.docTabs)),
+      child(pPr, 'tabs') ? readTabs(child(pPr, 'tabs'), children, wAttr) : null);
+    if (tabs.length) para.tabs = tabs;
     const layout = layoutAttrs({ ...(this.docLayout || {}), ...resolvedStyleLayout(this.styles, styleId, this.styleCache), ...readLayoutProps(pPr, child, wAttr) }, !!level);
     const node = level
       ? { type: 'heading', attrs: { level, textAlign, ...para, ...layout }, content }
@@ -728,6 +749,10 @@ export async function importDocx(data) {
   const docPara = { ...WORD_FALLBACK_PARA, ...defaults.para, ...resolvedStylePara(styles, defaultPara, {}) };
   // Картинки документа: связь типа image → файл в пакете → data:-URL (для показа и пересохранения)
   const rels = parseRels(await read('word/_rels/document.xml.rels'));
+  // Шаг позиций табуляции по умолчанию (settings.xml); нет — как Word без настроек: 720 твипов
+  const settings = await read('word/settings.xml');
+  const dts = settings ? +wAttr(child(settings.documentElement, 'defaultTabStop'), 'val') : NaN;
+  const defaultTab = dts > 0 ? dts / 20 : 36;
   const media = {};
   for (const [rid, rel] of Object.entries(rels)) {
     if (!/\/image$/.test(rel.type || '') || !rel.target || /^[a-z]+:/i.test(rel.target)) continue; // внешние ссылки — нет
@@ -743,6 +768,7 @@ export async function importDocx(data) {
     docDefaults,
     docPara,
     docLayout: defaults.layout,
+    docTabs: defaults.tabs,
     numbering: parseNumbering(await read('word/numbering.xml')),
     rels,
   });
@@ -776,7 +802,7 @@ export async function importDocx(data) {
   return {
     doc: {
       type: 'doc',
-      attrs: { ...docDefaults, para: docPara, sectPr: imp.bodySectPr, hf, styles: Object.values(imp.usedStyles), comments: commentList },
+      attrs: { ...docDefaults, para: docPara, defaultTab, sectPr: imp.bodySectPr, hf, styles: Object.values(imp.usedStyles), comments: commentList },
       content,
     },
     warnings: imp.warnings,
