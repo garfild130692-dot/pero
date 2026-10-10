@@ -7,6 +7,7 @@ import { colIndex, colName, MAX_COLS, MAX_ROWS } from './address.js';
 // ---------- Ошибки и значения ----------
 export const ERR = {
   DIV0: '#DIV/0!', VALUE: '#VALUE!', REF: '#REF!', NAME: '#NAME?', NA: '#N/A', NUM: '#NUM!', CIRC: '#CIRC!',
+  SPILL: '#SPILL!', CALC: '#CALC!', NULL: '#NULL!',
 };
 export const isErr = (v) => v != null && typeof v === 'object' && 'error' in v;
 // Ошибки по-русски (как в интерфейсе русского Excel) ↔ хранимые английские
@@ -44,7 +45,8 @@ const RU = {
   СРЗНАЧЕСЛИ: 'AVERAGEIF', ЕСЛИОШИБКА: 'IFERROR', ВПР: 'VLOOKUP', ПРОИЗВЕД: 'PRODUCT', ГОД: 'YEAR', МЕСЯЦ: 'MONTH',
   ДЕНЬ: 'DAY', ДАТА: 'DATE', ЕПУСТО: 'ISBLANK', ЕЧИСЛО: 'ISNUMBER', ЕТЕКСТ: 'ISTEXT', ЕОШИБКА: 'ISERROR', ПИ: 'PI',
   ЗНАК: 'SIGN', МЕДИАНА: 'MEDIAN', НАЙТИ: 'FIND', ПОДСТАВИТЬ: 'SUBSTITUTE', ПОВТОР: 'REPT', ЗНАЧЕН: 'VALUE',
-  ИСТИНА: 'TRUE', ЛОЖЬ: 'FALSE', ИНДЕКС: 'INDEX', ПОИСКПОЗ: 'MATCH', СУММПРОИЗВ: 'SUMPRODUCT', РАНГ: 'RANK',
+  ИСТИНА: 'TRUE', ЛОЖЬ: 'FALSE', ПОСЛЕД: 'SEQUENCE', ТРАНСП: 'TRANSPOSE', ФИЛЬТР: 'FILTER', СОРТ: 'SORT', СОРТПО: 'SORTBY',
+  УНИК: 'UNIQUE', СЛЧИС: 'RAND', СЛУЧМЕЖДУ: 'RANDBETWEEN', СЛУЧМАССИВ: 'RANDARRAY', ЧСТРОК: 'ROWS', ЧИСЛСТОЛБ: 'COLUMNS', ИНДЕКС: 'INDEX', ПОИСКПОЗ: 'MATCH', СУММПРОИЗВ: 'SUMPRODUCT', РАНГ: 'RANK',
 };
 
 // ---------- Токенизатор ----------
@@ -90,8 +92,8 @@ export function tokenize(src) {
       i += sheetText.length + m[0].length;
       continue;
     }
-    if ((m = /^(\$?)([A-Za-z]{1,3})(\$?)(\d{1,7})(?![\w(])/.exec(refPart))) {
-      out.push({ type: 'ref', text: sheetText + m[0], sheet, sheet2, absC: !!m[1], c: colIndex(m[2]), absR: !!m[3], r: +m[4] - 1 });
+    if ((m = /^(\$?)([A-Za-z]{1,3})(\$?)(\d{1,7})(#?)(?![\w(])/.exec(refPart))) {
+      out.push({ type: 'ref', text: sheetText + m[0], sheet, sheet2, absC: !!m[1], c: colIndex(m[2]), absR: !!m[3], r: +m[4] - 1, spill: !!m[5] });
       i += sheetText.length + m[0].length;
       continue;
     }
@@ -111,7 +113,7 @@ export function tokenize(src) {
     if ((m = /^(<=|>=|<>)/.exec(rest))) { out.push({ type: 'op', text: m[0] }); i += 2; continue; }
     const ch = s[i];
     if ('+-*/^&=<>%'.includes(ch)) { out.push({ type: 'op', text: ch }); i++; continue; }
-    if (ch === '(' || ch === ')') { out.push({ type: ch, text: ch }); i++; continue; }
+    if (ch === '(' || ch === ')' || ch === '{' || ch === '}') { out.push({ type: ch, text: ch }); i++; continue; }
     if (ch === ',' || ch === ';') { out.push({ type: 'sep', text: ch }); i++; continue; }
     if (ch === ':') { out.push({ type: ':', text: ch }); i++; continue; }
     // имя (именованный диапазон, параметр LET); _xlpm. — префикс параметров в файле
@@ -139,7 +141,32 @@ export function parse(src) {
       case 'str': return { t: 'str', v: t.value };
       case 'bool': return { t: 'bool', v: t.value };
       case 'err': return { t: 'err', v: t.code };
+      case '{': {
+        // константа массива: столбцы через «,», строки через «;» (запись файла)
+        const rows = [[]];
+        for (;;) {
+          let neg = false;
+          let t2 = next();
+          if (t2 && t2.type === 'op' && (t2.text === '-' || t2.text === '+')) { neg = t2.text === '-'; t2 = next(); }
+          if (!t2) throw new Error('syntax');
+          let v;
+          if (t2.type === 'num') v = neg ? -t2.value : t2.value;
+          else if (t2.type === 'str' && !neg) v = t2.value;
+          else if (t2.type === 'bool' && !neg) v = t2.value;
+          else if (t2.type === 'err' && !neg) v = err(t2.code);
+          else throw new Error('syntax');
+          rows[rows.length - 1].push(v);
+          const sep = next();
+          if (!sep) throw new Error('syntax');
+          if (sep.type === '}') break;
+          if (sep.type !== 'sep') throw new Error('syntax');
+          if (sep.text === ';') rows.push([]);
+        }
+        if (rows.some((r) => r.length !== rows[0].length)) throw new Error('syntax');
+        return { t: 'array', v: rows };
+      }
       case 'ref': {
+        if (t.spill) return { t: 'spill', sheet: t.sheet, r: t.r, c: t.c };
         if (peek() && peek().type === ':' && toks[p + 1] && toks[p + 1].type === 'ref') {
           next();
           const b = next();
@@ -151,6 +178,11 @@ export function parse(src) {
       case 'rows': return { t: 'range', sheet: t.sheet, sheet2: t.sheet2, r1: t.r1, r2: t.r2, c1: 0, c2: MAX_COLS - 1, whole: 'row' };
       case 'func': {
         expect('(');
+        // ANCHORARRAY(A1) — так в файле записана ссылка на «разлив» A1#
+        if (t.name === 'ANCHORARRAY' && peek() && peek().type === 'ref' && toks[p + 1] && toks[p + 1].type === ')') {
+          const r0 = next(); next();
+          return { t: 'spill', sheet: r0.sheet, r: r0.r, c: r0.c };
+        }
         const args = [];
         if (peek() && peek().type === ')') { next(); return { t: 'fn', name: t.name, args }; }
         for (;;) {
@@ -355,6 +387,18 @@ const nums = (args, { strict = false } = {}) => {
   return out;
 };
 const firstErr = (...xs) => xs.find(isErr);
+const toArr = (v) => (Array.isArray(v) ? v : [[v]]);
+// Порядок сортировки Excel: числа < текст < логические < ошибки; пустые — в конце
+function sortCompare(a, b) {
+  const rank = (x) => (x == null ? 4 : isErr(x) ? 3 : typeof x === 'boolean' ? 2 : typeof x === 'string' ? 1 : 0);
+  const ra = rank(a); const rb = rank(b);
+  if (ra !== rb) return ra - rb;
+  if (ra === 0) return a - b;
+  if (ra === 1) return a.localeCompare(b, 'ru', { sensitivity: 'base' });
+  if (ra === 2) return (a ? 1 : 0) - (b ? 1 : 0);
+  return 0;
+}
+const stableSort = (list, cmp) => list.map((x, i) => [x, i]).sort((a, b) => cmp(a[0], b[0]) || a[1] - b[1]).map((x) => x[0]);
 function logicals(args) {
   const out = [];
   for (const a of args) {
@@ -514,6 +558,98 @@ const FN = {
     const row = t[(i || 1) - 1];
     return row && (j || 1) <= row.length ? (row[(j || 1) - 1] ?? 0) : err(ERR.REF);
   },
+  // --- массивы ---
+  ROWS: ([x]) => (isErr(x) ? x : Array.isArray(x) ? (x.full ? x.full.rows : x.length) : 1),
+  COLUMNS: ([x]) => (isErr(x) ? x : Array.isArray(x) ? (x.full ? x.full.cols : (x[0] || []).length) : 1),
+  SEQUENCE: ([rows, cols, start, step]) => {
+    const r = toNum(rows ?? 1); const c = toNum(cols ?? 1); const s0 = toNum(start ?? 1); const st = toNum(step ?? 1);
+    if (firstErr(r, c, s0, st)) return firstErr(r, c, s0, st);
+    const R = Math.trunc(r); const C = Math.trunc(c);
+    if (R < 1 || C < 1) return err(ERR.CALC);
+    if (R * C > 1_048_576) return err(ERR.NUM);
+    return Array.from({ length: R }, (_, i) => Array.from({ length: C }, (__, j) => s0 + (i * C + j) * st));
+  },
+  TRANSPOSE: ([x]) => (isErr(x) ? x : !Array.isArray(x) ? x : x[0].map((_, j) => x.map((row) => row[j]))),
+  FILTER: ([arr, inc, empty]) => {
+    if (isErr(arr)) return arr;
+    const a = toArr(arr); const m = toArr(inc);
+    const byRow = m.length === a.length && (m[0] || []).length === 1;
+    const byCol = m.length === 1 && (m[0] || []).length === (a[0] || []).length && !byRow;
+    if (!byRow && !byCol) return err(ERR.VALUE);
+    const keep = (v) => { if (isErr(v)) return v; const b = toBool(v); return isErr(b) ? b : b; };
+    let out;
+    if (byRow) {
+      out = [];
+      for (let i = 0; i < a.length; i++) { const k = keep(m[i][0]); if (isErr(k)) return k; if (k) out.push(a[i]); }
+    } else {
+      const cols = [];
+      for (let j = 0; j < a[0].length; j++) { const k = keep(m[0][j]); if (isErr(k)) return k; if (k) cols.push(j); }
+      out = cols.length ? a.map((row) => cols.map((j) => row[j])) : [];
+    }
+    if (!out.length) return empty !== undefined ? empty : err(ERR.CALC);
+    return out;
+  },
+  SORT: ([arr, idx, order, byCol]) => {
+    if (isErr(arr)) return arr;
+    const a = toArr(arr);
+    const k = toNum(idx ?? 1) - 1; const desc = toNum(order ?? 1) === -1;
+    if (isErr(k)) return k;
+    const cols = !!(byCol && toBool(byCol) === true);
+    const data = cols ? FN.TRANSPOSE([a]) : a;
+    if (k < 0 || k >= (data[0] || []).length) return err(ERR.VALUE);
+    const sorted = stableSort(data, (x, y) => (desc ? -1 : 1) * sortCompare(x[k], y[k]));
+    return cols ? FN.TRANSPOSE([sorted]) : sorted;
+  },
+  SORTBY: (args) => {
+    const [arr, ...rest] = args;
+    if (isErr(arr)) return arr;
+    const a = toArr(arr);
+    const keys = [];
+    for (let i = 0; i < rest.length; i += 2) {
+      const by = toArr(rest[i]).map((row) => row[0]);
+      if (by.length !== a.length) return err(ERR.VALUE);
+      keys.push({ by, desc: toNum(rest[i + 1] ?? 1) === -1 });
+    }
+    const idx = stableSort(a.map((_, i) => i), (x, y) => {
+      for (const k of keys) { const r = sortCompare(k.by[x], k.by[y]); if (r) return k.desc ? -r : r; }
+      return 0;
+    });
+    return idx.map((i) => a[i]);
+  },
+  UNIQUE: ([arr, byCol, once]) => {
+    if (isErr(arr)) return arr;
+    const cols = byCol != null && toBool(byCol) === true;
+    const a = cols ? FN.TRANSPOSE([toArr(arr)]) : toArr(arr);
+    const keyOf = (row) => JSON.stringify(row.map((v) => (typeof v === 'string' ? v.toLowerCase() : v)));
+    const count = new Map();
+    for (const row of a) count.set(keyOf(row), (count.get(keyOf(row)) || 0) + 1);
+    const seen = new Set();
+    const out = [];
+    for (const row of a) {
+      const k = keyOf(row);
+      if (seen.has(k)) continue;
+      seen.add(k);
+      if (once != null && toBool(once) === true && count.get(k) > 1) continue;
+      out.push(row);
+    }
+    if (!out.length) return err(ERR.CALC);
+    return cols ? FN.TRANSPOSE([out]) : out;
+  },
+  RAND: () => Math.random(),
+  RANDBETWEEN: ([lo, hi]) => {
+    const a = toNum(lo); const b = toNum(hi);
+    if (firstErr(a, b)) return firstErr(a, b);
+    const x = Math.ceil(a); const y = Math.floor(b);
+    return y < x ? err(ERR.NUM) : x + Math.floor(Math.random() * (y - x + 1));
+  },
+  RANDARRAY: ([rows, cols, min, max, whole]) => {
+    const r = Math.trunc(toNum(rows ?? 1)); const c = Math.trunc(toNum(cols ?? 1));
+    const lo = toNum(min ?? 0); const hi = toNum(max ?? 1);
+    if (firstErr(r, c, lo, hi)) return firstErr(r, c, lo, hi);
+    if (r < 1 || c < 1 || hi < lo) return err(ERR.VALUE);
+    const int = whole != null && toBool(whole) === true;
+    return Array.from({ length: r }, () => Array.from({ length: c }, () => (int ? Math.ceil(lo) + Math.floor(Math.random() * (Math.floor(hi) - Math.ceil(lo) + 1)) : lo + Math.random() * (hi - lo))));
+  },
   RANK: ([val, range, order]) => {
     const n = toNum(val);
     if (isErr(n)) return n;
@@ -523,6 +659,9 @@ const FN = {
   },
 };
 export const FUNCTIONS = Object.keys(FN);
+const SCALAR_FN = new Set(['ABS', 'SIGN', 'INT', 'SQRT', 'POWER', 'MOD', 'ROUND', 'ROUNDUP', 'ROUNDDOWN', 'NOT', 'LEN', 'UPPER', 'LOWER',
+  'TRIM', 'LEFT', 'RIGHT', 'MID', 'FIND', 'SUBSTITUTE', 'REPT', 'VALUE', 'ISBLANK', 'ISNUMBER', 'ISTEXT', 'ISERROR', 'DATE', 'YEAR',
+  'MONTH', 'DAY']);
 
 // ---------- Вычисление ----------
 // ctx: { get(sheet, r, c) → значение ячейки (с вычислением формул), sheet — имя текущего листа }
@@ -552,74 +691,149 @@ export function evaluate(node, ctx) {
       if (node.whole) out.full = { rows: (node.r2 - node.r1 + 1) * sheets.length, cols: node.c2 - node.c1 + 1 };
       return out;
     }
-    case 'pct': { const n = toNum(scalar(evaluate(node.a, ctx))); return isErr(n) ? n : n / 100; }
-    case 'un': { const n = toNum(scalar(evaluate(node.a, ctx))); return isErr(n) ? n : node.op === '-' ? -n : n; }
+    case 'array': return node.v.map((row) => [...row]);
+    case 'spill': return ctx.spill ? ctx.spill(node.sheet || ctx.sheet, node.r, node.c) : err(ERR.REF);
+    case 'pct': return lift1(evaluate(node.a, ctx), ctx, (x) => { const n = toNum(x); return isErr(n) ? n : n / 100; });
+    case 'un': return lift1(evaluate(node.a, ctx), ctx, (x) => { const n = toNum(x); return isErr(n) ? n : node.op === '-' ? -n : n; });
     case 'bin': {
-      const a = scalar(evaluate(node.a, ctx));
-      const b = scalar(evaluate(node.b, ctx));
-      if (isErr(a)) return a;
-      if (isErr(b)) return b;
-      if (node.op === '&') return toText(a) + toText(b);
-      if (['=', '<>', '<', '>', '<=', '>='].includes(node.op)) {
-        const r = compare(a, b);
-        return { '=': r === 0, '<>': r !== 0, '<': r < 0, '>': r > 0, '<=': r <= 0, '>=': r >= 0 }[node.op];
-      }
-      const x = toNum(a);
-      const y = toNum(b);
-      if (isErr(x)) return x;
-      if (isErr(y)) return y;
-      switch (node.op) {
-        case '+': return x + y;
-        case '-': return x - y;
-        case '*': return x * y;
-        case '/': return y === 0 ? err(ERR.DIV0) : x / y;
-        case '^': { const v = x ** y; return isFinite(v) ? v : err(ERR.NUM); }
-        default: return err(ERR.VALUE);
-      }
+      const av = evaluate(node.a, ctx);
+      const bv = evaluate(node.b, ctx);
+      // поэлементно, если хотя бы один операнд — массив/диапазон (как в Excel с динамическими массивами)
+      if (Array.isArray(av) || Array.isArray(bv)) { markArray(ctx); return broadcast([av, bv], ([x, y]) => binop(node.op, x, y)); }
+      return binop(node.op, av, bv);
     }
     case 'fn': {
-      // «ленивые» функции: вычисляют только нужную ветку
+      // «ленивые» функции: вычисляют только нужную ветку (с массивом-условием — обе, поэлементно)
       if (node.name === 'IF') {
-        const cond = toBool(scalar(evaluate(node.args[0] || { t: 'empty' }, ctx)));
-        if (isErr(cond)) return cond;
-        const branch = cond ? node.args[1] : node.args[2];
-        if (!branch) return cond ? true : false;
-        return scalar(evaluate(branch, ctx)) ?? 0;
+        const cv = evaluate(node.args[0] || { t: 'empty' }, ctx);
+        const pick = (c, yes, no) => {
+          const b = toBool(c);
+          if (isErr(b)) return b;
+          if (b) return node.args[1] ? (yes ?? 0) : true;
+          return node.args[2] ? (no ?? 0) : false;
+        };
+        if (Array.isArray(cv)) {
+          markArray(ctx);
+          const yes = node.args[1] ? evaluate(node.args[1], ctx) : true;
+          const no = node.args[2] ? evaluate(node.args[2], ctx) : false;
+          return broadcast([cv, yes, no], ([c, y, n]) => pick(c, y, n));
+        }
+        const b = toBool(cv);
+        if (isErr(b)) return b;
+        const branch = b ? node.args[1] : node.args[2];
+        if (!branch) return b;
+        return evaluate(branch, ctx) ?? 0;
       }
       if (node.name === 'IFERROR') {
-        const v = scalar(evaluate(node.args[0], ctx));
-        return isErr(v) ? scalar(evaluate(node.args[1] || { t: 'str', v: '' }, ctx)) : v;
+        const v = evaluate(node.args[0], ctx);
+        const alt = () => evaluate(node.args[1] || { t: 'str', v: '' }, ctx);
+        if (Array.isArray(v)) { if (!v.flat().some(isErr)) return v; markArray(ctx); return broadcast([v, alt()], ([x, y]) => (isErr(x) ? y : x)); }
+        return isErr(v) ? alt() : v;
       }
       const f = FN[node.name];
       if (!f) return err(ERR.NAME);
       const args = node.args.map((a) => evaluate(a, ctx));
-      const v = f(args);
-      return typeof v === 'number' && !isFinite(v) ? err(ERR.NUM) : v;
+      // функции от отдельных значений с массивом в аргументе — поэлементно
+      if (SCALAR_FN.has(node.name) && args.some(Array.isArray)) {
+        markArray(ctx);
+        return broadcast(args, (xs) => fin(f(xs)));
+      }
+      return fin(f(args, ctx));
     }
     default: return err(ERR.VALUE);
   }
 }
-// значение диапазона в скалярном контексте — левая верхняя ячейка (упрощение «неявного пересечения»)
-const scalar = (v) => (Array.isArray(v) ? (v[0] ? v[0][0] : null) : v);
+const fin = (v) => (typeof v === 'number' && !isFinite(v) ? err(ERR.NUM) : v);
+const markArray = (ctx) => { if (ctx.markArray) ctx.markArray(); };
+
+// Бинарная операция над двумя значениями
+function binop(op, a, b) {
+  if (isErr(a)) return a;
+  if (isErr(b)) return b;
+  if (op === '&') return toText(a) + toText(b);
+  if (['=', '<>', '<', '>', '<=', '>='].includes(op)) {
+    const r = compare(a, b);
+    return { '=': r === 0, '<>': r !== 0, '<': r < 0, '>': r > 0, '<=': r <= 0, '>=': r >= 0 }[op];
+  }
+  const x = toNum(a);
+  const y = toNum(b);
+  if (isErr(x)) return x;
+  if (isErr(y)) return y;
+  switch (op) {
+    case '+': return x + y;
+    case '-': return x - y;
+    case '*': return x * y;
+    case '/': return y === 0 ? err(ERR.DIV0) : x / y;
+    case '^': { const v = x ** y; return isFinite(v) ? v : err(ERR.NUM); }
+    default: return err(ERR.VALUE);
+  }
+}
+// Поэлементное вычисление как в Excel: размер — наибольший; строка/столбец из одного элемента растягивается,
+// за пределами меньшего массива — #Н/Д
+export function broadcast(vals, f) {
+  const dims = vals.map((v) => (Array.isArray(v) ? [v.length, v[0] ? v[0].length : 0] : [1, 1]));
+  const rows = Math.max(...dims.map((d) => d[0]));
+  const cols = Math.max(...dims.map((d) => d[1]));
+  const at = (v, d, i, j) => {
+    if (!Array.isArray(v)) return v;
+    const ii = d[0] === 1 ? 0 : i; const jj = d[1] === 1 ? 0 : j;
+    return ii < d[0] && jj < d[1] ? v[ii][jj] : err(ERR.NA);
+  };
+  const out = [];
+  for (let i = 0; i < rows; i++) {
+    const row = [];
+    for (let j = 0; j < cols; j++) row.push(f(vals.map((v, k) => at(v, dims[k], i, j))));
+    out.push(row);
+  }
+  return out;
+}
+function lift1(v, ctx, f) {
+  if (!Array.isArray(v)) return f(v);
+  markArray(ctx);
+  return v.map((row) => row.map(f));
+}
 
 // ---------- Переписывание формул ----------
 // Привести к хранимому виду: английские имена функций, «,» между аргументами
 export function canonical(src) {
-  return tokenize(src).map((t) => (t.type === 'func' ? t.name : t.type === 'sep' ? ',' : t.type === 'bool' ? (t.value ? 'TRUE' : 'FALSE')
-    : t.type === 'err' ? t.code : t.type === 'name' ? t.name : t.text)).join('');
+  let depth = 0; // внутри {…} разделители — столбцы «,» и строки «;» — сохраняются
+  const out = tokenize(src).map((t) => {
+    if (t.type === '{') depth++;
+    if (t.type === '}') depth = Math.max(0, depth - 1);
+    return t.type === 'func' ? t.name : t.type === 'sep' ? (depth ? t.text : ',') : t.type === 'bool' ? (t.value ? 'TRUE' : 'FALSE')
+      : t.type === 'err' ? t.code : t.type === 'name' ? t.name : t.text;
+  }).join('');
+  // ANCHORARRAY(A1) из файла — ссылка на «разлив» A1#
+  return out.replace(/ANCHORARRAY\(((?:(?:'(?:[^']|'')+'|[^()'!,]+)!)?\$?[A-Za-z]{1,3}\$?\d+)\)/g, '$1#');
 }
 // Хранимая формула → запись в файл: префиксы _xlfn. у функций новее Excel 2007
 export function fileFormula(src) {
-  return tokenize(src).map((t) => (t.type === 'func' && FUTURE.has(t.name) ? `_xlfn.${XLWS.has(t.name) ? '_xlws.' : ''}${t.name}` : t.text)).join('');
+  return tokenize(src).map((t) => (t.type === 'func' && FUTURE.has(t.name) ? `_xlfn.${XLWS.has(t.name) ? '_xlws.' : ''}${t.name}`
+    : t.type === 'ref' && t.spill ? `_xlfn.ANCHORARRAY(${t.text.slice(0, -1)})` : t.text)).join('');
 }
 
 // Формула, введённая пользователем (русская запись): «1,5» между цифрами — десятичная запятая,
 // разделитель аргументов — «;» (запятая между не-числами тоже принимается). Результат — каноническая запись.
+// Константа массива по-русски: {1,5;2:3;4} → {1.5,2;3,4} — в скобках «,» десятичная, «;» — столбцы, «:» — строки.
+// Переводится до разбора на токены (иначе «2:3» прочиталось бы как ссылка на строки).
+function arraysFromRu(src) {
+  let out = ''; let q = false; let depth = 0;
+  for (const ch of String(src)) {
+    if (ch === '"') q = !q;
+    if (!q && ch === '{') depth++;
+    if (!q && ch === '}') depth = Math.max(0, depth - 1);
+    out += !q && depth ? ({ ',': '.', ';': ',', ':': ';' }[ch] || ch) : ch;
+  }
+  return out;
+}
 export function fromUser(src) {
-  const t = tokenize(src);
+  const t = tokenize(arraysFromRu(src));
   let out = '';
+  let depth = 0;
   for (let i = 0; i < t.length; i++) {
-    if (t[i].type === 'num' && /^\d+$/.test(t[i].text) && t[i + 1] && t[i + 1].text === ',' && t[i + 2] && t[i + 2].type === 'num' && /^\d/.test(t[i + 2].text)) {
+    if (t[i].type === '{') depth++;
+    if (t[i].type === '}') depth = Math.max(0, depth - 1);
+    if (!depth && t[i].type === 'num' && /^\d+$/.test(t[i].text) && t[i + 1] && t[i + 1].text === ',' && t[i + 2] && t[i + 2].type === 'num' && /^\d/.test(t[i + 2].text)) {
       out += `${t[i].text}.${t[i + 2].text}`;
       i += 2;
     } else out += t[i].text;
@@ -631,9 +845,12 @@ export function fromUser(src) {
 const EN_RU = {};
 for (const [ru, en] of Object.entries(RU)) if (!EN_RU[en] && en !== 'TRUE' && en !== 'FALSE') EN_RU[en] = ru;
 export function localize(src) {
+  let depth = 0;
   return tokenize(src).map((t) => {
+    if (t.type === '{') depth++;
+    if (t.type === '}') depth = Math.max(0, depth - 1);
     if (t.type === 'func') return EN_RU[t.name] || t.text;
-    if (t.type === 'sep') return ';';
+    if (t.type === 'sep') return depth && t.text === ';' ? ':' : ';';
     if (t.type === 'num') return t.text.replace('.', ',');
     if (t.type === 'bool') return t.value ? 'ИСТИНА' : 'ЛОЖЬ';
     if (t.type === 'err') return errText(t.code);

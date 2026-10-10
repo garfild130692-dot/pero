@@ -515,3 +515,66 @@ describe('движок формул: столбцы и строки целико
     expect(xml).toContain('<definedName name="План">Данные!$B$2:$B$13</definedName><definedName name="Ставка">1/5</definedName><definedName name="Новое">Данные!$C$2:$C$13</definedName>');
   });
 });
+
+describe('массивы: константы, поэлементные операции, «разлив», формулы массива из файла', async () => {
+  const m = await import('../src/sheet/model.js');
+  const f = await import('../src/sheet/formula.js');
+  const { importXlsx, exportXlsx } = await import('../src/sheet/xlsx.js');
+  const JSZip = (await import('jszip')).default;
+  const at = (wb, a, si = 0) => { const { r1, c1 } = parseRange(a); return m.valueAt(wb.sheets[si], r1, c1); };
+
+  it('русская запись констант массива: «;» — столбцы, «:» — строки, «,» — десятичная', () => {
+    expect(f.fromUser('СУММ({1;2:3;4})+СУММ({1,5;2})')).toBe('SUM({1,2;3,4})+SUM({1.5,2})');
+    expect(f.localize('SUM({1,2;3,4})+SUM({1.5,2})')).toBe('СУММ({1;2:3;4})+СУММ({1,5;2})');
+    expect(f.fileFormula('A1#*2+SEQUENCE(2)')).toBe('_xlfn.ANCHORARRAY(A1)*2+_xlfn.SEQUENCE(2)');
+    expect(f.canonical('_xlfn.ANCHORARRAY(Лист1!A1)*2')).toBe('Лист1!A1#*2');
+  });
+
+  it('поэлементные операции: размеры растягиваются, лишнее — #Н/Д; ЕСЛИ и функции от значений — поэлементно', () => {
+    const ev = (src) => f.evaluate(f.parse(src), { get: () => null, sheet: 'L' });
+    expect(ev('{1,2;3,4}*{10;100}')).toEqual([[10, 20], [300, 400]]);
+    expect(ev('{1,2,3}+{1,2}')).toEqual([[2, 4, { error: '#N/A' }]]);
+    expect(ev('IF({1,0,1},"a","b")')).toEqual([['a', 'b', 'a']]);
+    expect(ev('ABS({-1,2,-3})')).toEqual([[1, 2, 3]]);
+    expect(ev('SUM({1,2,3}*{4,5,6})')).toBe(32);
+  });
+
+  it('«разлив»: соседние ячейки, A1#, ссылка на «разлитую» ячейку, #ПЕРЕНОС! и освобождение места', () => {
+    let wb = put(newWorkbook(), { A1: '=ПОСЛЕД(3)', B1: '=A1#*2', C1: '=СУММ(A1#)', D1: '=A3+100', A6: '=ПОСЛЕД(2;2)', B7: 'x' });
+    expect([at(wb, 'A2'), at(wb, 'A3'), at(wb, 'B3'), at(wb, 'C1'), at(wb, 'D1')]).toEqual([2, 3, 6, 6, 103]);
+    expect(at(wb, 'A6')).toEqual({ error: '#SPILL!' });
+    expect(m.spillAnchorAt(wb.sheets[0], 2, 1)).toEqual({ r: 0, c: 1, range: { r1: 0, c1: 1, r2: 2, c2: 1 } });
+    wb = put(wb, { B7: '' });
+    expect([at(wb, 'A6'), at(wb, 'B7')]).toEqual([1, 4]);
+    wb = put(wb, { A1: '=ПОСЛЕД(5)' });
+    expect([at(wb, 'A5'), at(wb, 'B5'), at(wb, 'C1')]).toEqual([5, 10, 15]);
+    // копирование «разлитых» ячеек — значениями
+    const block = m.copyBlock(wb.sheets[0], { r1: 1, c1: 0, r2: 1, c2: 1 });
+    expect(block.cells[0].map((c) => c.v)).toEqual([2, 4]);
+  });
+
+  it('файл: динамический массив (cm + metadata.xml), формула массива Ctrl+Shift+Enter, старая формула — как у Excel', async () => {
+    let wb = put(newWorkbook(), { A1: '=ПОСЛЕД(3)', B1: '=A1#*2', C1: '=СУММ(A1:A3*2)', D1: '=A1+1' });
+    const z = await JSZip.loadAsync(await exportXlsx(wb));
+    const xml = await z.file('xl/worksheets/sheet1.xml').async('string');
+    expect(xml).toContain('<c r="A1" cm="1"><f t="array" ref="A1:A3">_xlfn.SEQUENCE(3)</f><v>1</v></c>');
+    expect(xml).toContain('<c r="B1" cm="1"><f t="array" ref="B1:B3">_xlfn.ANCHORARRAY(A1)*2</f><v>2</v></c>');
+    expect(xml).toContain('<c r="C1" cm="1"><f t="array" ref="C1">SUM(A1:A3*2)</f><v>12</v></c>');
+    expect(xml).toContain('<c r="D1"><f>A1+1</f><v>2</v></c>');
+    expect(xml).toContain('<c r="A3"><v>3</v></c><c r="B3"><v>6</v></c>');
+    expect(await z.file('xl/metadata.xml').async('string')).toContain('XLDAPR');
+    // обратно: «разлитые» значения не становятся ячейками, формулы — те же
+    const back = (await importXlsx(await exportXlsx(wb))).wb;
+    expect(back.sheets[0].cells.has('1,0')).toBe(false);
+    expect([at(back, 'A3'), at(back, 'B3'), at(back, 'C1')]).toEqual([3, 6, 12]);
+    // формула массива Ctrl+Shift+Enter на два места и старая формула с диапазоном (неявное пересечение)
+    let w2 = put(newWorkbook(), { A1: '1', A2: '2' });
+    w2.sheets[0].cells.set('0,1', { f: 'A1:A2*4', v: null, cse: 'B1:B2' });
+    w2.sheets[0].cells.set('0,2', { f: 'A1:A2*3', v: null, legacy: true });
+    w2 = m.recalc(w2);
+    expect([at(w2, 'B1'), at(w2, 'B2'), at(w2, 'C1'), at(w2, 'C2')]).toEqual([4, 8, 3, null]);
+    const x2 = await (await JSZip.loadAsync(await exportXlsx(w2))).file('xl/worksheets/sheet1.xml').async('string');
+    expect(x2).toContain('<c r="B1"><f t="array" ref="B1:B2">A1:A2*4</f><v>4</v></c>');
+    expect(x2).toContain('<c r="C1"><f>A1:A2*3</f><v>3</v></c>');
+  });
+});

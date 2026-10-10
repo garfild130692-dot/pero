@@ -179,6 +179,8 @@ async function readBook(zip) {
 function readSheetData(root, ctx, on) {
   const { sst, styles, date1904 } = ctx;
   const shared = {}; // si → { f, r, c }
+  const ghosts = []; // диапазоны «разлива»/формул массива: значения в них считает формула-якорь
+  const inGhost = (r, c) => ghosts.some((g) => r >= g.r1 && r <= g.r2 && c >= g.c1 && c <= g.c2 && !(r === g.r1 && c === g.c1));
   for (const row of kids(kid(root, 'sheetData'), 'row')) {
     const ri = +row.getAttribute('r') - 1;
     if (on.row) on.row(ri, row);
@@ -218,6 +220,19 @@ function readSheetData(root, ctx, on) {
           if (text) { shared[si] = { f: text, r, c: ci }; cell.f = canonical(text); }
           else if (shared[si]) cell.f = offsetFormula(canonical(shared[si].f), r - shared[si].r, ci - shared[si].c);
         } else if (text) cell.f = canonical(text);
+        if (cell.f != null) {
+          if (ft === 'array') {
+            // t="array": с cm — динамический массив Excel 365, без cm — формула массива Ctrl+Shift+Enter
+            const ref = fEl.getAttribute('ref') || addr(r, ci);
+            const rg = parseRange(ref);
+            if (!c.getAttribute('cm')) cell.cse = ref;
+            if (rg && (rg.r2 > rg.r1 || rg.c2 > rg.c1)) ghosts.push(rg);
+          } else cell.legacy = true; // обычная формула: результат-массив Excel сводит к одному значению
+        }
+      } else if (inGhost(r, ci)) {
+        // значение внутри «разлива» — его посчитает формула; оформление ячейки сохраняется
+        if (!cell.s) continue;
+        cell.v = null;
       }
       if (cell.v == null && cell.f == null && !cell.s) continue;
       if (cell.v === undefined) cell.v = null;
@@ -577,12 +592,13 @@ export function setSheetEl(xml, name, content) {
 }
 
 // XML ячейки
-function cellXml(cell, ref, xfOf, str) {
+// fx — { ref, cm }: формула пишется как формула массива (t="array" ref=…; cm — признак динамического массива)
+function cellXml(cell, ref, xfOf, str, fx = null) {
   const s = xfOf(cell.s);
-  const sAttr = s ? ` s="${s}"` : '';
+  const sAttr = (s ? ` s="${s}"` : '') + (fx && fx.cm ? ` cm="${fx.cm}"` : '');
   const v = cell.v;
   if (cell.f != null) {
-    const f = `<f>${esc(fileFormula(cell.f))}</f>`;
+    const f = fx ? `<f t="array" ref="${fx.ref}">${esc(fileFormula(cell.f))}</f>` : `<f>${esc(fileFormula(cell.f))}</f>`;
     if (isErr(v)) return `<c r="${ref}"${sAttr} t="e">${f}<v>${esc(v.error)}</v></c>`;
     if (typeof v === 'string') return `<c r="${ref}"${sAttr} t="str">${f}<v>${esc(v)}</v></c>`;
     if (typeof v === 'boolean') return `<c r="${ref}"${sAttr} t="b">${f}<v>${v ? 1 : 0}</v></c>`;
@@ -597,13 +613,33 @@ function cellXml(cell, ref, xfOf, str) {
 const lineAttrs = (info, withXf, styleAttr) => (info
   ? `${withXf && info.xf ? (styleAttr === 's' ? ` s="${info.xf}" customFormat="1"` : ` style="${info.xf}"`) : ''}${info.hidden ? ' hidden="1"' : ''}${info.level ? ` outlineLevel="${info.level}"` : ''}${info.collapsed ? ' collapsed="1"' : ''}${info.bestFit ? ' bestFit="1"' : ''}`
   : '');
-// <sheetData>: raw(r, c, cell) — исходный XML неизменённой ячейки или null
-function sheetDataXml(sheet, cellOf, withXf) {
+// Как писать формулу ячейки: динамический массив (якорь «разлива» или формула с поэлементными операциями) —
+// t="array" + cm; формула массива Ctrl+Shift+Enter — t="array" без cm; иначе — обычная <f>
+function formulaFx(sheet, k, cell, cm) {
+  if (cell.f == null) return null;
+  const [r, c] = unkey(k);
+  if (cell.cse) return { ref: cell.cse };
+  if (cell.legacy) return null;
+  const rg = sheet.spillAt && sheet.spillAt.get(k);
+  if (rg) return { ref: rangeName(rg), cm };
+  if (cell.arr || cell.ax) return { ref: addr(r, c), cm };
+  return null;
+}
+// <sheetData>: cellOf(r, c, cell) — XML ячейки; значения «разлива» дописываются обычными значениями (как пишет Excel)
+function sheetDataXml(sheet, cellOf, withXf, xfOf, str) {
   const rows = new Map(); // r → [[c, xml]]
+  const add = (r, c, xml) => { if (!rows.has(r)) rows.set(r, []); rows.get(r).push([c, xml]); };
   for (const [k, cell] of sheet.cells) {
     const [r, c] = unkey(k);
-    if (!rows.has(r)) rows.set(r, []);
-    rows.get(r).push([c, cellOf(r, c, cell)]);
+    const ghost = sheet.spill && cell.f == null && cell.v == null ? sheet.spill.get(k) : undefined;
+    add(r, c, ghost !== undefined ? cellXml({ ...cell, v: ghost }, addr(r, c), xfOf, str) : cellOf(r, c, cell));
+  }
+  if (sheet.spill) {
+    for (const [k, v] of sheet.spill) {
+      if (sheet.cells.has(k)) continue;
+      const [r, c] = unkey(k);
+      add(r, c, cellXml({ v }, addr(r, c), xfOf, str));
+    }
   }
   for (const r of Object.keys(sheet.rowH)) if (!rows.has(+r)) rows.set(+r, []);
   for (const r of Object.keys(sheet.rowInfo || {})) if (!rows.has(+r)) rows.set(+r, []);
@@ -659,11 +695,11 @@ function setFreezeXml(xml, f) {
 }
 
 // Новый лист целиком
-function newSheetXml(sheet, active, xfOf, str) {
+function newSheetXml(sheet, active, xfOf, str, cm = '1') {
   const cols = colsXml(sheet, false);
   const xml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<worksheet xmlns="${NS}" xmlns:r="${R}">` +
     `${dimensionXml(sheet)}<sheetViews><sheetView workbookViewId="0"${active ? ' tabSelected="1"' : ''}${sheet.freeze ? `>${paneXml(sheet.freeze)}</sheetView>` : '/>'}</sheetViews>` +
-    `${formatPrXml('<sheetFormatPr defaultRowHeight="15"/>', sheet)}${cols}${sheetDataXml(sheet, (r, c, cell) => cellXml(cell, addr(r, c), xfOf, str), false)}${protectionXml(sheet.protection)}${mergesXml(sheet)}` +
+    `${formatPrXml('<sheetFormatPr defaultRowHeight="15"/>', sheet)}${cols}${sheetDataXml(sheet, (r, c, cell) => cellXml(cell, addr(r, c), xfOf, str, formulaFx(sheet, key(r, c), cell, cm)), false, xfOf, str)}${protectionXml(sheet.protection)}${mergesXml(sheet)}` +
     `${marginsXml((sheet.page && sheet.page.margins) || {})}</worksheet>`;
   return sheet.page ? setPageXml(xml, sheet.page) : xml;
 }
@@ -706,7 +742,7 @@ function selectTab(xml, active) {
 }
 
 // Лист поверх исходного XML: заменяются данные, столбцы, объединения, размер, выбор листа; остальное — как в файле
-function patchSheetXml(xml, sheet, active, root, book, xfOf, str) {
+function patchSheetXml(xml, sheet, active, root, book, xfOf, str, cm) {
   // исходные ячейки: разобранное значение + исходный XML (по порядку в документе)
   const src = new Map();
   const rawList = [];
@@ -725,14 +761,16 @@ function patchSheetXml(xml, sheet, active, root, book, xfOf, str) {
   for (const x of all) { const raw = byRef.get(addr(x.r, x.c)); if (raw) src.set(key(x.r, x.c), { ...x, raw }); }
   const cellOf = (r, c, cell) => {
     const e = src.get(key(r, c));
+    const fx = formulaFx(sheet, key(r, c), cell, cm);
     if (e && sameStyle(e.cell.s, cell.s)) {
       if (cell.f == null && e.cell.f == null && sameValue(e.cell.v, cell.v)) return e.raw;
-      if (cell.f != null && cell.f === e.cell.f && !e.shared) return e.raw;
+      // формулу массива пишем заново: размер «разлива» мог измениться
+      if (cell.f != null && cell.f === e.cell.f && !e.shared && !fx && !/\bt="array"/.test(e.raw)) return e.raw;
     }
-    return cellXml(cell, addr(r, c), xfOf, str);
+    return cellXml(cell, addr(r, c), xfOf, str, fx);
   };
   let out = xml;
-  out = setSheetEl(out, 'sheetData', sheetDataXml(sheet, cellOf, true));
+  out = setSheetEl(out, 'sheetData', sheetDataXml(sheet, cellOf, true, xfOf, str));
   out = setSheetEl(out, 'cols', colsXml(sheet, true));
   out = setSheetEl(out, 'mergeCells', mergesXml(sheet));
   out = setSheetEl(out, 'dimension', dimensionXml(sheet));
@@ -801,6 +839,23 @@ function shiftRefs(text, name, shifts) {
   return x;
 }
 
+// Часть metadata.xml, как пишет Excel: тип XLDAPR — «динамический массив»; ячейки ссылаются на него атрибутом cm="1"
+const METADATA_XML = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<metadata xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:xda="http://schemas.microsoft.com/office/spreadsheetml/2017/dynamicarray"><metadataTypes count="1"><metadataType name="XLDAPR" minSupportedVersion="120000" copy="1" pasteAll="1" pasteValues="1" merge="1" splitFirst="1" rowColShift="1" clearFormats="1" clearComments="1" assign="1" coerce="1" cellMeta="1"/></metadataTypes><futureMetadata name="XLDAPR" count="1"><bk><extLst><ext uri="{bdbb8cdc-fa1e-496e-a857-3c3f30c029c3}"><xda:dynamicArrayProperties fDynamic="1" fCollapsed="0"/></ext></extLst></bk></futureMetadata><cellMetadata count="1"><bk><rc t="1" v="0"/></bk></cellMetadata></metadata>';
+const METADATA_REL = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/sheetMetadata';
+const METADATA_CT = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheetMetadata+xml';
+const needsDynamic = (wb) => wb.sheets.some((sh) => [...sh.cells.values()].some((c) => c.f != null && !c.legacy && !c.cse && (c.arr || c.ax)));
+// Номер cm динамического массива в существующем metadata.xml: блок cellMetadata, ссылающийся на тип XLDAPR
+function dynamicCm(metaXml) {
+  const types = [...metaXml.matchAll(/<metadataType\b[^>]*\bname="([^"]*)"/g)].map((m) => m[1]);
+  const t = types.indexOf('XLDAPR') + 1;
+  if (!t) return null;
+  const cell = /<cellMetadata\b[^>]*>([\s\S]*?)<\/cellMetadata>/.exec(metaXml);
+  if (!cell) return null;
+  const bks = [...cell[1].matchAll(/<bk>([\s\S]*?)<\/bk>/g)];
+  const i = bks.findIndex((b) => new RegExp(`<rc\\b[^>]*\\bt="${t}"`).test(b[1]));
+  return i >= 0 ? String(i + 1) : null;
+}
+
 // Переименование листа в формулах файла (именованные диапазоны, ряды диаграмм): 'Старое'!A1 → 'Новое'!A1
 const quoteSheet = (name) => (/^[A-Za-zА-Яа-яЁё_][\wА-Яа-яЁё.]*$/.test(name) ? name : `'${name.replace(/'/g, "''")}'`);
 function renameRefs(text, old, name) {
@@ -853,6 +908,16 @@ async function exportWithSource(wb, source) {
   let peroN = 0;
   const renames = []; // [старое, новое|null]
   const shifted = []; // [имя листа, сдвиги]
+  // признак динамического массива: из metadata.xml файла; нет части — добавим свою
+  let cm = null;
+  const metaRel = Object.values(book.rels).find((r) => r.type === METADATA_REL);
+  if (metaRel) cm = dynamicCm((await text(metaRel.target)) || '');
+  else if (needsDynamic(wb)) {
+    cm = '1';
+    zip.file(`${book.dir}/metadata.xml`, METADATA_XML);
+    newRels.push(`<Relationship Id="rIdPeroMeta" Type="${METADATA_REL}" Target="metadata.xml"/>`);
+    newOverrides.push(`<Override PartName="/${book.dir}/metadata.xml" ContentType="${METADATA_CT}"/>`);
+  }
   for (let i = 0; i < wb.sheets.length; i++) {
     const sheet = wb.sheets[i];
     const s = sheet.src && book.sheets.find((x) => x.rid === sheet.src.rid && x.worksheet);
@@ -862,7 +927,7 @@ async function exportWithSource(wb, source) {
       if (doc) {
         zip.file(s.target, pristine.has(sheet)
           ? selectTab(xml, i === wb.active)
-          : patchSheetXml(xml, sheet, i === wb.active, doc.documentElement, book, st.xfOf, str));
+          : patchSheetXml(xml, sheet, i === wb.active, doc.documentElement, book, st.xfOf, str, cm));
         sheetTags.push(sheetEls[s.rid].replace(/\bname="[^"]*"/, `name="${esc(sheet.name)}"`));
         const shifts = (!pristine.has(sheet) && sheet.src.shifts) || [];
         if (shifts.length) { shifted.push([sheet.name, shifts, s.name]); await shiftSheetParts(zip, s.target, shifts); }
@@ -874,7 +939,7 @@ async function exportWithSource(wb, source) {
     let part;
     do { peroN++; part = `${book.dir}/worksheets/sheet_pero${peroN}.xml`; } while (zip.file(part));
     const rid = `rIdPeroS${peroN}`;
-    zip.file(part, newSheetXml(sheet, i === wb.active, st.xfOf, str));
+    zip.file(part, newSheetXml(sheet, i === wb.active, st.xfOf, str, cm));
     newRels.push(`<Relationship Id="${rid}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="${relTarget(part)}"/>`);
     newOverrides.push(`<Override PartName="/${part}" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>`);
     sheetTags.push(`<sheet name="${esc(sheet.name)}" sheetId="${++maxSheetId}" r:id="${rid}"/>`);
@@ -1053,12 +1118,13 @@ export async function exportXlsx(wb, { source = null } = {}) {
   const sst = [];
   const sstIndex = new Map();
   const str = (s) => { if (!sstIndex.has(s)) { sstIndex.set(s, sst.length); sst.push(s); } return sstIndex.get(s); };
-  const sheetXml = wb.sheets.map((sheet, si) => newSheetXml(sheet, si === wb.active, xfOf, str));
+  const dynamic = needsDynamic(wb);
+  const sheetXml = wb.sheets.map((sheet, si) => newSheetXml(sheet, si === wb.active, xfOf, str, '1'));
 
   const zip = new JSZip();
   const sheetsCt = wb.sheets.map((_, i) => `<Override PartName="/xl/worksheets/sheet${i + 1}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>`).join('');
   zip.file('[Content_Types].xml', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>${sheetsCt}<Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/><Override PartName="/xl/sharedStrings.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml"/><Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/><Override PartName="/docProps/app.xml" ContentType="application/vnd.openxmlformats-officedocument.extended-properties+xml"/></Types>`);
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>${sheetsCt}<Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/><Override PartName="/xl/sharedStrings.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml"/>${dynamic ? `<Override PartName="/xl/metadata.xml" ContentType="${METADATA_CT}"/>` : ''}<Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/><Override PartName="/docProps/app.xml" ContentType="application/vnd.openxmlformats-officedocument.extended-properties+xml"/></Types>`);
   zip.file('_rels/.rels', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties" Target="docProps/core.xml"/><Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/extended-properties" Target="docProps/app.xml"/></Relationships>`);
   const now = new Date().toISOString().replace(/\.\d+Z$/, 'Z');
@@ -1069,7 +1135,8 @@ export async function exportXlsx(wb, { source = null } = {}) {
 <workbook xmlns="${NS}" xmlns:r="${R}"><bookViews><workbookView activeTab="${wb.active || 0}"/></bookViews><sheets>${wb.sheets.map((s, i) => `<sheet name="${esc(s.name)}" sheetId="${i + 1}" r:id="rId${i + 1}"/>`).join('')}</sheets>${freshPrintNames(wb)}<calcPr calcId="191029" fullCalcOnLoad="1"/></workbook>`);
   const n = wb.sheets.length;
   zip.file('xl/_rels/workbook.xml.rels', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${wb.sheets.map((_, i) => `<Relationship Id="rId${i + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet${i + 1}.xml"/>`).join('')}<Relationship Id="rId${n + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/><Relationship Id="rId${n + 2}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/sharedStrings" Target="sharedStrings.xml"/></Relationships>`);
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${wb.sheets.map((_, i) => `<Relationship Id="rId${i + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet${i + 1}.xml"/>`).join('')}<Relationship Id="rId${n + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/><Relationship Id="rId${n + 2}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/sharedStrings" Target="sharedStrings.xml"/>${dynamic ? `<Relationship Id="rId${n + 3}" Type="${METADATA_REL}" Target="metadata.xml"/>` : ''}</Relationships>`);
+  if (dynamic) zip.file('xl/metadata.xml', METADATA_XML);
   sheetXml.forEach((x, i) => zip.file(`xl/worksheets/sheet${i + 1}.xml`, x));
   zip.file('xl/styles.xml', stylesXml);
   zip.file('xl/sharedStrings.xml', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<sst xmlns="${NS}" count="${sst.length}" uniqueCount="${sst.length}">${sst.map((s) => `<si><t xml:space="preserve">${esc(s)}</t></si>`).join('')}</sst>`);

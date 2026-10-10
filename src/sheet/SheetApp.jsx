@@ -13,7 +13,7 @@ const absRange = (rg) => {
 import { formatValue } from './format.js';
 import {
   DEFAULT_COL_W, DEFAULT_ROW_H, addSheet, autoSumFormula, blockToText, clearRange, collapseGroup, copyBlock, deleteSheet, expandGroup, fill, inputOf,
-  isHidden, isValidName, mergeAt, nameTarget, newWorkbook, setNames, pasteBlock, pasteText, renameSheet, setColWidth, setInput, setRowHeight, showLevels, usedRange,
+  isHidden, isValidName, mergeAt, nameTarget, newWorkbook, recalc, setNames, spillAnchorAt, valueAt, pasteBlock, pasteText, renameSheet, setColWidth, setInput, setRowHeight, showLevels, usedRange,
 } from './model.js';
 import { exportXlsx, importXlsx } from './xlsx.js';
 import { exportCsv, importCsv } from './csv.js';
@@ -276,6 +276,7 @@ export default function SheetApp({ initialFile, onOpenOther, onNewDoc, autosaveS
     const k = e.key;
     if (ctrl && e.code === 'KeyZ') { e.preventDefault(); undo(); return; }
     if (ctrl && (e.code === 'KeyY')) { e.preventDefault(); redo(); return; }
+    if (e.key === 'F9') { e.preventDefault(); setWb((w) => recalc(w)); return; }
     if (ctrl && e.code === 'KeyA') { e.preventDefault(); const u = usedRange(sheet); setSel({ r: 0, c: 0, r2: u ? u.r2 : 0, c2: u ? u.c2 : 0 }); return; }
     if (ctrl && e.code === 'KeyB') { e.preventDefault(); ribbonApi.toggle('bold'); return; }
     if (ctrl && e.code === 'KeyI') { e.preventDefault(); ribbonApi.toggle('italic'); return; }
@@ -320,19 +321,23 @@ export default function SheetApp({ initialFile, onOpenOther, onNewDoc, autosaveS
   // строка состояния: сумма/среднее/количество выделенного
   const stats = useMemo(() => {
     let sum = 0; let count = 0; let nums = 0;
-    for (const [k, cell] of sheet.cells) {
-      const i = k.indexOf(','); const r = +k.slice(0, i); const c = +k.slice(i + 1);
-      if (r < rg.r1 || r > rg.r2 || c < rg.c1 || c > rg.c2) continue;
-      if (cell.v == null || cell.v === '') continue;
+    const take = (v) => {
+      if (v == null || v === '') return;
       count++;
-      if (typeof cell.v === 'number') { sum += cell.v; nums++; }
-    }
+      if (typeof v === 'number') { sum += v; nums++; }
+    };
+    const inSel = (k) => { const i = k.indexOf(','); const r = +k.slice(0, i); const c = +k.slice(i + 1); return r >= rg.r1 && r <= rg.r2 && c >= rg.c1 && c <= rg.c2; };
+    for (const [k, cell] of sheet.cells) if (inSel(k)) take(cell.v ?? (cell.f == null && sheet.spill ? sheet.spill.get(k) : null));
+    if (sheet.spill) for (const [k, v] of sheet.spill) if (!sheet.cells.has(k) && inSel(k)) take(v);
     return { sum, count, nums };
-  }, [sheet.cells, rg.r1, rg.r2, rg.c1, rg.c2]);
+  }, [sheet.cells, sheet.spill, rg.r1, rg.r2, rg.c1, rg.c2]);
 
   const activeCell = sheet.cells.get(key(sel.r, sel.c));
   const formulaHidden = isProtected(sheet) && activeCell && activeCell.f != null && activeCell.s && activeCell.s.formulaHidden;
-  const barText = editing && editing.r === sel.r && editing.c === sel.c ? editing.text : formulaHidden ? '' : inputOf(activeCell);
+  const spillOwner = (!activeCell || (activeCell.v == null && activeCell.f == null)) ? spillAnchorAt(sheet, sel.r, sel.c) : null;
+  const ghost = spillOwner && !(spillOwner.r === sel.r && spillOwner.c === sel.c);
+  const barText = editing && editing.r === sel.r && editing.c === sel.c ? editing.text : formulaHidden ? ''
+    : ghost ? inputOf(sheet.cells.get(key(spillOwner.r, spillOwner.c))) : inputOf(activeCell);
 
   return (
     <div className="app sheet-app" onDragOver={(e) => e.preventDefault()} onDrop={onDrop}>
@@ -366,9 +371,10 @@ export default function SheetApp({ initialFile, onOpenOther, onNewDoc, autosaveS
           }}
           onFocus={(e) => e.target.select()} />
         <span className="fx">fx</span>
-        <input className="fx-input" aria-label="Строка формул" value={barText}
+        <input className={`fx-input${ghost && !(editing && editing.r === sel.r && editing.c === sel.c) ? ' ghost' : ''}`} aria-label="Строка формул" value={barText}
+          title={ghost ? 'Значение рассчитано формулой массива — изменить можно в её первой ячейке' : undefined}
           readOnly={isProtected(sheet) && isLocked(activeCell)}
-          onFocus={() => { if (!editing && !(isProtected(sheet) && isLocked(activeCell))) { lastRef.current = null; setEditingState({ r: sel.r, c: sel.c, text: inputOf(activeCell), fromBar: true }); } }}
+          onFocus={() => { if (!editing && !(isProtected(sheet) && isLocked(activeCell))) { lastRef.current = null; setEditingState({ r: sel.r, c: sel.c, text: ghost ? '' : inputOf(activeCell), fromBar: true }); } }}
           onChange={(e) => setEditingState({ r: sel.r, c: sel.c, text: e.target.value, fromBar: true })}
           onKeyDown={(e) => {
             if (e.key === 'Enter') { e.preventDefault(); commit(editing ? editing.text : barText, 'down'); }
@@ -438,6 +444,7 @@ function errorHint(code) {
   return {
     '#DIV/0!': 'Деление на ноль', '#VALUE!': 'Неверный тип значения', '#REF!': 'Ссылка на удалённую ячейку или лист',
     '#NAME?': 'Неизвестная функция или имя', '#N/A': 'Значение не найдено', '#NUM!': 'Недопустимое число', '#CIRC!': 'Циклическая ссылка',
+    '#SPILL!': 'Результат-массив не помещается: ячейки рядом заняты', '#CALC!': 'Пустой результат (например, ФИЛЬТР ничего не нашёл)',
   }[code] || code;
 }
 
@@ -465,7 +472,8 @@ function PrintTable({ sheet }) {
     for (const c of visCols) {
       const m = mergeAt(sheet, r, c);
       if (m && (m.r1 !== r || m.c1 !== c)) continue;
-      const cell = sheet.cells.get(key(r, c));
+      const own = sheet.cells.get(key(r, c));
+      const cell = own && (own.v != null || own.f != null) ? own : { ...(own || {}), v: valueAt(sheet, r, c) };
       const s = (cell && cell.s) || {};
       const b = s.border || {};
       tds.push(

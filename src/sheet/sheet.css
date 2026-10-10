@@ -104,3 +104,7 @@ input.sheet-tab.editing { width: 120px; background: #fff; border: 1px solid var(
 .names-row.head { position: sticky; top: 0; background: #f3f3f3; font-weight: 600; cursor: default; }
 .names-row.on { background: #d9ebe5; }
 .names-edit { margin-top: 10px; padding-top: 8px; border-top: 1px solid #e3e3e3; display: grid; gap: 6px; }
+
+/* рамка «разлива» динамического массива */
+.gspill { position: absolute; pointer-events: none; border: 1px dashed #2f6fbf; box-sizing: border-box; }
+.fx-input.ghost { color: #8a8a8a; }

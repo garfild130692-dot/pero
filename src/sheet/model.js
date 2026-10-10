@@ -6,7 +6,11 @@
 // Лист:  { name, cells: Map<"r,c", Cell>, colW: { c: px }, rowH: { r: px }, merges: Range[],
 //          rowInfo/colInfo: { n: { hidden, level, collapsed, xf } } — скрытие, группировка, стиль строки/столбца (xf файла),
 //          src: { part, rid, name, shifts } — лист из файла (экспорт переписывает его поверх исходного XML) }
-// Ячейка: { v — значение (у формулы — вычисленное), f — формула без «=» (хранимый вид), s — стиль }
+// Ячейка: { v — значение (у формулы — вычисленное), f — формула без «=» (хранимый вид), s — стиль,
+//          arr — результат-массив динамической формулы («разлив»), ax — формула с поэлементными операциями (в файл —
+//          как формула массива), legacy — обычная формула из файла (результат-массив → неявное пересечение),
+//          cse — диапазон формулы массива Ctrl+Shift+Enter из файла }
+// Лист после пересчёта: spill — Map(ячейка → значение «разлива»), spillAt — Map(якорь → диапазон), spillBlocked — Set якорей с #ПЕРЕНОС!
 // Стиль: { bold, italic, underline, strike, color, fill, fontSize, fontFamily, align, valign, wrap, numFmt }
 import { key, unkey } from './address.js';
 import { ERR, err, fromUser, localize, evaluate, isErr, offsetFormula, parse, rewriteRefs, shiftFormula } from './formula.js';
@@ -26,15 +30,26 @@ const withSheet = (wb, i, sheet) => ({ ...wb, sheets: wb.sheets.map((s, k) => (k
 const sheetByName = (wb, name) => wb.sheets.find((s) => s.name.toLowerCase() === String(name).toLowerCase());
 
 // ---------- Пересчёт ----------
+// Разобранные формулы — общий кеш для всех пересчётов (формула → AST; ошибка разбора → null)
+const astCache = new Map();
+function astOf(f) {
+  let a = astCache.get(f);
+  if (a === undefined) {
+    try { a = parse(f); } catch { a = null; }
+    if (astCache.size > 100_000) astCache.clear();
+    astCache.set(f, a);
+  }
+  return a;
+}
 // Все формулы книги: memo по (лист, ячейка), циклические ссылки → #CIRC!
 export function recalc(wb) {
+  // лист по имени — словарём (обращений к ячейкам много)
+  const byName = new Map();
+  for (const sh of wb.sheets) { byName.set(sh.name, sh); byName.set(sh.name.toLowerCase(), sh); }
+  const sheetByName = (_wb, name) => byName.get(name) || byName.get(String(name).toLowerCase());
   const memo = new Map();
   const visiting = new Set();
-  const astCache = new Map();
-  const astOf = (f) => {
-    if (!astCache.has(f)) { try { astCache.set(f, parse(f)); } catch { astCache.set(f, null); } }
-    return astCache.get(f);
-  };
+
   // занятая часть листа (для ссылок на целые столбцы и строки)
   const extents = new Map();
   const extent = (name) => {
@@ -43,6 +58,7 @@ export function recalc(wb) {
       const sh = sheetByName(wb, name);
       let r = -1; let c = -1;
       if (sh) for (const key0 of sh.cells.keys()) { const [rr, cc] = unkey(key0); if (rr > r) r = rr; if (cc > c) c = cc; }
+      if (sh) for (const rg of spillOfSheet(sh.name).at.values()) { if (rg.r2 > r) r = rg.r2; if (rg.c2 > c) c = rg.c2; }
       extents.set(k, { r, c });
     }
     return extents.get(k);
@@ -73,40 +89,168 @@ export function recalc(wb) {
   };
   const ctxCache = new Map();
   const ctxOf = (sheetName) => {
-    if (!ctxCache.has(sheetName)) ctxCache.set(sheetName, { get, sheet: sheetName, extent, sheetsBetween, name: nameValue(sheetName) });
+    if (!ctxCache.has(sheetName)) ctxCache.set(sheetName, { get, sheet: sheetName, extent, sheetsBetween, name: nameValue(sheetName), spill: spillRef, markArray });
     return ctxCache.get(sheetName);
+  };
+  // «Разлив» динамических массивов: по листу — значения соседних ячеек (vals), диапазоны якорей (at), заблокированные (blocked).
+  // Пока не посчитано — догадка из прошлого пересчёта; после прохода раскладка уточняется, проход повторяется (не больше 4 раз).
+  const emptySpill = () => ({ vals: new Map(), at: new Map(), blocked: new Set() });
+  let spill = new Map(wb.sheets.map((sh) => [sh.name.toLowerCase(), sh.spill ? { vals: sh.spill, at: sh.spillAt || new Map(), blocked: sh.spillBlocked || new Set() } : emptySpill()]));
+  const spillOfSheet = (name) => spill.get(String(name).toLowerCase()) || emptySpill();
+  let arrFlag = false; // при вычислении текущей ячейки были поэлементные операции над массивами
+  const markArray = () => { arrFlag = true; };
+  const evalCell = (sheet, k, cell) => {
+    const mk = `${sheet.name}!${k}`;
+    if (memo.has(mk)) return memo.get(mk);
+    if (visiting.has(mk)) return { top: err(ERR.CIRC) };
+    visiting.add(mk);
+    const ast = astOf(cell.f);
+    const saved = arrFlag;
+    arrFlag = false;
+    let v = ast ? evaluate(ast, ctxOf(sheet.name)) : err(ERR.NAME);
+    const ax = arrFlag;
+    arrFlag = saved;
+    let full = null;
+    if (Array.isArray(v)) {
+      const one = v.length === 1 && v[0] && v[0].length === 1;
+      if (!v.length || !v[0] || !v[0].length) v = err(ERR.CALC);
+      else if (cell.legacy || one) v = v[0][0]; // старая формула — неявное пересечение (упрощённо: левый верхний)
+      else { full = v; v = spillOfSheet(sheet.name).blocked.has(k) && !cell.cse ? err(ERR.SPILL) : v[0][0]; }
+    }
+    if (v == null) v = 0; // пустая ссылка в формуле — 0, как в Excel
+    const res = { top: v, full, ax };
+    visiting.delete(mk);
+    memo.set(mk, res);
+    return res;
   };
   const get = (sheetName, r, c) => {
     const sheet = sheetByName(wb, sheetName);
     if (!sheet) return err(ERR.REF);
     const k = key(r, c);
     const cell = sheet.cells.get(k);
-    if (!cell) return null;
+    if (!cell || (cell.f == null && cell.v == null)) {
+      const g = spillOfSheet(sheet.name).vals.get(k);
+      return g === undefined ? null : g;
+    }
     if (cell.f == null) return cell.v ?? null;
-    const mk = `${sheet.name}!${k}`;
-    if (memo.has(mk)) return memo.get(mk);
-    if (visiting.has(mk)) return err(ERR.CIRC);
-    visiting.add(mk);
-    const ast = astOf(cell.f);
-    let v = ast ? evaluate(ast, ctxOf(sheet.name)) : err(ERR.NAME);
-    if (Array.isArray(v)) v = v[0] ? v[0][0] : null;
-    if (v == null) v = 0; // пустая ссылка в формуле — 0, как в Excel
-    visiting.delete(mk);
-    memo.set(mk, v);
-    return v;
+    return evalCell(sheet, k, cell).top;
   };
+  // A1# — весь «разлив» якоря A1
+  const spillRef = (sheetName, r, c) => {
+    const sheet = sheetByName(wb, sheetName);
+    const cell = sheet && sheet.cells.get(key(r, c));
+    if (!cell || cell.f == null) return err(ERR.REF);
+    const res = evalCell(sheet, key(r, c), cell);
+    if (isErr(res.top) && res.top.error === ERR.SPILL) return res.top;
+    return res.full || [[res.top]];
+  };
+  // раскладка «разливов» после прохода
+  const resolve = () => {
+    const out = new Map();
+    for (const sheet of wb.sheets) {
+      const sp = emptySpill();
+      const anchors = [];
+      for (const [k, cell] of sheet.cells) {
+        if (cell.f == null) continue;
+        const res = memo.get(`${sheet.name}!${k}`);
+        if (res && res.full) anchors.push([k, cell, res.full]);
+      }
+      anchors.sort((a, b) => { const [ra, ca] = unkey(a[0]); const [rb, cb] = unkey(b[0]); return ra - rb || ca - cb; });
+      const claimed = new Set();
+      for (const [k, cell, full] of anchors) {
+        const [r0, c0] = unkey(k);
+        // формула массива Ctrl+Shift+Enter — свой фиксированный диапазон (лишнее — #Н/Д); динамическая — по размеру результата
+        let rows = full.length; let cols = full[0].length;
+        if (cell.cse) { const rg = parseCse(cell.cse); if (rg) { rows = rg.r2 - rg.r1 + 1; cols = rg.c2 - rg.c1 + 1; } }
+        const keys = [];
+        let blocked = false;
+        for (let i = 0; i < rows && !blocked; i++) {
+          for (let j = 0; j < cols; j++) {
+            if (!i && !j) continue;
+            const kk = key(r0 + i, c0 + j);
+            const other = sheet.cells.get(kk);
+            if (!cell.cse && ((other && (other.v != null || other.f != null)) || claimed.has(kk) || (sheet.merges.length && mergeAt(sheet, r0 + i, c0 + j)))) { blocked = true; break; }
+            keys.push([kk, i, j]);
+          }
+        }
+        if (blocked) { sp.blocked.add(k); continue; }
+        claimed.add(k);
+        for (const [kk, i, j] of keys) {
+          claimed.add(kk);
+          const v = full[i] && full[i][j] !== undefined ? full[i][j] : err(ERR.NA);
+          sp.vals.set(kk, v == null ? 0 : v);
+        }
+        sp.at.set(k, { r1: r0, c1: c0, r2: r0 + rows - 1, c2: c0 + cols - 1 });
+      }
+      out.set(sheet.name.toLowerCase(), sp);
+    }
+    return out;
+  };
+  const sameSpill = (a, b) => {
+    for (const [name, x] of a) {
+      const y = b.get(name);
+      if (!y || x.vals.size !== y.vals.size || x.blocked.size !== y.blocked.size || x.at.size !== y.at.size) return false;
+      for (const k of x.blocked) if (!y.blocked.has(k)) return false;
+      for (const [k, v] of x.vals) if (!y.vals.has(k) || !sameValue(v, y.vals.get(k))) return false;
+      for (const [k, rg] of x.at) { const o = y.at.get(k); if (!o || o.r2 !== rg.r2 || o.c2 !== rg.c2) return false; }
+    }
+    return true;
+  };
+  for (let pass = 0; pass < 4; pass++) {
+    memo.clear();
+    extents.clear();
+    for (const sheet of wb.sheets) for (const [k, cell] of sheet.cells) if (cell.f != null) evalCell(sheet, k, cell);
+    const next = resolve();
+    const done = sameSpill(next, spill) && sameSpill(spill, next);
+    spill = next;
+    if (done) break; // раскладка не изменилась — значения последнего прохода верны
+  }
   const sheets = wb.sheets.map((sheet) => {
     let changed = false;
     const cells = new Map(sheet.cells);
     for (const [k, cell] of sheet.cells) {
       if (cell.f == null) continue;
-      const [r, c] = unkey(k);
-      const v = get(sheet.name, r, c);
-      if (!sameValue(v, cell.v)) { cells.set(k, { ...cell, v }); changed = true; }
+      const res = evalCell(sheet, k, cell);
+      const arr = res.full && !cell.legacy ? res.full : undefined;
+      const ax = res.ax && !cell.legacy ? true : undefined;
+      if (!sameValue(res.top, cell.v) || !sameArr(arr, cell.arr) || ax !== cell.ax) {
+        const n = { ...cell, v: res.top };
+        if (arr) n.arr = arr; else delete n.arr;
+        if (ax) n.ax = true; else delete n.ax;
+        cells.set(k, n);
+        changed = true;
+      }
     }
-    return changed ? { ...sheet, cells } : sheet;
+    const sp = spillOfSheet(sheet.name);
+    const before = sheet.spill ? { vals: sheet.spill, at: sheet.spillAt || new Map(), blocked: sheet.spillBlocked || new Set() } : emptySpill();
+    const spillChanged = !(sameSpill(new Map([['x', sp]]), new Map([['x', before]])) && sameSpill(new Map([['x', before]]), new Map([['x', sp]])));
+    if (!changed && !spillChanged) return sheet;
+    const next = { ...sheet, cells };
+    if (sp.vals.size || sp.at.size || sp.blocked.size) { next.spill = sp.vals; next.spillAt = sp.at; next.spillBlocked = sp.blocked; }
+    else { delete next.spill; delete next.spillAt; delete next.spillBlocked; }
+    return next;
   });
   return { ...wb, sheets };
+}
+const sameArr = (a, b) => (a === b || (!!a && !!b && JSON.stringify(a) === JSON.stringify(b)));
+// диапазон формулы массива Ctrl+Shift+Enter: «A1:B3»
+const parseCse = (ref) => {
+  const m = /^([A-Z]+)(\d+)(?::([A-Z]+)(\d+))?$/.exec(String(ref));
+  if (!m) return null;
+  const col = (t) => [...t].reduce((n, ch) => n * 26 + ch.charCodeAt(0) - 64, 0) - 1;
+  return { r1: +m[2] - 1, c1: col(m[1]), r2: +(m[4] || m[2]) - 1, c2: col(m[3] || m[1]) };
+};
+// Значение ячейки с учётом «разлива» (для показа, копирования, итогов в строке состояния)
+export function valueAt(sheet, r, c) {
+  const cell = sheet.cells.get(key(r, c));
+  if (cell && (cell.v != null || cell.f != null)) return cell.v ?? null;
+  return sheet.spill ? (sheet.spill.get(key(r, c)) ?? null) : null;
+}
+// Якорь «разлива», которому принадлежит ячейка: { r, c, range } или null
+export function spillAnchorAt(sheet, r, c) {
+  if (!sheet.spillAt) return null;
+  for (const [k, rg] of sheet.spillAt) if (r >= rg.r1 && r <= rg.r2 && c >= rg.c1 && c <= rg.c2) { const [ar, ac] = unkey(k); return { r: ar, c: ac, range: rg }; }
+  return null;
 }
 const sameValue = (a, b) => (isErr(a) && isErr(b) ? a.error === b.error : a === b);
 
@@ -121,10 +265,11 @@ export function setInput(wb, si, r, c, raw) {
   let cell;
   if (s.startsWith('=') && s.length > 1) {
     cell = { ...old, f: fromUser(s.slice(1)), v: null };
+    for (const n of ['arr', 'ax', 'legacy', 'cse']) delete cell[n];
   } else {
     const p = parseInput(s);
     cell = { ...old, v: p.value };
-    delete cell.f;
+    for (const n of ['f', 'arr', 'ax', 'legacy', 'cse']) delete cell[n];
     if (p.format && (!old.s || !old.s.numFmt || old.s.numFmt === 'General')) cell.s = { ...(old.s || {}), numFmt: p.format };
   }
   if (cell.v == null && cell.f == null && !cell.s) cells.delete(k);
@@ -451,7 +596,12 @@ export function copyBlock(sheet, rg) {
   const cells = [];
   for (let r = rg.r1; r <= rg.r2; r++) {
     const row = [];
-    for (let c = rg.c1; c <= rg.c2; c++) row.push(sheet.cells.get(key(r, c)) || null);
+    for (let c = rg.c1; c <= rg.c2; c++) {
+      const cell = sheet.cells.get(key(r, c)) || null;
+      // ячейка «разлива» копируется значением (формула — только у якоря), как в Excel
+      const g = (!cell || (cell.v == null && cell.f == null)) && sheet.spill ? sheet.spill.get(key(r, c)) : undefined;
+      row.push(g !== undefined ? { ...(cell || {}), v: g } : cell);
+    }
     cells.push(row);
   }
   return { rows: rg.r2 - rg.r1 + 1, cols: rg.c2 - rg.c1 + 1, cells, origin: { r: rg.r1, c: rg.c1 } };

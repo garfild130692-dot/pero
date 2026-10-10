@@ -12,11 +12,7 @@ import { isErr } from '../src/sheet/formula.js';
 
 const VOLATILE = 'Летучие (только тип)';
 // Известные расхождения — до соответствующей части этапа 12 (по мере работы список сокращается)
-const KNOWN = new Set([
-  // поэлементные операции над диапазонами (массивы) — этап 12, часть 3
-  'SUMPRODUCT((Данные!B2:B11="Склад")*Данные!C2:C11)',
-  'SUM(Данные!C2:C11*(Данные!E2:E11>3))',
-]);
+const KNOWN = new Set([]);
 const show = (v) => (v == null ? '(пусто)' : isErr(v) ? v.error : typeof v === 'string' ? JSON.stringify(v) : String(v));
 const kind = (v) => (v == null ? 'empty' : isErr(v) ? 'error' : typeof v);
 function same(a, b) {

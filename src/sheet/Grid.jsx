@@ -4,7 +4,7 @@ import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 're
 import { colName, key } from './address.js';
 import { formatValue } from './format.js';
 import { isErr } from './formula.js';
-import { DEFAULT_COL_W, DEFAULT_ROW_H, isHidden, maxLevel, mergeAt, outlineRuns } from './model.js';
+import { DEFAULT_COL_W, DEFAULT_ROW_H, isHidden, maxLevel, mergeAt, outlineRuns, spillAnchorAt } from './model.js';
 import { cssFontStack } from '../editor/font.js';
 
 const HEAD_W = 46; // ширина заголовков строк
@@ -206,7 +206,15 @@ export default function Grid({ sheet, sel, setSel, editing, setEditing, onCommit
 
   const selR1 = Math.min(sel.r, sel.r2); const selR2 = Math.max(sel.r, sel.r2);
   const selC1 = Math.min(sel.c, sel.c2); const selC2 = Math.max(sel.c, sel.c2);
-  const isEmpty = (r, c) => { const x = sheet.cells.get(key(r, c)); return !x || x.v == null || x.v === ''; };
+  // ячейка с учётом «разлива»: пустая ячейка внутри «разлива» показывает его значение
+  const cellAtKey = (r, c) => {
+    const x = sheet.cells.get(key(r, c));
+    if (sheet.spill && (!x || (x.v == null && x.f == null))) { const g = sheet.spill.get(key(r, c)); if (g !== undefined) return { ...(x || {}), v: g }; }
+    return x;
+  };
+  const isEmpty = (r, c) => { const x = cellAtKey(r, c); return !x || x.v == null || x.v === ''; };
+  // «разлив», в котором стоит курсор, обводится рамкой (как в Excel)
+  const spillSel = spillAnchorAt(sheet, sel.r, sel.c);
 
   // ячейки строк ra..rb и столбцов ca..cb (объединённые — одной ячейкой от левой верхней). Текст без переноса
   // «перетекает» в пустые соседние ячейки справа (как в Excel), поэтому смотрим и немного левее области.
@@ -225,7 +233,7 @@ export default function Grid({ sheet, sel, setSel, editing, setEditing, onCommit
           drawnMerges.add(mk);
           rr = m.r1; cc = m.c1; r2 = m.r2; c2 = m.c2;
         }
-        const cell = sheet.cells.get(key(rr, cc));
+        const cell = cellAtKey(rr, cc);
         if (!cell && !m) continue;
         let text = cellText(cell);
         if (!text && !(cell && cell.s && (cell.s.fill || cell.s.border)) && !m) continue;
@@ -268,6 +276,9 @@ export default function Grid({ sheet, sel, setSel, editing, setEditing, onCommit
     <>
       <div className="gsel" style={{ left: colPos[selC1], top: rowPos[selR1], width: colPos[selC2 + 1] - colPos[selC1], height: rowPos[selR2 + 1] - rowPos[selR1] }} />
       <div className="gactive" style={{ left: colPos[active.c1], top: rowPos[active.r1], width: colPos[active.c2 + 1] - colPos[active.c1], height: rowPos[active.r2 + 1] - rowPos[active.r1] }} />
+      {spillSel && (
+        <div className="gspill" style={{ left: colPos[spillSel.range.c1], top: rowPos[spillSel.range.r1], width: colPos[spillSel.range.c2 + 1] - colPos[spillSel.range.c1], height: rowPos[spillSel.range.r2 + 1] - rowPos[spillSel.range.r1] }} />
+      )}
     </>
   );
   // редактор — в той части листа (закреплённой или нет), где ячейка
