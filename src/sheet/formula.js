@@ -4,6 +4,7 @@
 // десятичная точка. При вводе принимаются и русские имена (СУММ, ЕСЛИ…) и «;» — они приводятся к хранимому виду.
 import { colIndex, colName, MAX_COLS, MAX_ROWS } from './address.js';
 import { functions, lazyFunctions } from './fnlib.js';
+import { EXCEL_RU } from './fnnames.js';
 
 // ---------- Ошибки и значения ----------
 export const ERR = {
@@ -81,6 +82,8 @@ const RU = {
   ПЛТ: 'PMT', ПРПЛТ: 'IPMT', ОСПЛТ: 'PPMT', БС: 'FV', ПС: 'PV', КПЕР: 'NPER', СТАВКА: 'RATE', ЧПС: 'NPV', ВСД: 'IRR', ЧИСТНЗ: 'XNPV',
   ЧИСТВНДОХ: 'XIRR', АПЛ: 'SLN', ФУО: 'DB', ДДОБ: 'DDB', АСЧ: 'SYD', ЭФФЕКТ: 'EFFECT', НОМИНАЛ: 'NOMINAL', ИНДЕКС: 'INDEX', ПОИСКПОЗ: 'MATCH', СУММПРОИЗВ: 'SUMPRODUCT', РАНГ: 'RANK',
 };
+
+for (const [en, ru] of Object.entries(EXCEL_RU)) if (!RU[ru.toUpperCase()]) RU[ru.toUpperCase()] = en;
 
 // ---------- Токенизатор ----------
 // Токены: { type, text, ... }; text — исходный текст (для переписывания формулы без потери пробелов)
@@ -914,7 +917,8 @@ export function fromUser(src) {
 }
 
 // Каноническая формула → русская запись для строки формул: ЕСЛИ(A1>1,5;"да";"нет")
-const EN_RU = {};
+// Русские имена: главный источник — ответ Excel (fnnames.js), ручной словарь RU — варианты ввода (ЧЕТН, СЧЕТ…)
+const EN_RU = { ...EXCEL_RU };
 for (const [ru, en] of Object.entries(RU)) if (!EN_RU[en] && en !== 'TRUE' && en !== 'FALSE') EN_RU[en] = ru;
 export const ruName = (en) => EN_RU[en] || en;
 // все имена функций для подсказок: русское → английское (русские и английские варианты ввода)
