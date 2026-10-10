@@ -11,11 +11,12 @@ import {
 } from './model.js';
 import { exportXlsx, importXlsx } from './xlsx.js';
 import * as fileApi from '../fileApi.js';
+import { useAutosave } from '../autosave.js';
 
 const DEFAULT_NAME = 'Книга1.xlsx';
 const normSel = (s) => ({ r1: Math.min(s.r, s.r2), c1: Math.min(s.c, s.c2), r2: Math.max(s.r, s.r2), c2: Math.max(s.c, s.c2) });
 
-export default function SheetApp({ initialFile, onOpenOther, onNewDoc }) {
+export default function SheetApp({ initialFile, onOpenOther, onNewDoc, autosaveSec }) {
   const [wb, setWb] = useState(newWorkbook);
   const history = useRef({ undo: [], redo: [] });
   const [sel, setSelState] = useState({ r: 0, c: 0, r2: 0, c2: 0 });
@@ -61,7 +62,7 @@ export default function SheetApp({ initialFile, onOpenOther, onNewDoc }) {
       setEditingState(null);
       setDoc({ path: file.path, name: file.name });
       setWarnings(w);
-      setDirty(false);
+      setDirty(!!file.recovered); // восстановленная после сбоя — ещё не сохранена
     } catch (e) {
       fileApi.showError('Не удалось открыть книгу', `${file.name}\n\n${e.message || e}`);
     }
@@ -72,6 +73,9 @@ export default function SheetApp({ initialFile, onOpenOther, onNewDoc }) {
   useEffect(() => { if (import.meta.env.DEV) window.__peroSheet = { wb, exportXlsx: () => exportXlsx(wb) }; }, [wb]);
 
   useEffect(() => { fileApi.setDirty(dirty); fileApi.setTitle(`${doc.name}${dirty ? ' •' : ''} — Перо`); }, [dirty, doc.name]);
+  useEffect(() => { fileApi.setDoc({ path: doc.path, kind: 'sheet' }); }, [doc.path]);
+  // книга неизменяема: новая книга после каждой правки — сама и есть «номер версии» для автосохранения
+  useAutosave({ intervalSec: autosaveSec, dirty, revision: wb, kind: 'sheet', name: doc.name, path: doc.path, getBytes: () => exportXlsx(wb) });
 
   const write = async (asNew) => {
     try {
@@ -97,18 +101,27 @@ export default function SheetApp({ initialFile, onOpenOther, onNewDoc }) {
     const ok = await write(false);
     if (ok && typeof then === 'function') then();
   };
-  const open = async () => {
-    if (dirty && !(await fileApi.confirmDiscard())) return;
-    const f = await fileApi.openFile();
+  // файл для этого окна (в программе — только если окно было пустым, иначе он уже открыт в новом окне)
+  const openHere = (f) => {
     if (!f) return;
-    if (/\.docx$/i.test(f.name)) { setDirty(false); onOpenOther(f); } else load(f);
+    if (/\.docx$/i.test(f.name)) { fileApi.setDirty(false); onOpenOther(f); } else load(f);
+  };
+  const open = async () => {
+    if (!fileApi.isDesktop && dirty && !(await fileApi.confirmDiscard())) return;
+    openHere(await fileApi.openFile());
   };
   const newBook = async () => {
+    if (fileApi.newWindow('sheet')) return; // в программе — новое окно
     if (dirty && !(await fileApi.confirmDiscard())) return;
     setWb(newWorkbook()); history.current = { undo: [], redo: [] }; setDoc({ path: null, name: DEFAULT_NAME }); setDirty(false); setWarnings({});
     setSelState({ r: 0, c: 0, r2: 0, c2: 0 });
   };
-  const newDocument = async () => { if (dirty && !(await fileApi.confirmDiscard())) return; setDirty(false); onNewDoc(); };
+  const newDocument = async () => {
+    if (fileApi.newWindow('doc')) return;
+    if (dirty && !(await fileApi.confirmDiscard())) return;
+    setDirty(false);
+    onNewDoc();
+  };
 
   // команды меню Electron
   const handlers = useRef({});
@@ -183,15 +196,16 @@ export default function SheetApp({ initialFile, onOpenOther, onNewDoc }) {
     const f = [...e.dataTransfer.files].find((x) => /\.(xlsx|docx)$/i.test(x.name));
     if (!f) return;
     e.preventDefault();
+    const p = fileApi.pathForFile(f);
+    if (p) { openHere(await fileApi.openPath(p)); return; } // программа сама решит: это окно или новое
     if (dirty && !(await fileApi.confirmDiscard())) return;
-    const file = { path: fileApi.pathForFile(f), name: f.name, data: await f.arrayBuffer() };
-    if (/\.docx$/i.test(f.name)) { fileApi.setDirty(false); onOpenOther(file); } else load(file);
+    openHere({ path: null, name: f.name, data: await f.arrayBuffer() });
   };
 
   const rg = normSel(sel);
   const ribbonApi = {
     wb, sheet, si, sel, rg, change, undo, redo, canUndo: history.current.undo.length > 0, canRedo: history.current.redo.length > 0,
-    file: { newDocument, newBook, open, save: () => save(), saveAs: () => write(true), print: () => fileApi.print(), pdf: () => fileApi.exportPdf(doc.name.replace(/\.xlsx$/i, '') + '.pdf') },
+    file: { newDocument, newBook, open, openHere, save: () => save(), saveAs: () => write(true), print: () => fileApi.print(), pdf: () => fileApi.exportPdf(doc.name.replace(/\.xlsx$/i, '') + '.pdf') },
     autoSum: () => {
       const target = rg.r2 > rg.r1 || rg.c2 > rg.c1 ? { r: rg.r2 + 1, c: rg.c1 } : { r: sel.r, c: sel.c };
       const f = rg.r2 > rg.r1 && rg.c1 === rg.c2 ? `SUM(${addr(rg.r1, rg.c1)}:${addr(rg.r2, rg.c1)})` : autoSumFormula(sheet, target.r, target.c);

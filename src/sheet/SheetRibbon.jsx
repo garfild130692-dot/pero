@@ -1,7 +1,8 @@
 // Лента табличного редактора: Файл / Главная (буфер, шрифт, выравнивание, число, ячейки, редактирование).
 import React, { useState } from 'react';
 import { Icon } from '../icons.jsx';
-import { clipboard } from '../fileApi.js';
+import { clipboard, reportProblem } from '../fileApi.js';
+import RecentButton from '../RecentButton.jsx';
 import { ColorPalette, SplitColor, usePopover } from '../FontControls.jsx';
 import { FORMAT_PRESETS, changeDecimals } from './format.js';
 import { key } from './address.js';
@@ -120,6 +121,12 @@ export default function SheetRibbon({ api }) {
             <Group title="Вывод">
               <Btn big icon="print" label="Печать" onClick={file.print} title="Печать (Ctrl+P)" />
               <Btn big icon="pdf" label="Экспорт в PDF" onClick={file.pdf} title="Сохранить как PDF" />
+            </Group>
+            <Group title="Последние">
+              <RecentButton onOpen={file.openHere} />
+            </Group>
+            <Group title="Справка">
+              <Btn big icon="report" label="Сообщить о проблеме" onClick={() => reportProblem()} title="Собрать сведения о проблеме для администратора" />
             </Group>
           </>
         )}

@@ -29,6 +29,8 @@ export const Icon = {
   track: (p) => <S {...p}><path d="M4 20h4L19 9l-4-4L4 16z" /><path d="M13 7l4 4" /><path d="M14 20h6" /></S>,
   accept: (p) => <S {...p}><path d="m5 12 5 5 9-10" /></S>,
   reject: (p) => <S {...p}><path d="M6 6l12 12M18 6 6 18" /></S>,
+  recent: (p) => <S {...p}><circle cx="12" cy="12" r="9" /><path d="M12 7v5l3 2" /></S>,
+  report: (p) => <S {...p}><path d="M4 4h16v12H8l-4 4z" /><path d="M12 7v4M12 13.5v.5" /></S>,
   print: (p) => <S {...p}><path d="M7 9V3h10v6" /><rect x="3" y="9" width="18" height="8" rx="1.5" /><path d="M7 14h10v7H7z" /></S>,
   pdf: (p) => <S {...p}><path d="M6 2h8l5 5v15H6z" /><path d="M14 2v5h5" /><path d="M8.5 17v-4h1.3a1.2 1.2 0 0 1 0 2.4H8.5M12.5 13v4h1a2 2 0 0 0 0-4zM17 13h-1.8v4M15.2 15h1.4" strokeWidth="1.1" /></S>,
   picture: (p) => <S {...p}><rect x="3" y="4" width="18" height="16" rx="1.5" /><circle cx="9" cy="10" r="2" /><path d="m21 17-5-5-9 8" /></S>,

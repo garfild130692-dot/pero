@@ -2,8 +2,14 @@
 const { contextBridge, ipcRenderer, webUtils } = require('electron');
 
 contextBridge.exposeInMainWorld('pero', {
+  // что открыть в окне при загрузке: { kind, file, recovery, notice, autosaveSec }
+  ready: () => ipcRenderer.invoke('app:ready'),
+  newWindow: (kind) => ipcRenderer.send('app:newWindow', kind),
   openFile: () => ipcRenderer.invoke('file:open'),
+  openPath: (p) => ipcRenderer.invoke('file:openPath', p),
   openImage: () => ipcRenderer.invoke('file:openImage'),
+  recentList: () => ipcRenderer.invoke('recent:list'),
+  recentClear: () => ipcRenderer.invoke('recent:clear'),
   print: () => ipcRenderer.invoke('doc:print'),
   userName: () => ipcRenderer.invoke('app:userName'),
   exportPdf: (name) => ipcRenderer.invoke('doc:pdf', name),
@@ -12,7 +18,14 @@ contextBridge.exposeInMainWorld('pero', {
   confirmDiscard: () => ipcRenderer.invoke('file:confirmDiscard'),
   showError: (title, msg) => ipcRenderer.invoke('dialog:error', title, msg),
   setDirty: (v) => ipcRenderer.send('state:dirty', v),
+  setDoc: (meta) => ipcRenderer.send('state:doc', meta),
   setTitle: (t) => ipcRenderer.send('state:title', t),
+  autosave: (meta, data) => ipcRenderer.invoke('autosave:write', meta, data),
+  autosaveClear: () => ipcRenderer.send('autosave:clear'),
+  recoveryOpen: (id) => ipcRenderer.invoke('recovery:open', id),
+  recoveryDiscard: (id) => ipcRenderer.invoke('recovery:discard', id),
+  logError: (msg) => ipcRenderer.send('log:error', String(msg).slice(0, 4000)),
+  reportProblem: () => ipcRenderer.invoke('app:report'),
   pathForFile: (f) => { try { return webUtils.getPathForFile(f) || null; } catch { return null; } },
   edit: (cmd) => ipcRenderer.send('edit', cmd),
   closeNow: () => ipcRenderer.send('app:closeNow'),

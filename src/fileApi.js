@@ -68,3 +68,23 @@ export const closeNow = () => native && native.closeNow();
 export const onMenu = (cb) => (native ? native.onMenu(cb) : () => {});
 export const clipboard = (cmd) => (native ? native.edit(cmd) : document.execCommand(cmd));
 export const pathForFile = (f) => (native && native.pathForFile ? native.pathForFile(f) : null);
+
+// ---------- Окна, последние файлы, автосохранение, журнал (этап 9) ----------
+// Что открыть при загрузке окна; в браузере (отладка) — ?sheet для книги
+export const ready = async () => (native && native.ready ? native.ready() : {
+  kind: /[?&]sheet/.test(window.location.search) ? 'sheet' : 'doc', file: null, recovery: null, notice: null, autosaveSec: 0,
+});
+// Новый документ/книга в отдельном окне (как Ctrl+N в Word). false — нет окон (браузер): заменить содержимое текущего
+export const newWindow = (kind) => { if (!native || !native.newWindow) return false; native.newWindow(kind); return true; };
+// Открыть по пути: данные файла — если открывать здесь (окно пустое), null — открылось в другом окне
+export const openPath = (p) => (native && native.openPath ? native.openPath(p) : Promise.resolve(null));
+export const recentList = async () => (native && native.recentList ? native.recentList() : []);
+export const recentClear = async () => native && native.recentClear && native.recentClear();
+export const setDoc = (meta) => native && native.setDoc && native.setDoc(meta);
+export const autosave = async (meta, data) => native && native.autosave && native.autosave(meta, data);
+export const autosaveClear = () => native && native.autosaveClear && native.autosaveClear();
+export const recoveryOpen = (id) => native.recoveryOpen(id);
+export const recoveryDiscard = (id) => native.recoveryDiscard(id);
+export const logError = (msg) => { console.error(msg); if (native && native.logError) native.logError(msg); };
+export const reportProblem = () => (native && native.reportProblem ? native.reportProblem()
+  : alert('В браузерном режиме отчёт не собирается: откройте консоль разработчика.'));

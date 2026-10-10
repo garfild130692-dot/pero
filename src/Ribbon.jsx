@@ -2,7 +2,8 @@
 import React, { useState } from 'react';
 import { useEditorState } from '@tiptap/react';
 import { Icon } from './icons.jsx';
-import { clipboard, openImage } from './fileApi.js';
+import { clipboard, openImage, reportProblem } from './fileApi.js';
+import RecentButton from './RecentButton.jsx';
 import { insertImageFiles } from './insertImage.js';
 import { PicturePanel } from './PictureControls.jsx';
 import { LayoutPanel } from './PageControls.jsx';
@@ -252,6 +253,12 @@ export default function Ribbon({ editor, file, onLink, onParagraph, onMargins, o
             <Group title="Вывод">
               <Btn big icon="print" label="Печать" onClick={file.print} title="Печать (Ctrl+P)" />
               <Btn big icon="pdf" label="Экспорт в PDF" onClick={file.pdf} title="Сохранить как PDF" />
+            </Group>
+            <Group title="Последние">
+              <RecentButton onOpen={file.openHere} />
+            </Group>
+            <Group title="Справка">
+              <Btn big icon="report" label="Сообщить о проблеме" onClick={() => reportProblem()} title="Собрать сведения о проблеме для администратора" />
             </Group>
           </>
         )}

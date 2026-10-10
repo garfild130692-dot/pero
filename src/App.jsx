@@ -21,6 +21,7 @@ import { styleCss } from './editor/styles.js';
 import CommentsPanel from './CommentsPanel.jsx';
 import { orderedComments, commentsKey } from './editor/comments.js';
 import { trackInfo } from './editor/track.js';
+import { useAutosave } from './autosave.js';
 
 // «Одинарный» интервал Word = естественная высота строки шрифта (ascent + descent + lineGap).
 // В CSS её даёт line-height: normal; меряем отношение к размеру шрифта и кешируем.
@@ -178,7 +179,7 @@ function StatusBar({ editor, warnings, preserved, zoom, setZoom }) {
   );
 }
 
-export default function App({ initialFile, onOpenOther, onNewSheet }) {
+export default function App({ initialFile, onOpenOther, onNewSheet, autosaveSec }) {
   const [doc, setDoc] = useState({ path: null, name: DEFAULT_NAME });
   const [dirty, setDirtyState] = useState(false);
   const [warnings, setWarnings] = useState({});   // что теряется при сохранении
@@ -190,6 +191,7 @@ export default function App({ initialFile, onOpenOther, onNewSheet }) {
   const [findMode, setFindMode] = useState(null); // null | 'find' | 'replace'
   const [showComments, setShowComments] = useState(false);
   const [userName, setUserName] = useState('Пользователь');
+  const revision = useRef(0); // счётчик правок — для автосохранения
   useEffect(() => { fileApi.userName().then((n) => n && setUserName(n)).catch(() => {}); }, []);
 
   const editor = useEditor({
@@ -214,7 +216,7 @@ export default function App({ initialFile, onOpenOther, onNewSheet }) {
         return true;
       },
     },
-    onUpdate: ({ transaction }) => { if (transaction.docChanged) setDirtyState(true); },
+    onUpdate: ({ transaction }) => { if (transaction.docChanged) { revision.current++; setDirtyState(true); } },
   });
 
   useEffect(() => { if (editor) editor.commands.setTrackAuthor(userName); }, [editor, userName]);
@@ -223,6 +225,12 @@ export default function App({ initialFile, onOpenOther, onNewSheet }) {
     fileApi.setDirty(dirty);
     fileApi.setTitle(`${doc.name}${dirty ? ' •' : ''} — Перо`);
   }, [dirty, doc.name]);
+  useEffect(() => { fileApi.setDoc({ path: doc.path, kind: 'doc' }); }, [doc.path]);
+
+  useAutosave({
+    intervalSec: autosaveSec, dirty, revision: () => revision.current, kind: 'doc', name: doc.name, path: doc.path,
+    getBytes: () => exportDocx(editor.getJSON(), { source: source.current }),
+  });
 
   const load = useCallback(async (file) => {
     try {
@@ -235,7 +243,7 @@ export default function App({ initialFile, onOpenOther, onNewSheet }) {
       setPreserved(kept);
       setShowComments((json.attrs.comments || []).length > 0);
       source.current = file.data;
-      setDirtyState(false);
+      setDirtyState(!!file.recovered); // восстановленный после сбоя — ещё не сохранён
     } catch (e) {
       fileApi.showError('Не удалось открыть файл', `${file.name}\n\n${e.message || e}`);
     }
@@ -245,6 +253,7 @@ export default function App({ initialFile, onOpenOther, onNewSheet }) {
   useEffect(() => { if (initialFile && editor) load(initialFile); }, [initialFile, editor, load]);
 
   const newDoc = useCallback(async () => {
+    if (fileApi.newWindow('doc')) return; // в программе — новое окно, как Ctrl+N в Word
     if (dirty && !(await fileApi.confirmDiscard())) return;
     loadDocument(editor, EMPTY);
     resetHistory(editor);
@@ -256,14 +265,19 @@ export default function App({ initialFile, onOpenOther, onNewSheet }) {
     setDirtyState(false);
   }, [dirty, editor]);
 
-  const open = useCallback(async () => {
-    if (dirty && !(await fileApi.confirmDiscard())) return;
-    const f = await fileApi.openFile();
+  // Файл, который нужно открыть в этом окне (в программе — только если окно было пустым, иначе файл уже открыт в новом)
+  const openHere = useCallback(async (f) => {
     if (!f) return;
     if (/\.xlsx$/i.test(f.name)) { fileApi.setDirty(false); onOpenOther(f); } else await load(f);
-  }, [dirty, load, onOpenOther]);
+  }, [load, onOpenOther]);
+
+  const open = useCallback(async () => {
+    if (!fileApi.isDesktop && dirty && !(await fileApi.confirmDiscard())) return;
+    openHere(await fileApi.openFile());
+  }, [dirty, openHere]);
 
   const newSheet = useCallback(async () => {
+    if (fileApi.newWindow('sheet')) return;
     if (dirty && !(await fileApi.confirmDiscard())) return;
     fileApi.setDirty(false);
     onNewSheet();
@@ -353,9 +367,10 @@ export default function App({ initialFile, onOpenOther, onNewSheet }) {
     const f = [...e.dataTransfer.files].find((x) => /\.(docx|xlsx)$/i.test(x.name));
     if (!f) return;
     e.preventDefault();
+    const p = fileApi.pathForFile(f);
+    if (p) { openHere(await fileApi.openPath(p)); return; } // программа сама решит: это окно или новое
     if (dirty && !(await fileApi.confirmDiscard())) return;
-    if (/\.xlsx$/i.test(f.name)) { fileApi.setDirty(false); onOpenOther({ path: fileApi.pathForFile(f), name: f.name, data: await f.arrayBuffer() }); return; }
-    await load({ path: fileApi.pathForFile(f), name: f.name, data: await f.arrayBuffer() });
+    openHere({ path: null, name: f.name, data: await f.arrayBuffer() });
   };
 
   // Шрифт и размер документа по умолчанию (атрибуты документа) → CSS-переменные страницы
@@ -376,7 +391,7 @@ export default function App({ initialFile, onOpenOther, onNewSheet }) {
         <QuickAccess editor={editor} onSave={() => save()} />
         <div className="doc-title">{doc.name}{dirty ? ' •' : ''}</div>
       </div>
-      <Ribbon editor={editor} file={{ newDoc, newSheet, open, save: () => save(), saveAs, print: doPrint, pdf: doPdf }} onLink={() => setModal('link')}
+      <Ribbon editor={editor} file={{ newDoc, newSheet, open, openHere, save: () => save(), saveAs, print: doPrint, pdf: doPdf }} onLink={() => setModal('link')}
         onFind={(m) => setFindMode(m)}
         onStyle={(m) => (m && m.remove ? editor.chain().focus().deleteStyle(m.remove).run() : setModal({ style: m }))}
         review={{
