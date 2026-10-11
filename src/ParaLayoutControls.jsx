@@ -30,6 +30,10 @@ export function ParaBordersButton({ editor }) {
               <BorderIcon mode={m[2]} size={16} />{m[1]}
             </button>
           ) : <div key={i} className="menu-sep" />))}
+          <div className="menu-sep" />
+          <button type="button" className="menu-item" onMouseDown={(e) => e.preventDefault()} onClick={() => { pop.setOpen(false); editor.chain().focus().insertHorizontalLine().run(); }}>
+            <BorderIcon mode="bottom" size={16} />Горизонтальная линия
+          </button>
         </div>
       )}
     </div>

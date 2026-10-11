@@ -442,6 +442,7 @@ export default function Ribbon({ editor, file, view, onStylesPane, onLink, onFon
                   <Btn icon="alignRight" title="По правому краю (Ctrl+Shift+R)" active={s.align === 'right'} onClick={() => c().setTextAlign('right').run()} />
                   <Btn icon="alignJustify" title="По ширине (Ctrl+Shift+J)" active={s.align === 'justify'} onClick={() => c().setTextAlign('justify').run()} />
                   <LineSpacingButton editor={editor} para={s.para} onMore={onParagraph} />
+                  <Btn icon="sort" title="Сортировка: абзацы, пункты списка, строки таблицы" onClick={() => onRefDialog('sortPara')} />
                   <ParaShadingButton editor={editor} />
                   <Btn title="Отобразить все знаки (Ctrl+Shift+8)" active={s.showMarks} onClick={() => c().toggleFormattingMarks().run()}><span className="glyph">¶</span></Btn>
                   <ParaBordersButton editor={editor} />

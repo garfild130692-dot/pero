@@ -33,6 +33,7 @@ import { Numbering } from './numbering.js';
 import { Design } from './design.js';
 import { PasteOptions } from './paste.js';
 import { CharStyle } from './builtinStyles.js';
+import { Sorting } from './sort.js';
 
 // Как оформлены заголовки — font.js (совпадает со styles.css и стилями Heading1–6 в export.js)
 export { HEADING_FONT, HEADING_SIZES };
@@ -288,6 +289,7 @@ export const extensions = [
   Design,
   PasteOptions,
   CharStyle,
+  Sorting,
   PeroTable.configure({ resizable: true }),
   PeroTableRow,
   PeroTableCell,
