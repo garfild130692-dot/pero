@@ -1,6 +1,6 @@
 {
   "name": "pero",
-  "version": "0.15.5",
+  "version": "0.15.6",
   "description": "Перо — текстовый редактор документов .docx",
   "author": "Перо",
   "main": "electron/main.cjs",
