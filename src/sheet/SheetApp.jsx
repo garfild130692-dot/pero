@@ -28,6 +28,7 @@ import NamesDialog from './NamesDialog.jsx';
 import FilterMenu, { CustomFilterDialog } from './FilterMenu.jsx';
 import SortDialog from './SortDialog.jsx';
 import FormatCellsDialog from './FormatCellsDialog.jsx';
+import FindDialog from './FindDialog.jsx';
 import { CfDialog } from './CfMenu.jsx';
 import { cfView } from './cf.js';
 import { filterCount, shownText } from './filter.js';
@@ -64,6 +65,7 @@ export default function SheetApp({ initialFile, onOpenOther, onNewDoc, autosaveS
   const [sortDlg, setSortDlg] = useState(null); // диапазон
   const [cfDlg, setCfDlg] = useState(null); // вид правила условного форматирования
   const [fcDlg, setFcDlg] = useState(false); // «Формат ячеек»
+  const [findDlg, setFindDlg] = useState(null); // 'find' | 'replace'
   const [showFormulas, setShowFormulas] = useState(false); // Ctrl+` — формулы вместо значений
   const [arrows, setArrows] = useState([]); // стрелки влияющих/зависимых ячеек
   const [evalAt, setEvalAt] = useState(null); // { r, c } — «Вычислить формулу»
@@ -334,6 +336,7 @@ export default function SheetApp({ initialFile, onOpenOther, onNewDoc, autosaveS
     // F9 — пересчитать всё (в том числе отложенное в режиме «вручную» и летучие функции); в отмену не попадает
     recalc: () => setWb((w) => recalc(w, { full: true })),
     formatCells: () => setFcDlg(true),
+    find: (mode) => setFindDlg(mode),
     // условное форматирование выделенного диапазона
     cfDialog: (kind) => setCfDlg(kind),
     addCf: (rule) => change((w) => addCfRule(w, si, [rg], rule)),
@@ -368,6 +371,7 @@ export default function SheetApp({ initialFile, onOpenOther, onNewDoc, autosaveS
     if (ctrl && e.code === 'Backquote') { e.preventDefault(); setShowFormulas((v) => !v); return; }
     if (e.shiftKey && e.key === 'F3') { e.preventDefault(); setFnDlg({}); return; }
     if (ctrl && e.code === 'KeyA') { e.preventDefault(); const u = usedRange(sheet); setSel({ r: 0, c: 0, r2: u ? u.r2 : 0, c2: u ? u.c2 : 0 }); return; }
+    if (ctrl && (e.code === 'KeyF' || e.code === 'KeyH') && !e.shiftKey) { e.preventDefault(); setFindDlg(e.code === 'KeyH' ? 'replace' : 'find'); return; }
     if (ctrl && (e.code === 'Digit1' || e.code === 'Numpad1') && !e.shiftKey) { e.preventDefault(); setFcDlg(true); return; }
     if (ctrl && e.shiftKey && e.code === 'KeyL') { e.preventDefault(); ribbonApi.toggleFilter(); return; }
     if (ctrl && e.code === 'KeyB') { e.preventDefault(); ribbonApi.toggle('bold'); return; }
@@ -568,6 +572,12 @@ export default function SheetApp({ initialFile, onOpenOther, onNewDoc, autosaveS
           head={shownText(sheet.cells.get(key(sheet.autoFilter.ref.r1, sheet.autoFilter.ref.c1 + customFilter.j))) || `Столбец ${colName(sheet.autoFilter.ref.c1 + customFilter.j)}`}
           onClose={() => { setCustomFilter(null); gridRef.current && gridRef.current.focus(); }}
           onApply={(crit) => { const { j } = customFilter; setCustomFilter(null); change((w) => setColumnFilter(w, si, j, crit)); gridRef.current && gridRef.current.focus(); }} />
+      )}
+      {findDlg && (
+        <FindDialog key={findDlg} wb={wb} si={si} sel={sel} mode={findDlg} onClose={() => { setFindDlg(null); gridRef.current && gridRef.current.focus(); }}
+          onMessage={flash}
+          onGo={(x) => { if (x.si !== si) setWb((w) => ({ ...w, active: x.si })); setSelState({ r: x.r, c: x.c, r2: x.r, c2: x.c }); }}
+          onChange={(fn) => change(fn)} />
       )}
       {fcDlg && (
         <FormatCellsDialog cell={sheet.cells.get(key(rg.r1, rg.c1))} rg={rg} merged={!!mergeAt(sheet, rg.r1, rg.c1)}

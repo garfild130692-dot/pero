@@ -650,9 +650,22 @@ const sameValue = (a, b) => (isErr(a) && isErr(b) ? a.error === b.error : a === 
 // ---------- Ввод ----------
 // Ввод пользователя в ячейку: «=…» — формула; иначе число/дата/проценты/текст (формат подставляется, если был «Общий»)
 export function setInput(wb, si, r, c, raw) {
-  const sheet = wb.sheets[si];
-  const cells = new Map(sheet.cells);
-  const k = key(r, c);
+  return setInputs(wb, [{ si, r, c, raw }]);
+}
+// Ввод сразу в несколько ячеек (замена во всей книге и т. п.): items = [{ si, r, c, raw }], один пересчёт
+export function setInputs(wb, items) {
+  let out = wb;
+  const bySheet = new Map();
+  for (const it of items) { if (!bySheet.has(it.si)) bySheet.set(it.si, []); bySheet.get(it.si).push(it); }
+  for (const [si, list] of bySheet) {
+    const sheet = out.sheets[si];
+    const cells = new Map(sheet.cells);
+    for (const { r, c, raw } of list) putInput(cells, key(r, c), raw);
+    out = withSheet(out, si, { ...sheet, cells });
+  }
+  return recalc(out);
+}
+function putInput(cells, k, raw) {
   const old = cells.get(k) || {};
   const s = String(raw ?? '');
   let cell;
@@ -667,7 +680,6 @@ export function setInput(wb, si, r, c, raw) {
   }
   if (cell.v == null && cell.f == null && !cell.s) cells.delete(k);
   else cells.set(k, cell);
-  return recalc(withSheet(wb, si, { ...sheet, cells }));
 }
 
 // Текст для строки формул / редактирования

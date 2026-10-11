@@ -243,3 +243,23 @@ input.sheet-tab.editing { width: 120px; background: #fff; border: 1px solid var(
 .fc-bside.midv { top: 10px; bottom: 10px; left: 105px; width: 10px; }
 .fc-bside:hover { background: var(--accent-soft); }
 .fc-btext { position: absolute; inset: 0; display: grid; place-items: center; color: #aaa; pointer-events: none; }
+
+/* «Найти и заменить» — окно поверх книги, справа сверху */
+.find-dlg { position: fixed; top: 170px; right: 24px; width: 540px; z-index: 110; background: #fff; border: 1px solid var(--line); border-radius: 6px; box-shadow: 0 8px 30px rgba(0,0,0,.2); font-size: 13px; }
+.find-head { display: flex; align-items: center; padding: 8px 12px; font-weight: 600; }
+.find-x { margin-left: auto; border: 0; background: transparent; cursor: pointer; font-size: 14px; color: #555; }
+.find-dlg .fc-tabs { padding: 0 12px; }
+.find-body { padding: 10px 12px; display: flex; flex-direction: column; gap: 6px; }
+.find-row { display: flex; align-items: center; gap: 8px; }
+.find-row span { width: 90px; }
+.find-row input { flex: 1; }
+.find-opts { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 12px; margin: 4px 0; }
+.find-actions { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 4px; }
+.find-actions .spacer { flex: 1; }
+.find-list { border: 1px solid var(--line); max-height: 180px; overflow: auto; margin-top: 6px; }
+.find-item { display: grid; grid-template-columns: 90px 60px 1fr; gap: 6px; width: 100%; border: 0; background: transparent; text-align: left; padding: 2px 6px; font: inherit; cursor: pointer; }
+.find-item.head { font-weight: 600; background: #f3f3f3; cursor: default; position: sticky; top: 0; }
+.find-item span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.find-item:not(.head):hover { background: var(--accent-soft); }
+.find-item.on { background: var(--accent); color: #fff; }
+.find-count { padding: 3px 6px; color: #666; font-size: 12px; }

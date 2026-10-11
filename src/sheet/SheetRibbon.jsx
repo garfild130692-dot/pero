@@ -275,19 +275,27 @@ export default function SheetRibbon({ api }) {
               ]} />
             </Group>
             <Group title="Редактирование">
-              <Btn title="Автосумма (Alt+=)" onClick={api.autoSum}><T>Σ</T> Автосумма</Btn>
-              <MenuButton title="Сортировка" label="Сортировка" items={[
-                ['Сортировка от А до Я / по возрастанию', () => change((w) => sortRange(w, si, rg, sel.c, true))],
-                ['Сортировка от Я до А / по убыванию', () => change((w) => sortRange(w, si, rg, sel.c, false))],
-                ['Настраиваемая сортировка…', api.sortDialog],
-                '-',
-                ['Фильтр', api.toggleFilter, api.filterOn],
-              ]} />
-              <MenuButton icon="clear" title="Очистить" label="" items={[
-                ['Очистить всё', () => change((w) => clearRange(w, si, rg, 'all'))],
-                ['Очистить форматы', () => change((w) => clearRange(w, si, rg, 'formats'))],
-                ['Очистить содержимое', () => change((w) => clearRange(w, si, rg, 'contents'))],
-              ]} />
+              <div className="rb-col">
+                <Btn title="Автосумма (Alt+=)" onClick={api.autoSum}><T>Σ</T> Автосумма</Btn>
+                <MenuButton icon="clear" title="Очистить" label="Очистить" items={[
+                  ['Очистить всё', () => change((w) => clearRange(w, si, rg, 'all'))],
+                  ['Очистить форматы', () => change((w) => clearRange(w, si, rg, 'formats'))],
+                  ['Очистить содержимое', () => change((w) => clearRange(w, si, rg, 'contents'))],
+                ]} />
+              </div>
+              <div className="rb-col">
+                <MenuButton icon="sort" title="Сортировка и фильтр" label="Сортировка" items={[
+                  ['Сортировка от А до Я / по возрастанию', () => change((w) => sortRange(w, si, rg, sel.c, true))],
+                  ['Сортировка от Я до А / по убыванию', () => change((w) => sortRange(w, si, rg, sel.c, false))],
+                  ['Настраиваемая сортировка…', api.sortDialog],
+                  '-',
+                  ['Фильтр', api.toggleFilter, api.filterOn],
+                ]} />
+                <MenuButton title="Найти и выделить" label="Найти" items={[
+                  ['Найти… (Ctrl+F)', () => api.find('find')],
+                  ['Заменить… (Ctrl+H)', () => api.find('replace')],
+                ]} />
+              </div>
             </Group>
           </>
         )}
