@@ -10,6 +10,8 @@
 // Нумерованный список: атрибуты orderedList numFmt (null — по уровню: 1, a, i) и lvlText ('%1.' по умолчанию; '%1)',
 // '(%1)', '%1.%2.' — с номерами родителей).
 import { Extension } from '@tiptap/core';
+import { Plugin, PluginKey } from '@tiptap/pm/state';
+import { Decoration, DecorationSet } from '@tiptap/pm/view';
 
 export const NUM_FORMATS = [
   ['decimal', '1, 2, 3'], ['decimalZero', '01, 02, 03'], ['lowerLetter', 'a, b, c'], ['upperLetter', 'A, B, C'],
@@ -110,6 +112,40 @@ export function markerKind(text, ilvl = 0) {
   return null;
 }
 
+// ---------- Маркеры и продолжение нумерации ----------
+// Маркер маркированного списка — атрибут bulletList bullet (знак; null — по уровню: •, ○, ■, как у Word).
+// Нумерованные списки верхнего уровня с одинаковым listId — один список Word (общий w:num): нумерация продолжается
+// через абзацы между ними; номер начала на экране считает плагин listContinuation.
+export const DEFAULT_BULLETS = ['•', '○', '■'];
+export const BULLET_LIBRARY = ['•', '○', '■', '◆', '❖', '➢', '✓', '★', '–', '➤'];
+// Знак ↔ lvlText и шрифт w:lvl (знаки шрифтов Symbol/Wingdings — из области частного использования, как пишет Word)
+const BULLET_FONTS = { '•': ['\uF0B7', 'Symbol'], '○': ['o', 'Courier New'], '■': ['\uF0A7', 'Wingdings'], '❖': ['\uF076', 'Wingdings'], '➢': ['\uF0D8', 'Wingdings'], '✓': ['\uF0FC', 'Wingdings'], '–': ['–', 'Calibri'] };
+export function bulletToLvl(ch) { return BULLET_FONTS[ch] || [ch, 'Segoe UI Symbol']; }
+export function bulletFromLvl(text, font) {
+  const t = String(text || '');
+  for (const [ch, [lt, f]] of Object.entries(BULLET_FONTS)) if (t === lt && (!font || font.toLowerCase() === f.toLowerCase())) return ch;
+  const code = t.codePointAt(0);
+  if (code >= 0xf000 && code <= 0xf0ff) return '•'; // другой знак шрифта символов — показываем точкой
+  return t || '•';
+}
+// Нумерация: готовые форматы (меню «Нумерованный список ▾»)
+export const NUMBER_LIBRARY = [['decimal', '%1.'], ['decimal', '%1)'], ['upperRoman', '%1.'], ['upperLetter', '%1.'], ['lowerLetter', '%1)'],
+  ['lowerLetter', '%1.'], ['lowerRoman', '%1.'], ['russianLower', '%1)'], ['russianUpper', '%1.']];
+
+// Номер начала каждого нумерованного списка с listId (продолжение предыдущего)
+export function listStarts(doc) {
+  const counters = new Map();
+  const out = [];
+  doc.forEach((node, pos) => {
+    if (node.type.name !== 'orderedList' || !node.attrs.listId) return;
+    const id = node.attrs.listId;
+    const start = counters.has(id) ? counters.get(id) : (node.attrs.start || 1);
+    out.push({ pos, node, start, continued: counters.has(id) });
+    counters.set(id, start + node.childCount);
+  });
+  return out;
+}
+
 export const LIST_PATTERNS = [['%1.', '1.'], ['%1)', '1)'], ['(%1)', '(1)'], ['%1', '1'], ['%1.%2.', '1.1. (с номером родителя)']];
 
 export const Numbering = Extension.create({
@@ -123,8 +159,18 @@ export const Numbering = Extension.create({
         },
       },
       {
+        types: ['bulletList'],
+        attributes: {
+          bullet: {
+            default: null, parseHTML: (el) => el.getAttribute('data-bullet'),
+            renderHTML: (a) => (a.bullet ? { 'data-bullet': a.bullet, style: `--bullet: "${String(a.bullet).replace(/["\\]/g, '')}"` } : {}),
+          },
+        },
+      },
+      {
         types: ['orderedList'],
         attributes: {
+          listId: { default: null, parseHTML: (el) => el.getAttribute('data-list'), renderHTML: (a) => (a.listId ? { 'data-list': a.listId } : {}) },
           numFmt: { default: null, parseHTML: (el) => el.getAttribute('data-fmt'), renderHTML: (a) => (a.numFmt ? { 'data-fmt': a.numFmt, style: `--lst: ${cssCounterStyle(a.numFmt)}` } : {}) },
           lvlText: { default: null, parseHTML: (el) => el.getAttribute('data-lvl'), renderHTML: (a) => (a.lvlText ? { 'data-lvl': a.lvlText, 'data-mk': markerKind(a.lvlText) || null } : {}) },
         },
@@ -151,6 +197,42 @@ export const Numbering = Extension.create({
         if (dispatch) dispatch(tr.setNodeMarkup($f.before(), null, { ...node.attrs, noNumber: node.attrs.noNumber ? null : true }));
         return true;
       },
+      // маркер маркированного списка под курсором (нет списка — создать)
+      setBullet: (ch) => ({ state, chain }) => {
+        const list = closestList(state, 'bulletList');
+        if (!list) return chain().toggleBulletList().setBullet(ch).run();
+        return chain().command(({ tr }) => { tr.setNodeMarkup(list.pos, null, { ...list.node.attrs, bullet: ch && ch !== DEFAULT_BULLETS[list.depth % 3] ? ch : null }); return true; }).run();
+      },
+      // формат номера из библиотеки (нет нумерованного списка — создать)
+      setNumberFormat: (numFmt, lvlText) => ({ state, chain }) => {
+        const list = closestList(state, 'orderedList');
+        if (!list) return chain().toggleOrderedList().setNumberFormat(numFmt, lvlText).run();
+        const def = ['decimal', 'lowerLetter', 'lowerRoman'][list.depth % 3];
+        return chain().setListFormat({ numFmt: numFmt === def ? null : numFmt, lvlText: lvlText === '%1.' ? null : lvlText }).run();
+      },
+      // «Начать заново с 1» / «Задать начальное значение» — новый список
+      restartNumbering: (start = 1) => ({ state, tr, dispatch }) => {
+        const list = closestList(state, 'orderedList');
+        if (!list) return false;
+        if (dispatch) dispatch(tr.setNodeMarkup(list.pos, null, { ...list.node.attrs, listId: null, start: Math.max(0, start) }));
+        return true;
+      },
+      // «Продолжить нумерацию» — продолжение ближайшего предыдущего нумерованного списка верхнего уровня
+      continueNumbering: () => ({ state, tr, dispatch }) => {
+        const list = closestList(state, 'orderedList', true);
+        if (!list) return false;
+        let prev = null;
+        state.doc.forEach((n, pos) => { if (pos < list.pos && n.type.name === 'orderedList') prev = { n, pos }; });
+        if (!prev) return false;
+        let id = prev.n.attrs.listId;
+        if (!id) {
+          id = `P${Date.now().toString(36)}`;
+          tr.setNodeMarkup(prev.pos, null, { ...prev.n.attrs, listId: id });
+        }
+        tr.setNodeMarkup(list.pos, null, { ...list.node.attrs, listId: id, start: null });
+        if (dispatch) dispatch(tr);
+        return true;
+      },
       // формат нумерованного списка под курсором: { numFmt, lvlText, start }
       setListFormat: (fmt) => ({ state, tr, dispatch }) => {
         const $f = state.selection.$from;
@@ -160,7 +242,7 @@ export const Numbering = Extension.create({
           const attrs = { ...n.attrs };
           if ('numFmt' in fmt) attrs.numFmt = fmt.numFmt || null;
           if ('lvlText' in fmt) attrs.lvlText = fmt.lvlText || null;
-          if (fmt.start) attrs.start = fmt.start;
+          if (fmt.start != null) attrs.start = fmt.start;
           if (dispatch) dispatch(tr.setNodeMarkup($f.before(d), null, attrs));
           return true;
         }
@@ -168,4 +250,31 @@ export const Numbering = Extension.create({
       },
     };
   },
+  addProseMirrorPlugins() {
+    // продолжение нумерации: у списка, продолжающего предыдущий, на экране — номер начала (атрибут start у <ol>)
+    const key = new PluginKey('listContinuation');
+    const build = (doc) => DecorationSet.create(doc, listStarts(doc).filter((x) => x.continued)
+      .map((x) => Decoration.node(x.pos, x.pos + x.node.nodeSize, { start: String(x.start) })));
+    return [new Plugin({
+      key,
+      state: { init: (_c, s) => build(s.doc), apply: (tr, v) => (tr.docChanged ? build(tr.doc) : v) },
+      props: { decorations: (s) => key.getState(s) },
+    })];
+  },
 });
+
+// Ближайший список типа type вокруг курсора: { node, pos, depth (вложенность среди списков) }; top — только верхний уровень
+function closestList(state, type, top = false) {
+  const $f = state.selection.$from;
+  let found = null;
+  for (let d = $f.depth; d > 0; d--) {
+    const n = $f.node(d);
+    if (n.type.name !== type) continue;
+    if (top && d !== 1) continue;
+    let depth = 0;
+    for (let k = d - 1; k > 0; k--) if (['bulletList', 'orderedList'].includes($f.node(k).type.name)) depth++;
+    found = { node: n, pos: $f.before(d), depth };
+    if (!top) break;
+  }
+  return found;
+}

@@ -6,6 +6,7 @@ import { NEW_DOC_PARA, ptToTwips } from '../editor/paragraph.js';
 import { CELL_SIDES, GRID_BORDERS, TABLE_SIDES, TWIPS_PER_PX, borderToOoxml } from '../editor/table.js';
 import { EMU_PER_PX, dataUrlToBytes, extOf } from '../editor/image.js';
 import { parseSectPr, setHfRefs, setTitlePg, writeHfPart } from '../editor/page.js';
+import { bulletToLvl } from '../editor/numbering.js';
 import { addWatermark, patchBackground, patchSettingsBackground, stripWatermark, watermarkBox, watermarkRunXml } from '../editor/design.js';
 import { commentsXml } from '../editor/comments.js';
 import { FOOTNOTES_TYPE, footnotesPartXml } from '../editor/footnotes.js';
@@ -122,7 +123,8 @@ class Exporter {
     this.relTargets = relTargets; // rId → путь части в исходном пакете (если сохраняем в него)
     this.images = [];             // новые картинки: { rid, path, bytes, ext }
     this.links = [];      // гиперссылки → relationships
-    this.orderedNums = []; // экземпляры нумерованных списков: { start, ilvl }
+    this.orderedNums = []; // экземпляры нумерованных списков: { start, ilvl, fmt, text } и маркированных со своим знаком { ilvl, bullet }
+    this.listNums = new Map(); // listId → numId (продолжение нумерации)
     this.styleIds = styleIds;
     this.numBase = numBase; // первый свободный numId (в исходном numbering.xml уже могут быть свои)
   }
@@ -259,10 +261,19 @@ class Exporter {
 
   list(node, ilvl) {
     let numId;
-    if (node.type === 'bulletList') numId = this.numBase;
-    else {
-      this.orderedNums.push({ start: (node.attrs && node.attrs.start) || 1, ilvl, fmt: (node.attrs && node.attrs.numFmt) || null, text: (node.attrs && node.attrs.lvlText) || null });
-      numId = this.numBase + this.orderedNums.length; // numBase — маркированный, дальше — нумерованные
+    const a = node.attrs || {};
+    if (node.type === 'bulletList') {
+      // свой маркер — своя нумерация (маркированный уровень с этим знаком), иначе общий маркированный список
+      if (a.bullet) { this.orderedNums.push({ ilvl, bullet: a.bullet }); numId = this.numBase + this.orderedNums.length; } else numId = this.numBase;
+    } else {
+      // списки с одним listId (продолжение нумерации) — один w:num
+      const lid = ilvl === 0 && a.listId;
+      if (lid && this.listNums.has(lid)) numId = this.listNums.get(lid);
+      else {
+        this.orderedNums.push({ start: a.start ?? 1, ilvl, fmt: a.numFmt || null, text: a.lvlText || null });
+        numId = this.numBase + this.orderedNums.length; // numBase — маркированный, дальше — нумерованные
+        if (lid) this.listNums.set(lid, numId);
+      }
     }
     let xml = '';
     for (const item of node.content || []) {
@@ -494,7 +505,20 @@ function numberingParts(orderedNums, absBase = 0, numBase = 1, heading = null) {
   let abstracts =
     `<w:abstractNum w:abstractNumId="${absBase}"><w:multiLevelType w:val="hybridMultilevel"/>${bulletLvls}</w:abstractNum>` +
     `<w:abstractNum w:abstractNumId="${absBase + 1}"><w:multiLevelType w:val="hybridMultilevel"/>${decimalLvls}</w:abstractNum>`;
+  const bulletLvl = (i, ch) => {
+    const [text, font] = bulletToLvl(ch);
+    return `<w:lvl w:ilvl="${i}"><w:start w:val="1"/><w:numFmt w:val="bullet"/><w:lvlText w:val="${esc(text)}"/><w:lvlJc w:val="left"/>` +
+      `<w:pPr><w:ind w:left="${720 * (i + 1)}" w:hanging="360"/></w:pPr>` +
+      `<w:rPr><w:rFonts w:ascii="${font}" w:hAnsi="${font}" w:hint="default"/></w:rPr></w:lvl>`;
+  };
   orderedNums.forEach((n, k) => {
+    if (n.bullet) {
+      // маркированный список со своим знаком
+      const abs = absBase + 2 + k;
+      abstracts += `<w:abstractNum w:abstractNumId="${abs}"><w:multiLevelType w:val="hybridMultilevel"/>${bulletLvls.replace(new RegExp(`<w:lvl w:ilvl="${n.ilvl}">[\\s\\S]*?</w:lvl>`), bulletLvl(n.ilvl, n.bullet))}</w:abstractNum>`;
+      nums += `<w:num w:numId="${numBase + k + 1}"><w:abstractNumId w:val="${abs}"/></w:num>`;
+      return;
+    }
     // список с особым форматом — своя абстрактная нумерация (уровень списка изменён)
     let abs = absBase + 1;
     if (n.fmt || n.text) {

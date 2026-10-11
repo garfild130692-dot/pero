@@ -73,7 +73,9 @@ export function SymbolButton({ editor, Btn, onMore }) {
   );
 }
 
-export default function SymbolDialog({ editor, onClose }) {
+// onPick(знак) — выбор знака вместо вставки в текст (например, «Определить новый маркер»)
+export default function SymbolDialog({ editor, onClose, onPick = null, title = 'Символ' }) {
+  const put = (ch, font) => { if (onPick) { onPick(ch); onClose(); } else insertSymbol(editor, ch, font); };
   const [tab, setTab] = useState('symbols');
   const [font, setFont] = useState(''); // '' — обычный текст (шрифт у курсора)
   const [fonts, setFonts] = useState(COMMON_FONTS);
@@ -107,8 +109,8 @@ export default function SymbolDialog({ editor, onClose }) {
     if (i >= 0) setSubset(i);
   };
   const doInsert = () => {
-    if (tab === 'special') insertSymbol(editor, SPECIAL[special][0]);
-    else insertSymbol(editor, String.fromCodePoint(sel), font || null);
+    if (tab === 'special') put(SPECIAL[special][0]);
+    else put(String.fromCodePoint(sel), font || null);
   };
   const onCode = (v) => {
     setCode(v);
@@ -126,7 +128,7 @@ export default function SymbolDialog({ editor, onClose }) {
     <div className="modal-backdrop" onMouseDown={onClose}>
       <div className="modal pd sym-dlg" role="dialog" aria-label="Символ" onMouseDown={(e) => e.stopPropagation()}
         onKeyDown={(e) => { if (e.key === 'Escape') onClose(); if (e.key === 'Enter' && e.target.tagName !== 'SELECT') { e.preventDefault(); doInsert(); } }}>
-        <div className="modal-title">Символ</div>
+        <div className="modal-title">{title}</div>
         <div className="pd-tabs" role="tablist">
           <button type="button" role="tab" className={tab === 'symbols' ? 'active' : ''} onClick={() => setTab('symbols')}>Символы</button>
           <button type="button" role="tab" className={tab === 'special' ? 'active' : ''} onClick={() => setTab('special')}>Специальные знаки</button>
@@ -149,7 +151,7 @@ export default function SymbolDialog({ editor, onClose }) {
             <div className="sym-grid" ref={gridRef} style={{ fontFamily: font ? cssFontStack(font) : undefined }}>
               {chars.map((cp) => (
                 <button key={cp} type="button" data-cp={cp} className={`sym-cell${cp === sel ? ' sel' : ''}`} title={`U+${hex(cp)}`}
-                  onClick={() => pick(cp)} onDoubleClick={() => { pick(cp); insertSymbol(editor, String.fromCodePoint(cp), font || null); }}>
+                  onClick={() => pick(cp)} onDoubleClick={() => { pick(cp); put(String.fromCodePoint(cp), font || null); }}>
                   {String.fromCodePoint(cp)}
                 </button>
               ))}
@@ -168,7 +170,7 @@ export default function SymbolDialog({ editor, onClose }) {
             <div className="sym-special" role="listbox">
               {SPECIAL.map(([ch, name, keys], i) => (
                 <div key={name} role="option" aria-selected={i === special} className={`sym-row${i === special ? ' sel' : ''}`}
-                  onClick={() => setSpecial(i)} onDoubleClick={() => { setSpecial(i); insertSymbol(editor, ch); }}>
+                  onClick={() => setSpecial(i)} onDoubleClick={() => { setSpecial(i); put(ch); }}>
                   <span className="sym-ch">{visible(ch)}</span><span>{name}</span><em>{keys}</em>
                 </div>
               ))}
@@ -177,7 +179,7 @@ export default function SymbolDialog({ editor, onClose }) {
         </div>
         <div className="modal-actions">
           <span className="spacer" />
-          <button className="btn primary" onClick={doInsert}>Вставить</button>
+          <button className="btn primary" onClick={doInsert}>{onPick ? 'ОК' : 'Вставить'}</button>
           <button className="btn" onClick={onClose}>Закрыть</button>
         </div>
       </div>

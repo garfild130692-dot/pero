@@ -19,6 +19,7 @@ import VRuler from './VRuler.jsx';
 import { PageBordersDialog, PageDecor, PrintDecor, WatermarkDialog } from './DesignControls.jsx';
 import { PasteOptionsTag, PasteSpecialDialog } from './PasteControls.jsx';
 import { ListFormatDialog, MultilevelDialog } from './NumberingDialogs.jsx';
+import { NumberValueDialog } from './ListButtons.jsx';
 import { cssFontStack } from './editor/font.js';
 import { NEW_DOC_PARA } from './editor/paragraph.js';
 import { lineCss } from './editor/paraFormat.js';
@@ -525,6 +526,8 @@ export default function App({ initialFile, onOpenOther, onNewSheet, autosaveSec 
       {modal === 'date' && <DateDialog editor={editor} onClose={() => setModal(null)} />}
       {modal === 'multilevel' && <MultilevelDialog editor={editor} onClose={() => setModal(null)} />}
       {modal === 'listFormat' && <ListFormatDialog editor={editor} onClose={() => setModal(null)} />}
+      {modal === 'numberValue' && <NumberValueDialog editor={editor} onClose={() => setModal(null)} />}
+      {modal === 'bulletSymbol' && <SymbolDialog editor={editor} title="Определение нового маркера" onPick={(ch) => editor.chain().focus().setBullet(ch).run()} onClose={() => setModal(null)} />}
       {modal === 'pasteSpecial' && <PasteSpecialDialog editor={editor} nativePaste={() => fileApi.clipboard('paste')} onClose={() => setModal(null)} />}
       {viewMode !== 'read' && <PasteOptionsTag editor={editor} />}
       {modal === 'watermark' && <WatermarkDialog editor={editor} onClose={() => setModal(null)} />}

@@ -396,7 +396,8 @@ print('margin', round(d.sections[0].left_margin.cm, 2))
     const count = (xml, re) => (xml.match(re) || []).length;
     const origAbs = count(before['word/numbering.xml'], /<w:abstractNum\b/g);
     const origNums = count(before['word/numbering.xml'], /<w:num\b/g);
-    expect(count(f['word/numbering.xml'], /<w:abstractNum\b/g)).toBe(origAbs + 2);
+    // + маркированный и нумерованный Пера + маркированный «•» второго уровня (в шаблоне python-docx там точка, а не «○»)
+    expect(count(f['word/numbering.xml'], /<w:abstractNum\b/g)).toBe(origAbs + 3);
     expect(count(f['word/numbering.xml'], /<w:num\b/g)).toBeGreaterThan(origNums);
     // все abstractNum — до первого num (порядок схемы)
     const n = f['word/numbering.xml'];

@@ -823,3 +823,13 @@ p[data-section-break]::after {
 .paste-tag-menu { position: absolute; top: 24px; left: 0; min-width: 270px; }
 .paste-tag-menu .menu-item svg { flex: none; }
 @media print { .paste-tag { display: none !important; } }
+
+/* маркеры и библиотеки списков */
+.page-content ul[data-bullet] > li::marker { content: var(--bullet) "  "; }
+.lib-grid { display: grid; grid-template-columns: repeat(3, 74px); gap: 4px; padding: 4px 8px; }
+.lib-cell { height: 64px; border: 1px solid var(--line); background: #fff; cursor: pointer; padding: 6px; display: flex; flex-direction: column; justify-content: space-around; font: 11px 'Segoe UI', sans-serif; }
+.lib-cell:hover { border-color: var(--accent); background: var(--accent-soft); }
+.lib-cell span { display: flex; align-items: center; gap: 4px; }
+.lib-cell b { font-weight: normal; min-width: 18px; text-align: right; }
+.lib-cell i { flex: 1; height: 2px; background: #c9d6d2; }
+.lib-cell.bullet b { min-width: 10px; text-align: center; }

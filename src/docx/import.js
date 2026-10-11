@@ -10,6 +10,7 @@ import { EMPTY_HF, readHfPart } from '../editor/page.js';
 import { readComments } from '../editor/comments.js';
 import { readFootnotes } from '../editor/footnotes.js';
 import { readBackground, readWatermark } from '../editor/design.js';
+import { DEFAULT_BULLETS, bulletFromLvl } from '../editor/numbering.js';
 import { layoutAttrs, readLayoutProps } from '../editor/paraLayout.js';
 import { applyTabLayer, readTabs } from '../editor/tabs.js';
 
@@ -236,6 +237,7 @@ function parseNumbering(doc) {
         start: +(wAttr(child(lvl, 'start'), 'val') || 1),
         text: wAttr(child(lvl, 'lvlText'), 'val') ?? `%${il + 1}.`,
         suff: wAttr(child(lvl, 'suff'), 'val') || 'tab',
+        font: wAttr(child(child(lvl, 'rPr'), 'rFonts'), 'ascii') || null,
       };
     }
     abstract[wAttr(a, 'abstractNumId')] = levels;
@@ -255,7 +257,10 @@ function listInfo(numbering, numId, ilvl) {
   const numFmt = lvl && fmt !== DEF_FMT && fmt !== 'bullet' && fmt !== 'none' ? fmt : null;
   const norm = lvl && /%\d/.test(lvl.text || '') ? normalizeLvlText(lvl.text, ilvl) : null;
   const lvlText = norm && norm !== '%1.' ? norm : null;
-  return { type: fmt === 'bullet' || fmt === 'none' ? 'bulletList' : 'orderedList', start: lvl ? lvl.start : 1, numFmt, lvlText };
+  // маркер — только отличие от нашего вида уровня (•, ○, ■)
+  const ch = fmt === 'bullet' && lvl ? bulletFromLvl(lvl.text, lvl.font) : null;
+  const bullet = ch && ch !== DEFAULT_BULLETS[ilvl % 3] ? ch : null;
+  return { type: fmt === 'bullet' || fmt === 'none' ? 'bulletList' : 'orderedList', start: lvl ? lvl.start : 1, numFmt, lvlText, bullet };
 }
 
 // Шаблон номера уровня ilvl в виде «относительно списка»: '%3)' → '%1)', '%1.%2.%3.' → '%1.%2.' (с родителем)
@@ -772,6 +777,8 @@ class Importer {
       if (!top || top.level < ilvl) {
         const list = { type: info.type, content: [] };
         if (info.type === 'orderedList') list.attrs = { start: info.start, ...(info.numFmt ? { numFmt: info.numFmt } : {}), ...(info.lvlText ? { lvlText: info.lvlText } : {}) };
+        else if (info.bullet) list.attrs = { bullet: info.bullet };
+        if (info.type === 'orderedList' && !top) list._num = numId; // продолжение нумерации — см. конец blocks()
         if (top) {
           const items = top.list.content;
           items[items.length - 1].content.push(list);
@@ -805,6 +812,19 @@ class Importer {
       } else if (!['tcPr', 'bookmarkStart', 'bookmarkEnd', 'proofErr', 'commentRangeStart', 'commentRangeEnd'].includes(name)) {
         this.warn('прочие элементы');
       }
+    }
+    // Нумерованные списки верхнего уровня с общим w:num (между ними абзацы) — один список Word, нумерация продолжается:
+    // общий listId (L1, L2… по порядку — повторное открытие сохранённого файла даёт тот же)
+    const byNum = new Map();
+    for (const n of out) if (n._num != null) byNum.set(n._num, (byNum.get(n._num) || 0) + 1);
+    const ids = new Map();
+    for (const n of out) {
+      if (n._num == null) continue;
+      if (byNum.get(n._num) > 1) {
+        if (!ids.has(n._num)) ids.set(n._num, `L${(this.listSeq = (this.listSeq || 0) + 1)}`);
+        n.attrs = { ...n.attrs, listId: ids.get(n._num) };
+      }
+      delete n._num;
     }
     return out;
   }

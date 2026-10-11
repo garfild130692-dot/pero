@@ -21,6 +21,7 @@ import { CASES, painterKey } from './editor/runFormat.js';
 import { marksKey } from './editor/marks.js';
 import { SymbolButton } from './SymbolDialog.jsx';
 import { MultilevelButton } from './NumberingDialogs.jsx';
+import { BulletButton, NumberButton } from './ListButtons.jsx';
 import { ViewPanel } from './ViewControls.jsx';
 import { DesignPanel } from './DesignControls.jsx';
 import { PasteButton } from './PasteControls.jsx';
@@ -410,8 +411,8 @@ export default function Ribbon({ editor, file, view, onLink, onFont, onSymbol, o
             <Group title="Абзац" launcher={{ title: 'Параметры абзаца…', onClick: onParagraph }}>
               <div className="rb-rows">
                 <div className="rb-row">
-                  <Btn icon="bullets" title="Маркированный список" active={s.bullet} onClick={() => c().toggleBulletList().run()} />
-                  <Btn icon="numbers" title="Нумерованный список" active={s.ordered} onClick={() => c().toggleOrderedList().run()} />
+                  <BulletButton editor={editor} Btn={Btn} active={s.bullet} onDialog={onRefDialog} />
+                  <NumberButton editor={editor} Btn={Btn} active={s.ordered} onDialog={onRefDialog} />
                   <MultilevelButton editor={editor} Btn={Btn} state={s.numbering} onDialog={onRefDialog} />
                   {/* в списке — уровень списка, иначе левый отступ абзаца шагом 1,25 см */}
                   <Btn icon="outdent" title={s.para.inList ? 'Уменьшить уровень списка (Shift+Tab)' : 'Уменьшить отступ (Ctrl+Shift+M)'}
