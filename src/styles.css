@@ -445,6 +445,12 @@ body { background: var(--workspace); overflow: hidden; }
 }
 .opaque-drawing::before { content: '▣ '; }
 .opaque-math::before { content: '∑ '; }
+/* формула Word, показанная MathML (omml.js): как текст абзаца, «выключная» — отдельной строкой по центру */
+.opaque-math.math-shown { display: inline; padding: 0; margin: 0; border: 0; background: none; color: inherit; font: inherit; line-height: inherit; }
+.opaque-math.math-shown::before { content: none; }
+.opaque-math.math-block { display: block; text-align: center; }
+.opaque-math math { font-family: 'Cambria Math', math; }
+.opaque-math.ProseMirror-selectednode { outline: 2px solid #8fc1b3; }
 .opaque-footnote, .opaque-endnote { color: var(--accent); font-size: 70%; vertical-align: super; line-height: 0; padding: 0 1px; }
 .opaque-footnote::after { counter-increment: pero-fn; content: counter(pero-fn); }
 .opaque-endnote::after { counter-increment: pero-en; content: counter(pero-en, lower-roman); }

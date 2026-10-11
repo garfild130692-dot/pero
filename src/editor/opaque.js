@@ -2,6 +2,7 @@
 // (рисунки, ссылки на сноски, комментарии, закладки, поля, формулы, символы, разрывы страниц).
 // Узел хранит исходный XML и при сохранении записывается обратно без изменений.
 import { Node, mergeAttributes } from '@tiptap/core';
+import { mathDom } from './omml.js';
 
 // Подписи и вид значков. hidden — служебные метки без видимого представления (закладки, части полей)
 export const OPAQUE_KINDS = {
@@ -15,7 +16,7 @@ export const OPAQUE_KINDS = {
   bookmark: { hidden: true },
   field: { hidden: true },        // части сложного поля (начало, код, разделитель, конец); результат — обычный текст
   fieldSimple: { label: null, title: 'Поле — сохраняется без изменений' }, // показывает свой текст
-  math: { label: 'Формула', title: 'Формула — сохраняется без изменений' },
+  math: { label: 'Формула', title: 'Формула Word — показывается, сохраняется без изменений' }, // MathML (omml.js)
   symbol: { label: null, title: 'Символ' },       // показывает сам символ
   pageBreak: { label: 'Разрыв страницы', title: 'Разрыв страницы' },
   columnBreak: { label: 'Разрыв колонки', title: 'Разрыв колонки' },
@@ -53,17 +54,19 @@ export const Opaque = Node.create({
   renderHTML({ node, HTMLAttributes }) {
     const { kind, xml, text, font } = node.attrs;
     const k = OPAQUE_KINDS[kind] || OPAQUE_KINDS.other;
+    const math = kind === 'math' ? mathDom(xml) : null; // формула — MathML; не разобралась — значок
     const attrs = mergeAttributes(HTMLAttributes, {
       'data-opaque': kind,
       'data-xml': xml,
       'data-text': text || null,
       'data-font': font || null,
-      class: `opaque opaque-${kind}`,
+      class: `opaque opaque-${kind}${math ? ` math-shown${/^\s*<m:oMathPara\b/.test(xml) ? ' math-block' : ''}` : ''}`,
       title: k.title || null,
       contenteditable: 'false',
       style: font ? `font-family: "${font}"` : null,
     });
     // xml/text — в атрибутах: так значок переживает копирование и вставку внутри документа
+    if (math) return ['span', attrs, math];
     const label = k.hidden ? '' : k.label === null ? text : k.label;
     return ['span', attrs, label];
   },
