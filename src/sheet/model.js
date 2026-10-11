@@ -825,6 +825,12 @@ export function shiftCells(wb, si, axis, at, count) {
         }
         next.cf = cf;
       }
+      // ручные разрывы страниц
+      if (sheet.breaks) {
+        const kk = axis === 'row' ? 'rows' : 'cols';
+        const list = (sheet.breaks[kk] || []).map((v) => (count < 0 && v >= at && v < at - count ? null : v >= at ? v + count : v)).filter((v) => v != null && v > 0);
+        next.breaks = { ...sheet.breaks, [kk]: [...new Set(list)] };
+      }
       // проверка данных: диапазоны и формулы правил
       if (sheet.dv) {
         next.dv = sheet.dv.map((rule) => {
@@ -1161,6 +1167,21 @@ export function fillSeries(wb, si, src, dst, opts = {}) {
   return recalc(withSheet(wb, si, { ...sheet, cells }));
 }
 const cleanFormula = (cell) => { for (const n of ['arr', 'ax', 'legacy', 'cse']) delete cell[n]; return cell; };
+
+// ---------- Разрывы страниц ----------
+// «Вставить разрыв страницы» у ячейки (r, c): разрыв перед строкой r и перед столбцом c (в первой строке/столбце —
+// только по другой оси), как в Excel; remove — убрать разрывы у этой ячейки; reset — убрать все
+export function setPageBreak(wb, si, r, c, mode = 'insert') {
+  const sheet = wb.sheets[si];
+  const b = { rows: [...((sheet.breaks && sheet.breaks.rows) || [])], cols: [...((sheet.breaks && sheet.breaks.cols) || [])] };
+  if (mode === 'reset') { b.rows = []; b.cols = []; }
+  else if (mode === 'remove') { b.rows = b.rows.filter((x) => x !== r); b.cols = b.cols.filter((x) => x !== c); }
+  else { if (r > 0 && !b.rows.includes(r)) b.rows.push(r); if (c > 0 && !b.cols.includes(c)) b.cols.push(c); }
+  b.rows.sort((x, y) => x - y); b.cols.sort((x, y) => x - y);
+  const next = { ...sheet, breaks: b };
+  if (!b.rows.length && !b.cols.length) delete next.breaks;
+  return withSheet(wb, si, next);
+}
 
 // ---------- Проверка данных ----------
 // Задать правило для диапазона (rule = null — убрать проверку): у других правил этот диапазон вычитается

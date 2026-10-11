@@ -291,6 +291,16 @@ function readProtection(root) {
   for (let i = 0; i < el.attributes.length; i++) attrs[el.attributes[i].name] = el.attributes[i].value;
   return { attrs };
 }
+// Ручные разрывы страниц: { rows: [номер первой строки новой страницы], cols: [...] } (brk id — с нуля)
+function readBreaks(root) {
+  const ids = (tag) => kids(kid(root, tag), 'brk').filter((b) => b.getAttribute('man') !== '0').map((b) => +b.getAttribute('id')).filter((n) => n > 0);
+  const rows = ids('rowBreaks'); const cols = ids('colBreaks');
+  return rows.length || cols.length ? { rows, cols } : null;
+}
+const breaksXml = (b, tag, max) => {
+  const list = (b && b[tag === 'rowBreaks' ? 'rows' : 'cols']) || [];
+  return list.length ? `<${tag} count="${list.length}" manualBreakCount="${list.length}">${list.map((id) => `<brk id="${id}" max="${max}" man="1"/>`).join('')}</${tag}>` : '';
+};
 // Условное форматирование листа (cf.js)
 const serializeEl = (el) => new XMLSerializer().serializeToString(el).replace(/\sxmlns(:\w+)?="[^"]*"/g, '');
 const readSheetDv = (root) => readDv(root, { parseRange, serialize: serializeEl });
@@ -473,6 +483,8 @@ export async function importXlsx(data, { recalc: doRecalc = true } = {}) {
     }
     const dv = readSheetDv(root);
     if (dv.length) sheet.dv = dv;
+    const breaks = readBreaks(root);
+    if (breaks) sheet.breaks = breaks;
     if (kid(root, 'drawing')) keep('рисунки и диаграммы');
     if (kid(root, 'tableParts')) keep('«умные» таблицы');
     if (kid(root, 'legacyDrawing')) keep('примечания к ячейкам');
@@ -760,7 +772,7 @@ function newSheetXml(sheet, active, xfOf, str, cm = '1') {
   const xml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<worksheet xmlns="${NS}" xmlns:r="${R}">` +
     `${dimensionXml(sheet)}<sheetViews><sheetView workbookViewId="0"${active ? ' tabSelected="1"' : ''}${sheet.freeze ? `>${paneXml(sheet.freeze)}</sheetView>` : '/>'}</sheetViews>` +
     `${formatPrXml('<sheetFormatPr defaultRowHeight="15"/>', sheet)}${cols}${sheetDataXml(sheet, (r, c, cell) => cellXml(cell, addr(r, c), xfOf, str, formulaFx(sheet, key(r, c), cell, cm)), false, xfOf, str)}${protectionXml(sheet.protection)}${autoFilterXml(sheet.autoFilter)}${mergesXml(sheet)}${cfXml(sheet.cf, xfOf.dxf, rangeName)}${dvXml(sheet.dv, rangeName)}` +
-    `${marginsXml((sheet.page && sheet.page.margins) || {})}</worksheet>`;
+    `${marginsXml((sheet.page && sheet.page.margins) || {})}${breaksXml(sheet.breaks, 'rowBreaks', 16383)}${breaksXml(sheet.breaks, 'colBreaks', 1048575)}</worksheet>`;
   return sheet.page ? setPageXml(xml, sheet.page) : xml;
 }
 
@@ -841,6 +853,7 @@ function patchSheetXml(xml, sheet, active, root, book, xfOf, str, cm) {
   const afChanged = JSON.stringify(readAutoFilter(root)) !== JSON.stringify(sheet.autoFilter || null);
   const cfChanged = cfSignature(readSheetCf(root, book)) !== cfSignature(sheet.cf);
   const dvChanged = dvSignature(readSheetDv(root)) !== dvSignature(sheet.dv);
+  const brChanged = JSON.stringify(readBreaks(root)) !== JSON.stringify(sheet.breaks || null);
   const fp = findEl(out, 'sheetFormatPr');
   if (fp) out = out.slice(0, fp.start) + formatPrXml(out.slice(fp.start, fp.end), sheet) + out.slice(fp.end);
   else if (maxLevel(sheet, 'row') || maxLevel(sheet, 'col')) out = setSheetEl(out, 'sheetFormatPr', formatPrXml('<sheetFormatPr defaultRowHeight="15"/>', sheet));
@@ -860,6 +873,10 @@ function patchSheetXml(xml, sheet, active, root, book, xfOf, str, cm) {
   }
   // проверка данных изменена (или сдвинута) — заново из модели; неизменённые правила — исходной разметкой
   if (dvChanged || shifts.length) out = setSheetEl(out, 'dataValidations', dvXml(sheet.dv, rangeName));
+  if (brChanged || shifts.length) {
+    out = setSheetEl(out, 'rowBreaks', breaksXml(sheet.breaks, 'rowBreaks', 16383));
+    out = setSheetEl(out, 'colBreaks', breaksXml(sheet.breaks, 'colBreaks', 1048575));
+  }
   return out;
 }
 
