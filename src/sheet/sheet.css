@@ -16,7 +16,7 @@
 .sheet-main { flex: 1; min-height: 0; display: flex; outline: none; }
 .grid-wrap { position: relative; flex: 1; min-width: 0; overflow: hidden; }
 .grid-scroll { position: absolute; inset: 0; overflow: auto; }
-.grid-canvas { position: relative; }
+.grid-canvas { user-select: none; position: relative; }
 .grid-cells { position: absolute; cursor: cell; font-family: Calibri, Carlito, 'Segoe UI', sans-serif; font-size: 11pt; }
 .grid-lines { position: absolute; pointer-events: none; }
 .grid-lines line { stroke: #e1e1e1; stroke-width: 1; }
@@ -26,6 +26,8 @@
 }
 .gcell.merged { background: #fff; outline: 1px solid #e1e1e1; outline-offset: -1px; }
 .gsel { position: absolute; pointer-events: none; background: rgba(31, 111, 92, .10); border: 1px solid rgba(31, 111, 92, .55); box-sizing: border-box; }
+.gfill { position: absolute; width: 7px; height: 7px; background: var(--accent); border: 1px solid #fff; box-sizing: border-box; cursor: crosshair; z-index: 3; }
+.gfillprev { position: absolute; pointer-events: none; border: 1px dashed #555; box-sizing: border-box; z-index: 2; }
 .gactive { position: absolute; pointer-events: none; border: 2px solid var(--accent); box-sizing: border-box; margin: -1px 0 0 -1px; padding: 1px; }
 .gedit {
   position: absolute; z-index: 5; box-sizing: border-box; resize: none; border: 2px solid var(--accent); outline: none;

@@ -93,7 +93,7 @@ const OUT_STEP = 14; // ширина уровня в поле структуры
 // refMarks — ссылки редактируемой формулы (цветные рамки); showFormulas — формулы вместо значений (Ctrl+`);
 // arrows — стрелки влияющих/зависимых ячеек [{ from: диапазон, to: { r, c } }]; onErrorInfo — значок у ячейки с ошибкой
 export default function Grid({ sheet, sel, setSel, editing, setEditing, onCommit, onColWidth, onRowHeight, onRefInsert, onOutline, gridRef,
-  refMarks = [], showFormulas = false, arrows = [], onErrorInfo, names = [] }) {
+  refMarks = [], showFormulas = false, arrows = [], onErrorInfo, names = [], onFill }) {
   const scrollRef = useRef(null);
   const [view, setView] = useState({ top: 0, left: 0, w: 800, h: 500 });
   // размеры области: использованная часть + запас (как «бесконечный» лист)
@@ -181,6 +181,48 @@ export default function Grid({ sheet, sel, setSel, editing, setEditing, onCommit
     const up = () => { window.removeEventListener('mousemove', move); window.removeEventListener('mouseup', up); drag.current = null; };
     window.addEventListener('mousemove', move);
     window.addEventListener('mouseup', up);
+  };
+
+  // маркер заполнения (квадратик в углу выделения): протягивание — ряд/копия (Ctrl — наоборот), назад — очистка;
+  // двойной щелчок — вниз до конца данных соседнего столбца
+  const [fillPrev, setFillPrev] = useState(null);
+  const fillTarget = (p) => {
+    const r1 = Math.min(sel.r, sel.r2); const r2 = Math.max(sel.r, sel.r2); const c1 = Math.min(sel.c, sel.c2); const c2 = Math.max(sel.c, sel.c2);
+    const dr = p.r > r2 ? p.r - r2 : p.r < r1 ? p.r - r1 : 0;
+    const dc = p.c > c2 ? p.c - c2 : p.c < c1 ? p.c - c1 : 0;
+    if (!dr && !dc) {
+      // внутри выделения — укоротить (очистка хвоста), по большей стороне
+      if (r2 > r1 && p.r < r2 && (r2 - p.r) >= (c2 - p.c)) return { r1, c1, r2: p.r, c2 };
+      if (c2 > c1 && p.c < c2) return { r1, c1, r2, c2: p.c };
+      return { r1, c1, r2, c2 };
+    }
+    if (Math.abs(dr) >= Math.abs(dc)) return dr > 0 ? { r1, c1, r2: p.r, c2 } : { r1: p.r, c1, r2, c2 };
+    return dc > 0 ? { r1, c1, r2, c2: p.c } : { r1, c1: p.c, r2, c2 };
+  };
+  const startFill = (e) => {
+    if (e.button !== 0) return;
+    e.preventDefault(); e.stopPropagation();
+    const src = { r1: Math.min(sel.r, sel.r2), c1: Math.min(sel.c, sel.c2), r2: Math.max(sel.r, sel.r2), c2: Math.max(sel.c, sel.c2) };
+    let dst = src;
+    setFillPrev(src);
+    const move = (ev) => { dst = fillTarget(cellAt(ev.clientX, ev.clientY)); setFillPrev(dst); };
+    const up = (ev) => {
+      window.removeEventListener('mousemove', move); window.removeEventListener('mouseup', up);
+      setFillPrev(null);
+      if (dst.r1 !== src.r1 || dst.r2 !== src.r2 || dst.c1 !== src.c1 || dst.c2 !== src.c2) onFill(src, dst, ev.ctrlKey);
+    };
+    window.addEventListener('mousemove', move); window.addEventListener('mouseup', up);
+  };
+  const fillDown = (e) => {
+    e.preventDefault(); e.stopPropagation();
+    const src = { r1: Math.min(sel.r, sel.r2), c1: Math.min(sel.c, sel.c2), r2: Math.max(sel.r, sel.r2), c2: Math.max(sel.c, sel.c2) };
+    const filled = (r, c) => c >= 0 && !isEmpty(r, c);
+    // соседний столбец слева (иначе справа): сплошные данные ниже выделения
+    const side = filled(src.r2 + 1, src.c1 - 1) ? src.c1 - 1 : filled(src.r2 + 1, src.c2 + 1) ? src.c2 + 1 : null;
+    if (side == null) return;
+    let last = src.r2;
+    while (last + 1 < 1048576 && filled(last + 1, side)) last++;
+    if (last > src.r2) onFill(src, { ...src, r2: last }, false);
   };
 
   // изменение ширины столбца / высоты строки за край заголовка
@@ -285,6 +327,13 @@ export default function Grid({ sheet, sel, setSel, editing, setEditing, onCommit
       {refMarks.map((m, i) => (
         <div key={`rm${i}`} className="gref" style={{ left: colPos[m.c1], top: rowPos[m.r1], width: colPos[Math.min(m.c2, cols - 1) + 1] - colPos[m.c1], height: rowPos[Math.min(m.r2, rows - 1) + 1] - rowPos[m.r1], borderColor: m.color, background: `${m.color}14` }} />
       ))}
+      {onFill && !editing && !sel.whole && (
+        <div className="gfill" title="Протяните, чтобы заполнить (Ctrl — копировать/ряд); двойной щелчок — до конца данных"
+          style={{ left: colPos[selC2 + 1] - 4, top: rowPos[selR2 + 1] - 4 }} onMouseDown={startFill} onDoubleClick={fillDown} />
+      )}
+      {fillPrev && (
+        <div className="gfillprev" style={{ left: colPos[fillPrev.c1], top: rowPos[fillPrev.r1], width: colPos[fillPrev.c2 + 1] - colPos[fillPrev.c1], height: rowPos[fillPrev.r2 + 1] - rowPos[fillPrev.r1] }} />
+      )}
       {spillSel && (
         <div className="gspill" style={{ left: colPos[spillSel.range.c1], top: rowPos[spillSel.range.r1], width: colPos[spillSel.range.c2 + 1] - colPos[spillSel.range.c1], height: rowPos[spillSel.range.r2 + 1] - rowPos[spillSel.range.r1] }} />
       )}

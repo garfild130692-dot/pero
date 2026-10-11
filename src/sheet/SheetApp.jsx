@@ -16,7 +16,7 @@ const absRange = (rg) => {
 import { formatValue } from './format.js';
 import {
   DEFAULT_COL_W, DEFAULT_ROW_H, addSheet, autoSumFormula, blockToText, clearRange, collapseGroup, copyBlock, deleteSheet, expandGroup, fill, inputOf,
-  isHidden, isValidName, mergeAt, nameTarget, newWorkbook, recalc, setCalcMode, setNames, spillAnchorAt, valueAt, viewContext, pasteBlock, pasteText, renameSheet, setColWidth, setInput, setRowHeight, showLevels, usedRange,
+  fillSeries, isHidden, isValidName, mergeAt, nameTarget, newWorkbook, recalc, setCalcMode, setNames, spillAnchorAt, valueAt, viewContext, pasteBlock, pasteText, renameSheet, setColWidth, setInput, setRowHeight, showLevels, usedRange,
 } from './model.js';
 import { exportXlsx, importXlsx } from './xlsx.js';
 import { exportCsv, importCsv } from './csv.js';
@@ -439,7 +439,8 @@ export default function SheetApp({ initialFile, onOpenOther, onNewDoc, autosaveS
           onColWidth={(c, px) => change((w) => setColWidth(w, si, c, px))} onRowHeight={(r, px) => change((w) => setRowHeight(w, si, r, px))}
           onRefInsert={insertRef} gridRef={gridRef} onOutline={outlineAction} names={wb.names || []}
           refMarks={refMarks} showFormulas={showFormulas} arrows={arrows}
-          onErrorInfo={(r, c, rect) => setErrPop({ r, c, x: rect.right + 4, y: rect.top })} />
+          onErrorInfo={(r, c, rect) => setErrPop({ r, c, x: rect.right + 4, y: rect.top })}
+          onFill={(src, dst, ctrl) => { change((w) => fillSeries(w, si, src, dst, { ctrl })); setSel({ r: dst.r1, c: dst.c1, r2: dst.r2, c2: dst.c2 }); }} />
       </div>
       <div className="sheet-tabs">
         {wb.sheets.map((s, i) => (renaming === i ? (

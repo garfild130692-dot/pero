@@ -15,6 +15,7 @@
 import { key, unkey } from './address.js';
 import { ERR, err, fromUser, localize, evaluate, isErr, offsetFormula, parse, rewriteRefs, shiftFormula } from './formula.js';
 import { parseInput } from './format.js';
+import { extendLine } from './fill.js';
 
 export const DEFAULT_COL_W = 72;  // px (≈ 8,43 символа Calibri 11, как в Excel)
 export const DEFAULT_ROW_H = 20;  // px (15 pt)
@@ -1054,6 +1055,52 @@ export function fill(wb, si, rg, dir) {
   }
   return recalc(withSheet(wb, si, { ...sheet, cells }));
 }
+
+// Маркер заполнения: выделение src протянуто до dst (dst содержит src и шире в одну сторону) — ряды продолжаются
+// (fill.js: числа, даты, текст с номером, месяцы/дни недели), формулы сдвигаются, стили копируются.
+// dst внутри src (протянули назад) — лишние ячейки очищаются, как в Excel. opts.ctrl — Ctrl при протягивании.
+export function fillSeries(wb, si, src, dst, opts = {}) {
+  const sheet = wb.sheets[si];
+  const cells = new Map(sheet.cells);
+  const place = (r, c, from, fr, fc, res) => {
+    const k = key(r, c);
+    if (res.copy !== undefined || res.v === undefined) {
+      if (!from) { cells.delete(k); return; }
+      cells.set(k, from.f != null ? cleanFormula({ ...from, f: offsetFormula(from.f, r - fr, c - fc), v: null }) : from);
+      return;
+    }
+    const cell = { ...(from || {}), v: res.v };
+    for (const n of ['f', 'arr', 'ax', 'legacy', 'cse']) delete cell[n];
+    cells.set(k, cell);
+  };
+  const shrinkRows = dst.r2 < src.r2 && dst.r1 === src.r1; const shrinkCols = dst.c2 < src.c2 && dst.c1 === src.c1;
+  if (shrinkRows || shrinkCols) {
+    for (let r = src.r1; r <= src.r2; r++) for (let c = src.c1; c <= src.c2; c++) if (r > dst.r2 || c > dst.c2) cells.delete(key(r, c));
+    return recalc(withSheet(wb, si, { ...sheet, cells }));
+  }
+  const vertical = dst.r1 < src.r1 || dst.r2 > src.r2;
+  const back = vertical ? dst.r1 < src.r1 : dst.c1 < src.c1;
+  const lines = vertical ? [src.c1, src.c2] : [src.r1, src.r2];
+  for (let line = lines[0]; line <= lines[1]; line++) {
+    // позиции источника в порядке заполнения
+    const pos = [];
+    if (vertical) for (let r = src.r1; r <= src.r2; r++) pos.push([r, line]);
+    else for (let c = src.c1; c <= src.c2; c++) pos.push([line, c]);
+    if (back) pos.reverse();
+    const srcCells = pos.map(([r, c]) => sheet.cells.get(key(r, c)) || null);
+    const count = vertical ? (back ? src.r1 - dst.r1 : dst.r2 - src.r2) : (back ? src.c1 - dst.c1 : dst.c2 - src.c2);
+    const res = extendLine(srcCells, count, opts);
+    res.forEach((x, k) => {
+      const d = (back ? -1 : 1) * (k + 1);
+      const [lr, lc] = pos[pos.length - 1];
+      const r = vertical ? lr + d : lr; const c = vertical ? lc : lc + d;
+      const j = x.copy !== undefined ? x.copy : x.from;
+      place(r, c, srcCells[j], pos[j][0], pos[j][1], x);
+    });
+  }
+  return recalc(withSheet(wb, si, { ...sheet, cells }));
+}
+const cleanFormula = (cell) => { for (const n of ['arr', 'ax', 'legacy', 'cse']) delete cell[n]; return cell; };
 
 // Автосумма для ячейки (r, c): ближайший непрерывный блок чисел сверху (иначе слева)
 export function autoSumFormula(sheet, r, c) {
