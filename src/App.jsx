@@ -14,6 +14,7 @@ import GoToDialog from './GoToDialog.jsx';
 import SortParaDialog from './SortParaDialog.jsx';
 import { DocPropsDialog, FieldDialog } from './FieldDialogs.jsx';
 import { insertDocxFile } from './insertFile.js';
+import { ClipOverlay } from './ScreenshotControls.jsx';
 import { InsertTableDialog, TableToTextDialog, TextToTableDialog } from './TableDialogs.jsx';
 import SymbolDialog from './SymbolDialog.jsx';
 import { BookmarkDialog, CrossRefDialog, DateDialog } from './RefDialogs.jsx';
@@ -483,6 +484,7 @@ export default function App({ initialFile, onOpenOther, onNewSheet, autosaveSec 
       {viewMode !== 'read' && <Ribbon editor={editor} file={{ newDoc, newSheet, open, openHere, save: () => save(), saveAs, print: doPrint, pdf: doPdf }} onLink={() => setModal('link')}
         onStylesPane={() => setStylesPane((v) => !v)}
         docFile={{ name: doc.name, path: doc.path }}
+        onClip={async () => { const data = await fileApi.screenClip(); if (data) setModal({ clip: data }); }}
         onInsertFile={async () => {
           const f = await fileApi.pickDocx();
           if (!f) return;
@@ -554,6 +556,7 @@ export default function App({ initialFile, onOpenOther, onNewSheet, autosaveSec 
       {modal === 'listFormat' && <ListFormatDialog editor={editor} onClose={() => setModal(null)} />}
       {modal === 'numberValue' && <NumberValueDialog editor={editor} onClose={() => setModal(null)} />}
       {modal === 'bulletSymbol' && <SymbolDialog editor={editor} title="Определение нового маркера" onPick={(ch) => editor.chain().focus().setBullet(ch).run()} onClose={() => setModal(null)} />}
+      {modal && modal.clip && <ClipOverlay editor={editor} data={modal.clip} onClose={() => setModal(null)} />}
       {modal === 'field' && <FieldDialog editor={editor} file={{ name: doc.name, path: doc.path }} onProps={() => setModal('docProps')} onClose={() => setModal(null)} />}
       {modal === 'docProps' && <DocPropsDialog editor={editor} onClose={() => setModal(null)} />}
       {modal === 'insertTable' && <InsertTableDialog editor={editor} onClose={() => setModal(null)} />}

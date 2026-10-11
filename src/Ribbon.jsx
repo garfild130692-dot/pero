@@ -20,6 +20,7 @@ import { CASES, painterKey } from './editor/runFormat.js';
 import { marksKey } from './editor/marks.js';
 import { SymbolButton } from './SymbolDialog.jsx';
 import { QuickPartsButton } from './FieldDialogs.jsx';
+import { ScreenshotButton } from './ScreenshotControls.jsx';
 import { MultilevelButton } from './NumberingDialogs.jsx';
 import { BulletButton, NumberButton } from './ListButtons.jsx';
 import { sampleOf, styleEntries } from './StylesPane.jsx';
@@ -285,7 +286,7 @@ function TableStylesButton({ editor }) {
   );
 }
 
-export default function Ribbon({ editor, file, docFile, onInsertFile, view, onStylesPane, onLink, onFont, onSymbol, onRefDialog, onParagraph, onMargins, onHf, onFind, onStyle, review }) {
+export default function Ribbon({ editor, file, docFile, onInsertFile, onClip, view, onStylesPane, onLink, onFont, onSymbol, onRefDialog, onParagraph, onMargins, onHf, onFind, onStyle, review }) {
   const [tab, setTab] = useState('home');
   const tablePicker = usePopover();
 
@@ -527,6 +528,7 @@ export default function Ribbon({ editor, file, docFile, onInsertFile, view, onSt
             <Group title="Иллюстрации">
               <Btn big icon="picture" label="Рисунок" title="Вставить рисунок из файла (можно и перетащить или вставить из буфера)"
                 onClick={async () => { const f = await openImage(); if (f) insertImageFiles(editor, [f]); }} />
+              <ScreenshotButton editor={editor} Btn={Btn} onClip={onClip} />
             </Group>
             <Group title="Текст">
               <Btn big icon="lineBreak" label="Разрыв строки" title="Разрыв строки (Shift+Enter)" onClick={() => c().setHardBreak().run()} />

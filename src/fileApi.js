@@ -17,6 +17,11 @@ export async function openFile() {
   });
 }
 
+// Снимок экрана: окна (эскизы), снимок окна/экрана (PNG), снимок экрана для вырезки (окно Перо сворачивается)
+export const screenList = async () => (native && native.screenList ? native.screenList() : []);
+export const screenCapture = async (id) => (native && native.screenCapture ? native.screenCapture(id) : null);
+export const screenClip = async () => (native && native.screenClip ? native.screenClip() : null);
+
 // Выбрать .docx для вставки (не открывая): { name, data } или null
 export async function pickDocx() {
   if (native && native.pickDocx) return native.pickDocx();

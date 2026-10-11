@@ -880,3 +880,16 @@ p[data-section-type="nextPage"]::after { content: 'Разрыв раздела (
 .field-code code { background: #f2f4f3; padding: 2px 6px; border-radius: 3px; }
 .props-body { display: flex; flex-direction: column; gap: 8px; min-width: 420px; }
 .props-body textarea { font: inherit; padding: 4px 5px; border: 1px solid #bbb; border-radius: 3px; resize: vertical; }
+
+/* «Снимок» */
+.shot-pop { width: 420px; }
+.shot-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; padding: 4px 8px; max-height: 300px; overflow-y: auto; }
+.shot-pop .pop-title { padding: 0 8px; }
+.shot-cell { min-width: 0; border: 1px solid var(--line); background: #fff; cursor: pointer; padding: 4px; display: flex; flex-direction: column; gap: 3px; font: 11px 'Segoe UI', sans-serif; text-align: left; }
+.shot-cell:hover { border-color: var(--accent); background: var(--accent-soft); }
+.shot-cell img { width: 100%; height: 72px; object-fit: contain; background: #f4f4f4; }
+.shot-cell span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.clip-overlay { position: fixed; inset: 0; z-index: 200; background: #000; cursor: crosshair; display: flex; align-items: center; justify-content: center; user-select: none; }
+.clip-overlay img { max-width: 100%; max-height: 100%; opacity: .75; pointer-events: none; }
+.clip-hint { position: fixed; top: 10px; left: 50%; transform: translateX(-50%); background: rgba(0,0,0,.7); color: #fff; padding: 4px 12px; border-radius: 4px; font: 13px 'Segoe UI', sans-serif; pointer-events: none; }
+.clip-rect { position: fixed; border: 2px solid #fff; box-shadow: 0 0 0 1px #000; background: rgba(255,255,255,.12); pointer-events: none; }

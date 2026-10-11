@@ -3,7 +3,7 @@
 // Один процесс на все окна (как Word: каждый файл — своё окно, процесс один). Повторный запуск программы
 // (двойной клик по файлу, ярлык) передаёт аргументы первому экземпляру и завершается.
 // Ключ --new-instance запускает независимый процесс (отладка, особые случаи).
-const { app, BrowserWindow, Menu, dialog, ipcMain, shell, clipboard, screen } = require('electron');
+const { app, BrowserWindow, Menu, dialog, ipcMain, shell, clipboard, screen, desktopCapturer } = require('electron');
 const path = require('path');
 const os = require('os');
 const fs = require('fs/promises');
@@ -437,6 +437,39 @@ ipcMain.handle('app:userName', () => {
 
 // Выбор картинки для «Вставка → Рисунок»
 const IMAGE_FILTER = [{ name: 'Изображения', extensions: ['png', 'jpg', 'jpeg', 'gif', 'bmp', 'webp', 'svg'] }];
+// «Вставка → Снимок»: доступные окна (эскизы; окна Перо не предлагаются), снимок окна/экрана в полном размере,
+// «Вырезка экрана» — окно Перо сворачивается, снимается экран, окно возвращается (выделение области — в окне)
+const fullSize = (win) => {
+  const d = screen.getDisplayMatching(win.getBounds());
+  return { width: Math.round(d.size.width * d.scaleFactor), height: Math.round(d.size.height * d.scaleFactor), id: String(d.id) };
+};
+ipcMain.handle('screen:list', async () => {
+  const ours = new Set([...wins.values()].filter((s) => !s.win.isDestroyed()).map((s) => s.win.getMediaSourceId()));
+  const list = await desktopCapturer.getSources({ types: ['window'], thumbnailSize: { width: 320, height: 200 } });
+  return list.filter((s) => !ours.has(s.id) && !s.thumbnail.isEmpty())
+    .map((s) => ({ id: s.id, name: s.name, thumb: s.thumbnail.toDataURL() }));
+});
+ipcMain.handle('screen:capture', async (e, id) => {
+  const size = fullSize(stateOf(e).win);
+  const list = await desktopCapturer.getSources({ types: ['window', 'screen'], thumbnailSize: size });
+  const src = list.find((s) => s.id === id);
+  return src && !src.thumbnail.isEmpty() ? toArrayBuffer(src.thumbnail.toPNG()) : null;
+});
+ipcMain.handle('screen:clip', async (e) => {
+  const s = stateOf(e);
+  const size = fullSize(s.win);
+  s.win.minimize();
+  await new Promise((r) => setTimeout(r, 450)); // окно успевает свернуться
+  try {
+    const list = await desktopCapturer.getSources({ types: ['screen'], thumbnailSize: size });
+    const src = list.find((x) => x.display_id === size.id) || list[0];
+    return src ? toArrayBuffer(src.thumbnail.toPNG()) : null;
+  } finally {
+    s.win.restore();
+    s.win.focus();
+  }
+});
+
 // «Текст из файла»: выбрать .docx и вернуть его данные (не открывая в окне)
 ipcMain.handle('file:pickDocx', async (e) => {
   const r = await dialog.showOpenDialog(stateOf(e).win, { properties: ['openFile'], filters: DOCX_FILTER });
