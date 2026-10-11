@@ -9,6 +9,7 @@ import { MIRROR_AFTER, parseSectPr, patchSectPr, patchSettingsFlag } from '../sr
 import { importDocx } from '../src/docx/import.js';
 import { exportDocx } from '../src/docx/export.js';
 import JSZip from 'jszip';
+import { hyphenate } from '../src/editor/hyphen.js';
 
 const schema = getSchema(extensions);
 
@@ -62,5 +63,34 @@ describe('«Параметры страницы»', () => {
     expect((await importDocx(out)).doc.attrs.mirrorMargins).toBe(true);
     const fresh = await exportDocx(doc);
     expect((await importDocx(fresh)).doc.attrs.mirrorMargins).toBe(true);
+  });
+});
+
+describe('расстановка переносов', () => {
+  it('русские слова по слогам, не меньше двух букв с краю, без отрыва й/ь/ъ', () => {
+    expect(hyphenate('электрификация')).toBe('элек-три-фи-ка-ция');
+    expect(hyphenate('производственных')).toBe('про-из-вод-ствен-ных');
+    expect(hyphenate('подъезд')).toBe('подъ-езд');
+    expect(hyphenate('майский')).toBe('май-ский');
+    expect(hyphenate('окно')).toBe('ок-но');
+    expect(hyphenate('оса')).toBe('оса');
+  });
+  it('параметры документа и запрет у абзаца сохраняются', async () => {
+    const src = readFileSync('tests/fixtures/sample.docx');
+    const { doc } = await importDocx(src);
+    doc.attrs = { ...doc.attrs, autoHyphenation: true, hyphenateCaps: false, hyphenChanged: true };
+    const p = doc.content.find((n) => n.type === 'paragraph');
+    p.attrs = { ...p.attrs, noHyphens: true };
+    for (const out of [await exportDocx(doc, { source: src }), await exportDocx(doc)]) {
+      const zip = await JSZip.loadAsync(out);
+      const sx = await zip.file('word/settings.xml').async('string');
+      expect(sx).toMatch(/<w:defaultTabStop\b[^>]*\/><w:autoHyphenation\/>/);
+      expect(sx).toContain('<w:doNotHyphenateCaps/>');
+      expect(await zip.file('word/document.xml').async('string')).toContain('<w:suppressAutoHyphens/>');
+      const back = (await importDocx(out)).doc;
+      expect(back.attrs.autoHyphenation).toBe(true);
+      expect(back.attrs.hyphenateCaps).toBe(false);
+      expect(back.content.find((n) => n.type === 'paragraph').attrs.noHyphens).toBe(true);
+    }
   });
 });

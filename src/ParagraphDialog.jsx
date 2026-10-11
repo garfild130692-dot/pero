@@ -153,6 +153,7 @@ export default function ParagraphDialog({ editor, onClose }) {
                   ['keepNext', 'Не отрывать от следующего', 'Абзац и следующий за ним — на одной странице'],
                   ['keepLines', 'Не разрывать абзац', 'Все строки абзаца — на одной странице'],
                   ['pageBreakBefore', 'С новой страницы', 'Абзац начинается с новой страницы'],
+                  ['noHyphens', 'Запретить автоматический перенос слов', 'В этом абзаце слова не переносятся'],
                 ].map(([k, label, hint]) => (
                   <label key={k} className="pd-check" title={hint}>
                     <input type="checkbox" checked={!!f[k]} onChange={(e) => set(k)(e.target.checked)} /> {label}

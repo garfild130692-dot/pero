@@ -262,7 +262,15 @@ export function patchSettingsFlag(xml, name, on, after) {
   if (at < 0) { const m = /<w:settings\b[^>]*>/.exec(s); at = m.index + m[0].length; }
   return `${s.slice(0, at)}<w:${name}/>${s.slice(at)}`;
 }
-// предшественники w:mirrorMargins в CT_Settings (ближайший первым)
-export const MIRROR_AFTER = ['saveFormsData', 'saveSubsetFonts', 'embedSystemFonts', 'embedTrueTypeFonts', 'printFormsData',
-  'printFractionalCharacterWidth', 'printPostScriptOverText', 'displayBackgroundShape', 'doNotDisplayPageBoundaries',
-  'removeDateAndTime', 'removePersonalInformation', 'zoom', 'view', 'writeProtection'];
+// начало CT_Settings по схеме — чтобы вставлять флажки на место
+const SETTINGS_ORDER = ['writeProtection', 'view', 'zoom', 'removePersonalInformation', 'removeDateAndTime',
+  'doNotDisplayPageBoundaries', 'displayBackgroundShape', 'printPostScriptOverText', 'printFractionalCharacterWidth',
+  'printFormsData', 'embedTrueTypeFonts', 'embedSystemFonts', 'saveSubsetFonts', 'saveFormsData', 'mirrorMargins',
+  'alignBordersAndEdges', 'bordersDoNotSurroundHeader', 'bordersDoNotSurroundFooter', 'gutterAtTop', 'hideSpellingErrors',
+  'hideGrammaticalErrors', 'activeWritingStyle', 'proofState', 'formsDesign', 'attachedTemplate', 'linkStyles',
+  'stylePaneFormatFilter', 'stylePaneSortMethod', 'documentType', 'mailMerge', 'revisionView', 'trackRevisions',
+  'doNotTrackMoves', 'doNotTrackFormatting', 'documentProtection', 'autoFormatOverride', 'styleLockTheme', 'styleLockQFSet',
+  'defaultTabStop', 'autoHyphenation', 'consecutiveHyphenLimit', 'hyphenationZone', 'doNotHyphenateCaps'];
+// предшественники элемента settings.xml (ближайший первым)
+export const settingsAfter = (name) => SETTINGS_ORDER.slice(0, SETTINGS_ORDER.indexOf(name)).reverse();
+export const MIRROR_AFTER = settingsAfter('mirrorMargins');

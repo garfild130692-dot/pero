@@ -51,6 +51,7 @@ const OrientIcon = () => <S><rect x="3" y="7" width="13" height="10" /><rect x="
 const SizeIcon = () => <S><rect x="5" y="3" width="14" height="18" /><path d="M8 8h8M8 12h8M8 16h5" /></S>;
 const HfIcon = () => <S><rect x="5" y="3" width="14" height="18" /><path d="M5 7h14M5 17h14" /><path d="M8 5h5M8 19h3" strokeWidth="1.2" /></S>;
 const BreaksIcon = () => <S><path d="M5 3v6h14V3M5 21v-6h14v6" /><path d="M3 12h3M9 12h2M14 12h2M19 12h2" /></S>;
+const HyphIcon = () => <S><path d="M4 7h9M4 12h6M4 17h12" /><path d="M13 12h4" strokeWidth="2.2" /></S>;
 const NumIcon = () => <S><rect x="5" y="3" width="14" height="18" /><text x="12" y="19" fontSize="6" textAnchor="middle" fill="currentColor" stroke="none">1</text></S>;
 
 // ---------- Колонтитулы и номер страницы (вкладки «Вставка» и «Макет») ----------
@@ -138,7 +139,6 @@ export function LayoutPanel({ editor, Group, onMargins, onHf, onParagraph }) {
             </>
           )}
         </MenuButton>
-        <BreaksButton editor={editor} />
         <MenuButton icon={<SizeIcon />} label="Размер" title="Размер бумаги">
           {(close) => (
             <>
@@ -154,10 +154,60 @@ export function LayoutPanel({ editor, Group, onMargins, onHf, onParagraph }) {
             </>
           )}
         </MenuButton>
+        <BreaksButton editor={editor} />
+        <HyphenButton editor={editor} />
       </Group>
       <LayoutParaGroup editor={editor} Group={Group} onParagraph={onParagraph} />
       <HfGroup editor={editor} Group={Group} onHf={onHf} />
     </>
+  );
+}
+
+// ---------- Расстановка переносов ----------
+function HyphenButton({ editor }) {
+  const [dlg, setDlg] = useState(false);
+  const auto = !!editor.state.doc.attrs.autoHyphenation;
+  return (
+    <>
+      <MenuButton icon={<HyphIcon />} label="Расстановка переносов" title="Перенос слов по слогам в конце строк">
+        {(close) => (
+          <>
+            <Item checked={!auto} onClick={() => { close(); editor.chain().focus().setHyphenation({ auto: false }).run(); }}>Нет</Item>
+            <Item checked={auto} onClick={() => { close(); editor.chain().focus().setHyphenation({ auto: true }).run(); }}>Авто</Item>
+            <div className="menu-sep" />
+            <Item onClick={() => { close(); setDlg(true); }}>Параметры расстановки переносов…</Item>
+          </>
+        )}
+      </MenuButton>
+      {dlg && <HyphenDialog editor={editor} onClose={() => setDlg(false)} />}
+    </>
+  );
+}
+
+function HyphenDialog({ editor, onClose }) {
+  const a = editor.state.doc.attrs;
+  const [auto, setAuto] = useState(!!a.autoHyphenation);
+  const [caps, setCaps] = useState(a.hyphenateCaps !== false);
+  const apply = () => { editor.chain().focus().setHyphenation({ auto, caps }).run(); onClose(); };
+  return (
+    <div className="modal-backdrop" onMouseDown={onClose}>
+      <div className="modal pd" role="dialog" aria-label="Расстановка переносов" onMouseDown={(e) => e.stopPropagation()}
+        onKeyDown={(e) => { if (e.key === 'Escape') onClose(); if (e.key === 'Enter') { e.preventDefault(); apply(); } }}>
+        <div className="modal-title">Расстановка переносов</div>
+        <div className="modal-body">
+          <div className="pd-checks">
+            <label className="pd-check"><input type="checkbox" checked={auto} onChange={(e) => setAuto(e.target.checked)} /> Автоматическая расстановка переносов</label>
+            <label className="pd-check"><input type="checkbox" checked={caps} onChange={(e) => setCaps(e.target.checked)} /> Переносы в словах из ПРОПИСНЫХ БУКВ</label>
+          </div>
+          <div className="hf-hint">Переносятся русские слова по правилам слогоделения; места переноса могут отличаться от Word.
+            Запретить переносы в отдельном абзаце — «Абзац → Положение на странице».</div>
+        </div>
+        <div className="modal-actions">
+          <button className="btn primary" onClick={apply}>ОК</button>
+          <button className="btn" onClick={onClose}>Отмена</button>
+        </div>
+      </div>
+    </div>
   );
 }
 

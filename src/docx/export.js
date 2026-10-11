@@ -5,13 +5,13 @@ import { DEFAULT_FONT, DEFAULT_SIZE, highlightName, normalizeColor, parseSize } 
 import { NEW_DOC_PARA, ptToTwips } from '../editor/paragraph.js';
 import { CELL_SIDES, GRID_BORDERS, TABLE_SIDES, TWIPS_PER_PX, borderToOoxml } from '../editor/table.js';
 import { EMU_PER_PX, dataUrlToBytes, extOf } from '../editor/image.js';
-import { MIRROR_AFTER, parseSectPr, patchSettingsFlag, setHfRefs, setTitlePg, writeHfPart } from '../editor/page.js';
+import { MIRROR_AFTER, parseSectPr, patchSettingsFlag, setHfRefs, settingsAfter, setTitlePg, writeHfPart } from '../editor/page.js';
 import { bulletToLvl } from '../editor/numbering.js';
 import { patchCoreProps } from '../editor/docProps.js';
 import { addWatermark, patchBackground, patchSettingsBackground, stripWatermark, watermarkBox, watermarkRunXml } from '../editor/design.js';
 import { commentsXml } from '../editor/comments.js';
 import { FOOTNOTES_TYPE, footnotesPartXml } from '../editor/footnotes.js';
-import { layoutXmlHead, layoutXmlTail } from '../editor/paraLayout.js';
+import { hyphensXml, layoutXmlHead, layoutXmlTail } from '../editor/paraLayout.js';
 import { DEFAULT_TAB, tabsXml } from '../editor/tabs.js';
 
 const COMMENTS_TYPE = 'application/vnd.openxmlformats-officedocument.wordprocessingml.comments+xml';
@@ -283,6 +283,7 @@ class Exporter {
     if (numPr) pPr += `<w:numPr><w:ilvl w:val="${numPr.ilvl}"/><w:numId w:val="${numPr.numId}"/></w:numPr>`;
     pPr += layoutXmlTail(attrs);
     pPr += tabsXml(attrs.tabs, (pStyle && this.styleTabs[pStyle]) || []);
+    pPr += hyphensXml(attrs);
     pPr += spacingXml(attrs) + indXml(attrs);
     const jc = { center: 'center', right: 'right', justify: 'both' }[attrs.textAlign];
     if (jc) pPr += `<w:jc w:val="${jc}"/>`;
@@ -471,6 +472,10 @@ function setEvenAndOdd(xml, on) {
   }
   return out.replace(/(<w:settings\b[^>]*>)/, '$1<w:evenAndOddHeaders/>');
 }
+
+// переносы: w:autoHyphenation, w:doNotHyphenateCaps (остальные параметры переносов файла — как были)
+const hyphenSettings = (xml, da) => patchSettingsFlag(patchSettingsFlag(xml, 'autoHyphenation', !!da.autoHyphenation, settingsAfter('autoHyphenation')),
+  'doNotHyphenateCaps', da.hyphenateCaps === false, settingsAfter('doNotHyphenateCaps'));
 
 const APP_XML = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties"><Application>Pero</Application></Properties>`;
@@ -823,7 +828,7 @@ ${notes.length ? `<Relationship Id="rIdPeroF" Type="${relType('footnotes')}" Tar
     zip.file('word/styles.xml', stylesXml(da.fontFamily || DEFAULT_FONT, parseSize(da.fontSize) || DEFAULT_SIZE, { ...NEW_DOC_PARA, ...(da.para || {}) })
       .replace('</w:styles>', `${customs.map((s) => customStyleXml(s, 'Normal')).join('')}${(da.charStyles || []).map(charStyleXml).join('')}</w:styles>`));
     zip.file('word/numbering.xml', numberingXml(ex.orderedNums, hLevels));
-    zip.file('word/settings.xml', patchSettingsFlag(patchSettingsBackground(settingsXml(da.defaultTab, !!hf.evenOdd), !!da.pageColor), 'mirrorMargins', !!da.mirrorMargins, MIRROR_AFTER));
+    zip.file('word/settings.xml', hyphenSettings(patchSettingsFlag(patchSettingsBackground(settingsXml(da.defaultTab, !!hf.evenOdd), !!da.pageColor), 'mirrorMargins', !!da.mirrorMargins, MIRROR_AFTER), da));
     zip.file('word/_rels/document.xml.rels', docRels);
     return zip.generateAsync({ type: 'uint8array', compression: 'DEFLATE' });
   }
@@ -993,6 +998,7 @@ ${notes.length ? `<Relationship Id="rIdPeroF" Type="${relType('footnotes')}" Tar
     if (sx && own.evenOdd) sx = setEvenAndOdd(sx, !!hf.evenOdd);
     if (sx && da.pageColorChanged) sx = patchSettingsBackground(sx, !!da.pageColor);
     if (sx && da.mirrorChanged) sx = patchSettingsFlag(sx, 'mirrorMargins', !!da.mirrorMargins, MIRROR_AFTER);
+    if (sx && da.hyphenChanged) sx = hyphenSettings(sx, da);
     if (sx && sx !== orig) zip.file(sPath, sx);
   }
   ct = addImageTypes(ct, ex.images);

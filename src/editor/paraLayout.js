@@ -11,12 +11,12 @@ import { Decoration, DecorationSet } from '@tiptap/pm/view';
 import { borderFromOoxml } from './table.js';
 
 const TYPES = ['paragraph', 'heading'];
-export const LAYOUT_KEYS = ['keepNext', 'keepLines', 'pageBreakBefore', 'widowControl'];
+export const LAYOUT_KEYS = ['keepNext', 'keepLines', 'pageBreakBefore', 'widowControl', 'noHyphens']; // noHyphens ↔ w:suppressAutoHyphens
 export const PBDR_SIDES = ['top', 'left', 'bottom', 'right', 'between'];
 
 // Умолчания Word (проверено через COM: новый абзац — WidowControl, заголовок — KeepWithNext + KeepTogether)
 export function layoutDefaults(isHeading) {
-  return { keepNext: !!isHeading, keepLines: !!isHeading, pageBreakBefore: false, widowControl: true };
+  return { keepNext: !!isHeading, keepLines: !!isHeading, pageBreakBefore: false, widowControl: true, noHyphens: false };
 }
 export function effectiveLayout(node) {
   const d = layoutDefaults(node.type.name === 'heading');
@@ -35,7 +35,7 @@ const onOff = (el, wAttr) => {
 export function readLayoutProps(pPr, child, wAttr) {
   const out = {};
   if (!pPr) return out;
-  const map = { keepNext: 'keepNext', keepLines: 'keepLines', pageBreakBefore: 'pageBreakBefore', widowControl: 'widowControl' };
+  const map = { keepNext: 'keepNext', keepLines: 'keepLines', pageBreakBefore: 'pageBreakBefore', widowControl: 'widowControl', noHyphens: 'suppressAutoHyphens' };
   for (const [k, tag] of Object.entries(map)) {
     const v = onOff(child(pPr, tag), wAttr);
     if (v !== null) out[k] = v;
@@ -164,6 +164,7 @@ export const ParaLayout = Extension.create({
         keepLines: flag('keepLines', 'data-keep-lines'),
         pageBreakBefore: { ...flag('pageBreakBefore', 'data-page-break-before'), keepOnSplit: false },
         widowControl: flag('widowControl', 'data-widow-control'),
+        noHyphens: flag('noHyphens', 'data-no-hyphens'),
         pBorders: {
           default: null,
           keepOnSplit: true,
@@ -251,3 +252,6 @@ export const ParaLayout = Extension.create({
     })];
   },
 });
+
+// w:suppressAutoHyphens — в pPr после tabs, перед spacing
+export const hyphensXml = (a) => (a.noHyphens === true ? '<w:suppressAutoHyphens/>' : a.noHyphens === false ? '<w:suppressAutoHyphens w:val="0"/>' : '');
