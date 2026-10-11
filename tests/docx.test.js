@@ -89,6 +89,13 @@ describe('шрифт', () => {
     expect(doc.content.find((n) => n.content && n.content[0].text === 'print("Перо")').attrs.styleId).toBe('Код');
     expect(doc.attrs.styles).toEqual([{ id: 'Код', name: 'Код', para: {}, run: { fontFamily: 'Courier New', fontSize: 10 }, align: null, origin: 'file', modified: false }]);
     expect(marksOf(doc, 'акцент')).toEqual({ bold: true, textStyle: ts({ color: '#1f6f5c' }) }); // символьный стиль
+    // подчёркивание разных видов, прописные, интервал
+    expect(marksOf(doc, 'двойное')).toEqual({ underline: { kind: 'double', color: '#c00000' } });
+    expect(marksOf(doc, 'волна')).toEqual({ underline: { kind: 'wave', color: null } });
+    expect(marksOf(doc, 'прописные')).toEqual({ textStyle: ts({ caps: true }) });
+    expect(marksOf(doc, 'малые')).toEqual({ textStyle: ts({ smallCaps: true }) });
+    expect(marksOf(doc, 'разреженный')).toEqual({ textStyle: ts({ spacing: 2 }) });
+    expect(marksOf(doc, 'уплотнённый')).toEqual({ textStyle: ts({ spacing: -0.75 }) });
     const sup = doc.content[1].content.findIndex((n) => n.text === ', x') + 1;
     expect(doc.content[1].content[sup].marks).toEqual([{ type: 'superscript' }]);
     const sub = doc.content[1].content.findIndex((n) => n.text === ', H') + 1;
@@ -112,6 +119,9 @@ d = docx.Document('tests/out/fonts.docx')
 x = d.styles.element.xpath
 print('default', x('.//w:rPrDefault//w:rFonts/@w:ascii')[0], x('.//w:rPrDefault//w:sz/@w:val')[0])
 print('shd', d.element.xpath('//w:r[w:t="заливка"]/w:rPr/w:shd/@w:fill'))
+print('u', d.element.xpath('//w:r[w:t="двойное" or w:t="волна"]/w:rPr/w:u/@w:val'), d.element.xpath('//w:r[w:t="двойное"]/w:rPr/w:u/@w:color'))
+rs = {r.text: r for p in d.paragraphs for r in p.runs}
+print('caps', rs['прописные'].font.all_caps, 'small', rs['малые'].font.small_caps, 'spacing', *d.element.xpath('//w:r[w:t="разреженный" or w:t="уплотнённый"]/w:rPr/w:spacing/@w:val'))
 for p in d.paragraphs:
     for r in p.runs:
         f = r.font
@@ -126,6 +136,8 @@ for p in d.paragraphs:
     expect(out).toContain("'2' None None None None True False");
     expect(out).toContain("'2' None None None None False True");
     expect(out).toContain("'10,5' None 10.5");
+    expect(out).toContain("u ['double', 'wave'] ['C00000']");
+    expect(out).toContain('caps True small True spacing 40 -15');
   });
 
   it('нормализация значений', () => {

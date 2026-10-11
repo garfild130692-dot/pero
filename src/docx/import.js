@@ -321,7 +321,19 @@ function readRunMarks(rPr, theme = {}) {
   const s = onOff(child(rPr, 'strike'));
   if (s !== null) marks.strike = s;
   const u = child(rPr, 'u');
-  if (u) marks.underline = onOff(u);
+  if (u) {
+    marks.underline = onOff(u);
+    const kind = wAttr(u, 'val');
+    if (marks.underline && kind && kind !== 'single') marks.underlineKind = kind;
+    const uc = wAttr(u, 'color');
+    if (marks.underline && uc && uc.toLowerCase() !== 'auto') marks.underlineColor = normalizeColor(uc);
+  }
+  const caps = onOff(child(rPr, 'caps'));
+  if (caps !== null) marks.caps = caps;
+  const sc = onOff(child(rPr, 'smallCaps'));
+  if (sc !== null) marks.smallCaps = sc;
+  const sp = wAttr(child(rPr, 'spacing'), 'val');
+  if (sp != null && +sp) marks.spacing = Math.round((+sp / 20) * 4) / 4; // твипы → pt (до 0,25)
 
   const font = readFont(child(rPr, 'rFonts'), theme);
   if (font) marks.fontFamily = font;
@@ -352,9 +364,13 @@ function marksToArray(m, link) {
   if (m.bold) out.push({ type: 'bold' });
   if (m.italic) out.push({ type: 'italic' });
   if (m.strike) out.push({ type: 'strike' });
-  if (m.underline) out.push({ type: 'underline' });
-  if (m.fontFamily || m.fontSize || m.color) {
-    out.push({ type: 'textStyle', attrs: { fontFamily: m.fontFamily || null, fontSize: m.fontSize || null, color: m.color || null } });
+  if (m.underline) out.push(m.underlineKind || m.underlineColor ? { type: 'underline', attrs: { kind: m.underlineKind || null, color: m.underlineColor || null } } : { type: 'underline' });
+  if (m.fontFamily || m.fontSize || m.color || m.spacing || m.caps || m.smallCaps) {
+    const attrs = { fontFamily: m.fontFamily || null, fontSize: m.fontSize || null, color: m.color || null };
+    if (m.spacing) attrs.spacing = m.spacing;
+    if (m.caps) attrs.caps = true;
+    if (m.smallCaps) attrs.smallCaps = true;
+    out.push({ type: 'textStyle', attrs });
   }
   // выделение цветом рисуется поверх заливки — если есть оба, видно выделение
   const bg = m.highlight || m.shading;

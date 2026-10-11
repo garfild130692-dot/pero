@@ -47,4 +47,22 @@ accent.font.bold = True
 accent.font.color.rgb = RGBColor(0x1F, 0x6F, 0x5C)
 p = d.add_paragraph('Символьный стиль: ')
 p.add_run('акцент', style='Акцент')
+
+# подчёркивание разных видов и цвета, прописные, малые прописные, межзнаковый интервал (этап 14)
+from docx.enum.text import WD_UNDERLINE
+p = d.add_paragraph('Вид: ')
+r = p.add_run('двойное'); r.font.underline = WD_UNDERLINE.DOUBLE
+r._r.get_or_add_rPr().find(qn('w:u')).set(qn('w:color'), 'C00000')
+p.add_run(', ')
+r = p.add_run('волна'); r.font.underline = WD_UNDERLINE.WAVY
+p.add_run(', ')
+r = p.add_run('прописные'); r.font.all_caps = True
+p.add_run(', ')
+r = p.add_run('малые'); r.font.small_caps = True
+p.add_run(', ')
+r = p.add_run('разреженный')
+sp = OxmlElement('w:spacing'); sp.set(qn('w:val'), '40'); r._r.get_or_add_rPr().append(sp)
+p.add_run(', ')
+r = p.add_run('уплотнённый')
+sp = OxmlElement('w:spacing'); sp.set(qn('w:val'), '-15'); r._r.get_or_add_rPr().append(sp)
 d.save(sys.argv[1])

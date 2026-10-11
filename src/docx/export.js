@@ -146,19 +146,25 @@ class Exporter {
     const color = normalizeColor(ts.color);
     const bg = has('highlight') ? normalizeColor(attrs('highlight').color) || '#ffff00' : null;
     const hl = bg && highlightName(bg);
-    // порядок элементов rPr задан схемой (CT_RPr): rStyle, rFonts, b, bCs, i, iCs, strike, color, sz, szCs,
-    // highlight, u, shd, vertAlign
+    // порядок элементов rPr задан схемой (CT_RPr): rStyle, rFonts, b, bCs, i, iCs, caps, smallCaps, strike, color,
+    // spacing, sz, szCs, highlight, u, shd, vertAlign
     let rPr = '';
     if (link) rPr += `<w:rStyle w:val="${this.styleIds.Hyperlink}"/>`;
     if (font) rPr += `<w:rFonts w:ascii="${esc(font)}" w:hAnsi="${esc(font)}" w:eastAsia="${esc(font)}" w:cs="${esc(font)}"/>`;
     if (has('bold')) rPr += '<w:b/><w:bCs/>';
     if (has('italic')) rPr += '<w:i/><w:iCs/>';
+    if (ts.caps) rPr += '<w:caps/>';
+    if (ts.smallCaps) rPr += '<w:smallCaps/>';
     if (has('strike')) rPr += '<w:strike/>';
     if (color) rPr += `<w:color w:val="${color.slice(1).toUpperCase()}"/>`;
+    if (ts.spacing) rPr += `<w:spacing w:val="${Math.round(ts.spacing * 20)}"/>`;
     if (size) rPr += `<w:sz w:val="${Math.round(size * 2)}"/><w:szCs w:val="${Math.round(size * 2)}"/>`;
     // стандартный цвет выделения — w:highlight, любой другой — заливка w:shd
     if (hl) rPr += `<w:highlight w:val="${hl}"/>`;
-    if (has('underline')) rPr += '<w:u w:val="single"/>';
+    if (has('underline')) {
+      const u = attrs('underline');
+      rPr += `<w:u w:val="${esc(u.kind || 'single')}"${u.color ? ` w:color="${u.color.slice(1).toUpperCase()}"` : ''}/>`;
+    }
     if (bg && !hl) rPr += `<w:shd w:val="clear" w:color="auto" w:fill="${bg.slice(1).toUpperCase()}"/>`;
     if (has('superscript')) rPr += '<w:vertAlign w:val="superscript"/>';
     else if (has('subscript')) rPr += '<w:vertAlign w:val="subscript"/>';

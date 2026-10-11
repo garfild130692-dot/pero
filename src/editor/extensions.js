@@ -7,6 +7,7 @@ import { TextStyle } from '@tiptap/extension-text-style';
 import Highlight from '@tiptap/extension-highlight';
 import Subscript from '@tiptap/extension-subscript';
 import Superscript from '@tiptap/extension-superscript';
+import Underline from '@tiptap/extension-underline';
 import {
   DEFAULT_FONT, DEFAULT_SIZE, HEADING_FONT, HEADING_SIZES, cssFontStack, normalizeColor, normalizeFontFamily, parseSize, stepSize, MIN_SIZE, MAX_SIZE,
 } from './font.js';
@@ -96,6 +97,23 @@ const RunStyle = Extension.create({
           parseHTML: (el) => normalizeColor(el.style.color),
           renderHTML: (a) => (a.color ? { style: `color: ${a.color}` } : {}),
         },
+        // межзнаковый интервал, pt (w:spacing): > 0 — разреженный, < 0 — уплотнённый
+        spacing: {
+          default: null,
+          parseHTML: (el) => { const v = parseFloat(el.style.letterSpacing); return v ? Math.round(v * 4) / 4 : null; },
+          renderHTML: (a) => (a.spacing ? { style: `letter-spacing: ${a.spacing}pt` } : {}),
+        },
+        // все прописные (w:caps) и малые прописные (w:smallCaps) — вид, сам текст не меняется
+        caps: {
+          default: null,
+          parseHTML: (el) => (el.style.textTransform === 'uppercase' ? true : null),
+          renderHTML: (a) => (a.caps ? { style: 'text-transform: uppercase' } : {}),
+        },
+        smallCaps: {
+          default: null,
+          parseHTML: (el) => (el.style.fontVariant === 'small-caps' || el.style.fontVariantCaps === 'small-caps' ? true : null),
+          renderHTML: (a) => (a.smallCaps ? { style: 'font-variant: small-caps' } : {}),
+        },
       },
     }];
   },
@@ -109,6 +127,7 @@ const RunStyle = Extension.create({
         return n ? set({ fontSize: n }) : () => false;
       },
       setColor: (color) => set({ color: normalizeColor(color) }),
+      setRunAttrs: (attrs) => set(attrs), // { spacing, caps, smallCaps, … } — диалог «Шрифт»
       unsetColor: () => set({ color: null }),
 
       // Увеличить/уменьшить размер — у каждого фрагмента выделения отдельно, как в Word.
@@ -167,6 +186,45 @@ const RunStyle = Extension.create({
   },
 });
 
+// Подчёркивание с видом и цветом (как w:u w:val / w:color): single, double, thick, dotted, dottedHeavy, dash,
+// dashLong, dotDash, dotDotDash, wave, wavyDouble, words; клавиши как в Word: Ctrl+U, Ctrl+Shift+D (двойное),
+// Ctrl+Shift+W (только слова)
+export const UNDERLINES = [
+  ['single', 'одинарное'], ['words', 'только слова'], ['double', 'двойное'], ['thick', 'толстое'], ['dotted', 'точками'],
+  ['dottedHeavy', 'толстое точками'], ['dash', 'штрихами'], ['dashLong', 'длинными штрихами'], ['dotDash', 'штрих-пунктир'],
+  ['dotDotDash', 'штрих-пунктир с двумя точками'], ['wave', 'волнистое'], ['wavyDouble', 'двойное волнистое'],
+];
+const UNDERLINE_CSS = {
+  single: 'solid', words: 'solid', double: 'double', thick: 'solid', dotted: 'dotted', dottedHeavy: 'dotted', dash: 'dashed', dashLong: 'dashed',
+  dotDash: 'dashed', dotDotDash: 'dashed', wave: 'wavy', wavyDouble: 'wavy',
+};
+const PeroUnderline = Underline.extend({
+  addAttributes() {
+    return {
+      kind: { default: null, parseHTML: (el) => el.getAttribute('data-u') || null, renderHTML: () => ({}) },
+      color: { default: null, parseHTML: (el) => normalizeColor(el.style.textDecorationColor), renderHTML: () => ({}) },
+    };
+  },
+  renderHTML({ mark, HTMLAttributes }) {
+    const k = mark.attrs.kind || 'single';
+    const style = [`text-decoration-line: underline`, `text-decoration-style: ${UNDERLINE_CSS[k] || 'solid'}`,
+      /Heavy|thick/.test(k) ? 'text-decoration-thickness: 2px' : '', mark.attrs.color ? `text-decoration-color: ${mark.attrs.color}` : '',
+      k === 'words' ? 'text-decoration-skip-ink: auto' : ''].filter(Boolean).join('; ');
+    return ['u', { ...HTMLAttributes, ...(k !== 'single' ? { 'data-u': k } : {}), style }, 0];
+  },
+  addCommands() {
+    return {
+      ...this.parent?.(),
+      // вид подчёркивания у выделения (null — убрать)
+      setUnderlineKind: (kind, color = null) => ({ commands }) => (kind ? commands.setMark('underline', { kind: kind === 'single' ? null : kind, color }) : commands.unsetMark('underline')),
+    };
+  },
+  addKeyboardShortcuts() {
+    const t = (kind) => () => (this.editor.isActive('underline', { kind }) ? this.editor.commands.unsetMark('underline') : this.editor.commands.setUnderlineKind(kind));
+    return { 'Mod-u': () => this.editor.commands.toggleUnderline(), 'Mod-Shift-d': t('double'), 'Mod-Shift-w': t('words') };
+  },
+});
+
 // Надстрочный и подстрочный взаимоисключающие (в OOXML это одно свойство w:vertAlign); клавиши — как в Word
 const Sup = Superscript.extend({
   excludes: 'subscript',
@@ -192,7 +250,9 @@ export const extensions = [
     horizontalRule: false,
     heading: { levels: [1, 2, 3, 4, 5, 6] },
     link: { openOnClick: false, autolink: true, defaultProtocol: 'https' },
+    underline: false, // своё: с видом и цветом
   }),
+  PeroUnderline,
   PeroDocument,
   TextAlign.configure({ types: ['heading', 'paragraph'] }),
   ParaFormat,
