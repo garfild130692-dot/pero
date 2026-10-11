@@ -1,5 +1,6 @@
 // Импорт .docx → JSON-документ редактора (формат ProseMirror/TipTap).
 // Собственный разбор OOXML: никаких сторонних конвертеров, только распаковка zip и XML.
+import { parseCols, wrapColumnSections } from '../editor/columns.js';
 import JSZip from 'jszip';
 import { DOMParser, XMLSerializer } from '@xmldom/xmldom';
 import { HIGHLIGHTS, headingDefaults, normalizeColor } from '../editor/font.js';
@@ -945,8 +946,9 @@ export async function importDocx(data) {
   const noCapsHyphens = !!(sEl('doNotHyphenateCaps') && onOff(sEl('doNotHyphenateCaps')));
   const mirrorMargins = !!(settings && child(settings.documentElement, 'mirrorMargins') && onOff(child(settings.documentElement, 'mirrorMargins')));
   const pageColor = readBackground(rawDoc.slice(0, Math.max(0, rawDoc.indexOf('<w:body'))));
-  // колонки текста (w:cols w:num > 1) сохраняются в sectPr, но на экране и при печати — одной колонкой
-  if (sects.some((x) => +((/<w:cols\b[^>]*w:num="(\d+)"/.exec(x || '') || [])[1] || 1) > 1)) imp.preserved.columns = 1;
+  // колонки текста: блоки разделов с несколькими колонками — в контейнеры (columns.js); разной ширины — показываются равными
+  if (sects.some((x) => { const c = parseCols(x); return c && !c.equal; })) imp.preserved.columns = 1;
+  content = wrapColumnSections(content, imp.bodySectPr);
   // тексты примечаний (связь типа comments)
   const cRel = Object.values(rels).find((r) => /\/comments$/.test(r.type || ''));
   const cPart = cRel && await read(cRel.target.startsWith('/') ? cRel.target.slice(1) : 'word/' + cRel.target);

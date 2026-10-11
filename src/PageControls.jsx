@@ -4,6 +4,7 @@ import { usePopover } from './FontControls.jsx';
 import { LayoutParaGroup } from './ParaSpinners.jsx';
 import { EMPTY_HF, MARGIN_PRESETS, PAPER, TWIPS_PER_CM, hfFor, hfText, pagePx, paperOf, parseSectPr, patchSectPr, sectionAt, sectionList } from './editor/page.js';
 import { applyPageSetup, lastMargins } from './PageSetupDialog.jsx';
+import { ColumnsButton } from './ColumnsControls.jsx';
 import { LN_AUTO_DISTANCE, parseLnNum } from './editor/lineNumbers.js';
 import { fmtNum } from './editor/paragraph.js';
 import { SECTION_TYPES } from './editor/breaks.js';
@@ -156,6 +157,7 @@ export function LayoutPanel({ editor, Group, onMargins, onHf, onParagraph }) {
             </>
           )}
         </MenuButton>
+        <ColumnsButton editor={editor} />
         <BreaksButton editor={editor} />
         <LineNumbersButton editor={editor} sectPr={sectionAt(editor.state).sectPr} />
         <HyphenButton editor={editor} />

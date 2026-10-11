@@ -1,4 +1,5 @@
 // Экспорт JSON-документа редактора → .docx (OOXML), собственная генерация.
+import { unwrapColumnSections } from '../editor/columns.js';
 import JSZip from 'jszip';
 import { DOMParser } from '@xmldom/xmldom';
 import { DEFAULT_FONT, DEFAULT_SIZE, highlightName, normalizeColor, parseSize } from '../editor/font.js';
@@ -736,6 +737,8 @@ function addOverride(ct, partName, type) {
  * @returns {Promise<Uint8Array>} — содержимое .docx
  */
 export async function exportDocx(doc, { source } = {}) {
+  // разделы с колонками: контейнер → свои блоки, sectPr — в последний абзац (как в файле Word)
+  doc = { ...doc, content: unwrapColumnSections(doc.content) };
   const da = doc.attrs || {};
   // Свои колонтитулы (созданы в Пере): части header_pero*.xml/footer_pero*.xml и ссылки на них во всех разделах —
   // «по умолчанию», первой страницы (first), чётных (even); «особый для первой» (titlePg) — во всех разделах.

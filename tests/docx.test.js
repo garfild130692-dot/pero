@@ -932,13 +932,14 @@ describe('разделы с разной геометрией листа', () =>
 });
 
 describe('колонки текста', () => {
-  it('w:cols w:num > 1: колонки сохраняются в sectPr, пользователю сообщается, что на экране — одной колонкой', async () => {
+  it('w:cols w:num > 1: блоки раздела — в контейнере columns, колонки сохраняются в sectPr', async () => {
     const z = await JSZip.loadAsync(readFileSync('tests/fixtures/sample.docx'));
     const x = (await z.file('word/document.xml').async('string')).split('<w:cols w:space="720"/>').join('<w:cols w:num="2" w:space="720"/>');
     z.file('word/document.xml', x);
     const src = await z.generateAsync({ type: 'uint8array' });
     const r = await importDocx(src);
-    expect(r.preserved.columns).toBe(1);
+    expect(r.preserved.columns).toBeUndefined(); // равные колонки показываются как есть
+    expect(r.doc.content.some((n) => n.type === 'columns')).toBe(true);
     const out = await (await JSZip.loadAsync(await exportDocx(r.doc, { source: src }))).file('word/document.xml').async('string');
     expect(out).toContain('<w:cols w:num="2" w:space="720"/>');
   });

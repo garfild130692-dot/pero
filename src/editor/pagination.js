@@ -23,6 +23,8 @@ import { Decoration, DecorationSet } from '@tiptap/pm/view';
 import { EMPTY_HF, hfFor, hfText, parseSectPr, sectionFrame, sectionList } from './page.js';
 import { footnoteRefs } from './footnotes.js';
 import { sectionType } from './breaks.js';
+import { applyColumnsStyle, columnsSectPr, parseCols } from './columns.js';
+import { applyMode, clearColSpacers, colLayoutKey, layoutBalance, layoutRows, placeColumnRules } from './colLayout.js';
 
 export const paginationKey = new PluginKey('pagination');
 export const PAGE_GAP = 18; // px между листами на экране
@@ -182,6 +184,16 @@ function collectUnits(view, rootTop, scale) {
     }
     const dom = view.nodeDOM(pos);
     if (!dom || dom.nodeType !== 1) return;
+    if (node.type.name === 'columns') {
+      // раздел с колонками — одна единица; как он ложится на листы, решает план (colLayout.js)
+      const next = sectionType(sectList[sect + 1]);
+      units.push({
+        kind: 'cols', pos, node, dom, ...box(dom), sect, keepNext: false,
+        balance: !!node.attrs.sectPr && next === 'continuous',
+        forceAfter: !!node.attrs.sectPr && next !== 'continuous',
+      });
+      return;
+    }
     if (node.type.name === 'table') {
       const table = dom.tagName === 'TABLE' ? dom : dom.querySelector('table');
       if (!table) return;
@@ -255,7 +267,7 @@ export function posAtLine(view, line) {
 
 // Разбиение: список разрывов по единицам (координаты — от верха области текста, px без масштаба).
 // secs — геометрия разделов (px): у каждого листа высота области текста своего раздела.
-function paginate(view, units, secs, rootTop, scale, notes = []) {
+function paginate(view, units, secs, rootTop, scale, notes = [], plans = new Map(), hNat = new Map()) {
   const breaks = [];
   let pageTop = 0;
   let pageSect = units.length ? units[0].sect : 0; // раздел текущего листа
@@ -293,6 +305,30 @@ function paginate(view, units, secs, rootTop, scale, notes = []) {
   for (let i = 0; i < units.length; i++) {
     let u = units[i];
     if (u.forceBefore && u.top > pageTop + EPS) { i = breakBefore(i); u = units[i]; }
+
+    if (u.kind === 'cols') {
+      const g = secs[Math.min(u.sect, secs.length - 1)];
+      const H = contentOf(u.sect);
+      const G = g.bottom + PAGE_GAP + g.top;
+      const avail = limit() - u.top;
+      const nat = hNat.get(u.pos) ?? (u.bottom - u.top);
+      // начало раздела у самого низа листа (меньше строки) — весь раздел с нового листа
+      if (nat > avail + EPS && avail < 24 && !firstOnPage(u)) { const back = breakBefore(i); i = back - 1; continue; }
+      const want = nat <= avail + EPS
+        ? { mode: u.balance ? 'balance' : 'fill', avail: Math.max(0, Math.floor(avail)) }
+        : { mode: 'rows', d: Math.max(0, Math.round(u.top - pageTop)), H, G };
+      const plan = plans.get(u.pos);
+      if (!samePlan(plan, want)) return { mismatch: { pos: u.pos, plan: want, balance: u.balance } };
+      if (plan.mode === 'rows') {
+        // ряды колонок — листы: разрывы без распорок (промежуток между рядами уже в раскладке контейнера)
+        for (let r = 1; r < (plan.R || 1); r++) {
+          push({ kind: 'colrow', pos: (plan.rowPos && plan.rowPos[r]) ?? u.pos + 1, fill: 0, sect: u.sect, cont: u.pos, row: r });
+          pageTop += H + G;
+        }
+      }
+      if (u.forceAfter) afterForced(i);
+      continue;
+    }
 
     if (u.kind === 'table') {
       if (u.bottom <= fitAt(u.bottom) + EPS) continue;
@@ -429,6 +465,9 @@ function measure(view) {
     }
     const page = view.dom.closest('.page');
     if (page) for (const el of page.querySelectorAll(':scope > .pero-bands, :scope > .pero-notes-layer, :scope > .pero-sheets')) el.remove();
+    clearColSpacers(view);
+    colCache.delete(view);
+    view.state.doc.forEach((n, pos) => { if (n.type.name === 'columns') { const dom = view.nodeDOM(pos); if (dom) { applyMode(dom, { mode: 'natural' }, false); delete dom.dataset.planOf; } } });
     return;
   }
   const { doc } = view.state;
@@ -445,12 +484,61 @@ function measure(view) {
   const scrollTop = scroller ? scroller.scrollTop : 0;
   if (prev.deco !== DecorationSet.empty) view.dispatch(view.state.tr.setMeta(paginationKey, { ...prev, deco: DecorationSet.empty }).setMeta('addToHistory', false));
 
+  // разделы с колонками: неизменённые с прошлого замера (тот же узел и sectPr) остаются как разложены — план проверит
+  // разбиение; изменённые — распорки долой, естественный вид (выравненные колонки), замер высоты
+  const conts = [];
+  doc.forEach((n, pos) => { if (n.type.name === 'columns') conts.push(pos); });
+  const cache = colCache.get(view) || new WeakMap();
+  colCache.set(view, cache);
+  const plans = new Map();
+  const hNatKnown = new Map();
+  const fresh = [];
+  for (const pos of conts) {
+    const dom = view.nodeDOM(pos);
+    if (!dom) continue;
+    const node = doc.nodeAt(pos);
+    const xml = columnsSectPr(doc, pos);
+    const c = cache.get(node);
+    if (c && c.xml === xml && dom.dataset.planOf === c.id) {
+      plans.set(pos, { ...c.plan, rowPos: (c.plan.rowPos || []).map((o) => pos + o) });
+      hNatKnown.set(pos, c.hNat);
+      continue;
+    }
+    applyColumnsStyle(dom, parseCols(xml));
+    dropColSpacers(view, pos);
+    applyMode(dom, { mode: 'natural' }, false);
+    fresh.push(pos);
+  }
+
   // 2. замер чистой раскладки
   const rootRect = view.dom.getBoundingClientRect();
   const scale = pageScale(view.dom); // масштаб страницы (transform)
   let result = { breaks: [], pages: [{ sect: 0, first: true }], trailing: 0 };
   const notes = scale && isFinite(scale) ? collectNotes(view, rootRect.top, scale) : [];
-  if (scale && isFinite(scale)) result = paginate(view, collectUnits(view, rootRect.top, scale), secs, rootRect.top, scale, notes);
+  const hNat = new Map(hNatKnown);
+  for (const pos of fresh) { const dom = view.nodeDOM(pos); hNat.set(pos, dom ? dom.getBoundingClientRect().height / (scale || 1) : 0); }
+  if (scale && isFinite(scale)) {
+    // планы колонок — по порядку: разбить до раздела, выбрать его план, применить (раскладка ниже меняется), заново
+    for (let it = 0; it <= conts.length * 3 + 1; it++) {
+      result = paginate(view, collectUnits(view, rootRect.top, scale), secs, rootRect.top, scale, notes, plans, hNat);
+      if (!result.mismatch) break;
+      const { pos, plan, balance } = result.mismatch;
+      const dom = view.nodeDOM(pos);
+      if (!dom) { plans.set(pos, plan); continue; }
+      applyMode(dom, plan, balance);
+      if (plan.mode === 'rows') {
+        const r = layoutRows(view, pos, plan, balance, { scale });
+        Object.assign(plan, r, { rowPos: r.rowPos.map((o) => pos + o) });
+      } else if (plan.mode === 'balance') Object.assign(plan, layoutBalance(view, pos, plan, { scale }));
+      else dropColSpacers(view, pos);
+      plans.set(pos, plan);
+      // запомнить: при следующем замере неизменённый контейнер не перекладывается
+      const id = String(++colPlanSeq);
+      dom.dataset.planOf = id;
+      cache.set(view.state.doc.nodeAt(pos), { xml: columnsSectPr(view.state.doc, pos), hNat: hNat.get(pos), id, plan: { ...plan, rowPos: (plan.rowPos || []).map((p) => p - pos) } });
+    }
+    if (result.mismatch) result = { breaks: [], pages: [{ sect: 0, first: true }], trailing: 0 }; // не сошлось — без листов
+  }
   const { breaks, pages, trailing } = result;
   const total = breaks.length + 1;
   // колонтитулы каждого листа (первая страница раздела, чётные — по правилам Word)
@@ -470,6 +558,7 @@ function measure(view) {
     breaks.forEach((b, i) => {
       const band = bandOf(b);
       const k = `${b.kind}${i}:${Math.round(b.fill)}:${Math.round(band)}`;
+      if (b.kind === 'colrow') return; // промежуток между рядами колонок — уже в раскладке
       if (b.kind === 'block') decos.push(Decoration.widget(b.pos, () => blockSpacer(b.fill + band - (b.sup || 0), b.fill), { side: -1, key: k, ignoreSelection: true }));
       else if (b.kind === 'line') decos.push(Decoration.widget(b.pos, () => lineSpacer(b.fill + band, b.fill), { side: -1, key: k, ignoreSelection: true, marks: [] }));
       else if (b.kind === 'cells') {
@@ -500,6 +589,7 @@ function measure(view) {
   const perPage = Array.from({ length: total }, () => []);
   for (const n of notes) perPage[starts.filter((p) => p <= n.pos).length].push(n);
   placeNotes(view, perPage);
+  placeColumnRules(view, scale);
   view.dom.dispatchEvent(new Event('pero-paginated', { bubbles: true })); // вертикальная линейка и т.п. — листы на местах
 }
 
@@ -613,8 +703,42 @@ function bandsAligned(view) {
     if (s.dataset.group) { if (seen.has(s.dataset.group)) continue; seen.add(s.dataset.group); }
     tops.push((s.getBoundingClientRect().top - pr.top) / scale + (+s.dataset.fill || 0));
   }
+  tops.push(...rowBandTops(view, pr, scale));
   tops.sort((a, b) => a - b);
   return tops.length === bands.length && tops.every((t, i) => Math.abs(t - bands[i]) < 1);
+}
+
+// Полосы между рядами колонок (раздел с колонками на несколько листов): низ каждого ряда, кроме последнего
+function rowBandTops(view, pr, scale) {
+  const out = [];
+  for (const c of view.dom.querySelectorAll(':scope > .pero-cols.pc-rows')) {
+    const H = parseFloat(c.style.getPropertyValue('--pc-h')) || 0;
+    const G = parseFloat(c.style.getPropertyValue('--pc-g')) || 0;
+    const R = +c.dataset.rows || 1;
+    const top = (c.getBoundingClientRect().top - pr.top) / scale;
+    for (let r = 1; r < R; r++) out.push(top + r * H + (r - 1) * G);
+  }
+  return out;
+}
+
+// Планы разделов с колонками прошлого замера: вид → (узел контейнера → { xml, hNat, id, plan })
+const colCache = new WeakMap();
+let colPlanSeq = 0;
+
+// План раздела с колонками тот же? (сдвиг первого ряда и высоты — с точностью до пикселя)
+function samePlan(a, b) {
+  if (!a || a.mode !== b.mode) return false;
+  if (b.mode === 'fill' || b.mode === 'balance') return Math.abs(a.avail - b.avail) <= 1;
+  if (b.mode === 'rows') return Math.abs(a.d - b.d) <= 1 && Math.abs(a.H - b.H) < 0.5 && Math.abs(a.G - b.G) < 0.5;
+  return true;
+}
+
+// Убрать распорки колонок одного контейнера
+function dropColSpacers(view, pos) {
+  const node = view.state.doc.nodeAt(pos);
+  const specs = colLayoutKey.getState(view.state).specs;
+  const keep = specs.filter((s) => !node || s.pos < pos || s.pos > pos + node.nodeSize);
+  if (keep.length !== specs.length) view.dispatch(view.state.tr.setMeta(colLayoutKey, keep).setMeta('addToHistory', false));
 }
 
 // Позиции начала листов (для номера страницы под курсором)
@@ -646,6 +770,7 @@ function placeBands(view, frame, meta, hfOf, total) {
     }
     spacers.push({ top, header: s.dataset.group && s.dataset.group.startsWith('h') ? s : null, cell: s.dataset.peroSpacer === 'cell' ? s : null });
   }
+  for (const top of rowBandTops(view, pr, scale)) spacers.push({ top, header: null, cell: null });
   spacers.sort((a, b) => a.top - b.top);
   const sig = JSON.stringify([spacers.map((s) => Math.round(s.top)), frame, meta, total, spacers.map((s, i) => [hfOf('footer', i + 1), hfOf('header', i + 2)])]);
   if (layer.dataset.sig === sig) return;

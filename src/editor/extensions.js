@@ -38,6 +38,9 @@ import { Breaks } from './breaks.js';
 import { TableConvert } from './tableConvert.js';
 import { Hyphenation } from './hyphen.js';
 import { LineNumbers } from './lineNumbers.js';
+import { Columns } from './columns.js';
+import { ColLayout } from './colLayout.js';
+import { ColumnsCommands } from './colCommands.js';
 
 // Как оформлены заголовки — font.js (совпадает со styles.css и стилями Heading1–6 в export.js)
 export { HEADING_FONT, HEADING_SIZES };
@@ -45,6 +48,7 @@ export { HEADING_FONT, HEADING_SIZES };
 // Умолчания шрифта и абзаца храним в атрибутах документа (аналог docDefaults + стиль «Обычный»).
 // В текст и абзацы попадает только прямое форматирование — то, что отличается от умолчаний.
 const PeroDocument = Document.extend({
+  content: '(block | sectionBlock)+', // sectionBlock — раздел с колонками (columns.js)
   addAttributes() {
     return {
       fontFamily: { default: DEFAULT_FONT },
@@ -305,6 +309,9 @@ export const extensions = [
   TableConvert,
   Hyphenation,
   LineNumbers,
+  Columns,
+  ColLayout,
+  ColumnsCommands,
   PeroTable.configure({ resizable: true }),
   PeroTableRow,
   PeroTableCell,
