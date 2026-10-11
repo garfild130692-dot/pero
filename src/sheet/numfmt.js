@@ -358,3 +358,105 @@ export function formatCode(v, code) {
   else text = formatNumberSection(v, sec, autoMinus);
   return { text, color: sec.color };
 }
+
+// ---------- русская запись кодов (как в диалоге «Формат ячеек» русского Excel) ----------
+// Файл хранит коды в английской записи (0.00, #,##0, dd.mm.yyyy, [Red]); пользователь видит и вводит русскую
+// (0,00, # ##0, ДД.ММ.ГГГГ, [Красный]). Разряды и ÷1000 — пробел; литеральный пробел в числе — «\ ».
+const RU_COLOR = { black: 'Черный', blue: 'Синий', cyan: 'Голубой', green: 'Зеленый', magenta: 'Фиолетовый', red: 'Красный', white: 'Белый', yellow: 'Желтый' };
+const EN_COLOR = Object.fromEntries(Object.entries(RU_COLOR).map(([en, ru]) => [ru.toLowerCase(), en[0].toUpperCase() + en.slice(1)]));
+EN_COLOR['чёрный'] = 'Black'; EN_COLOR['зелёный'] = 'Green'; EN_COLOR['жёлтый'] = 'Yellow';
+// пройти раздел по кускам: вид 'q' (в кавычках), 'esc' (\x _x *x), 'br' ([…]), 'ch' (обычный знак)
+function scan(sec) {
+  const out = [];
+  for (let i = 0; i < sec.length; i++) {
+    const ch = sec[i];
+    if (ch === '"') { const j = sec.indexOf('"', i + 1); const e = j < 0 ? sec.length : j; out.push([sec.slice(i, e + 1), 'q']); i = e; continue; }
+    if (ch === '\\' || ch === '_' || ch === '*') { out.push([sec.slice(i, i + 2), 'esc']); i++; continue; }
+    if (ch === '[') { const j = sec.indexOf(']', i); const e = j < 0 ? sec.length - 1 : j; out.push([sec.slice(i, e + 1), 'br']); i = e; continue; }
+    out.push([ch, 'ch']);
+  }
+  return out;
+}
+const isDateSec = (parts, letters) => parts.some(([p, k]) => (k === 'ch' && letters.test(p)) || (k === 'br' && /^\[(h+|m+|s+|ч+|м+|с+)\]$/i.test(p)))
+  || /am\/pm|a\/p/i.test(parts.map((x) => x[0]).join(''));
+const SPACE = /^[  ]$/;
+export function toLocalCode(code) {
+  if (!code || code === 'General') return 'Основной';
+  return splitSections(code).map((sec) => {
+    const parts = scan(sec);
+    const date = isDateSec(parts, /[ymdhs]/i);
+    const letters = parts.map(([p, k]) => (k === 'ch' && /[ymdhs]/i.test(p) ? p.toLowerCase() : k === 'br' && /^\[[hms]+\]$/i.test(p) ? p[1].toLowerCase() : ''));
+    let out = '';
+    parts.forEach(([p, k], i) => {
+      if (k === 'q' || k === 'esc') { out += p; return; }
+      if (k === 'br') {
+        const low = p.slice(1, -1).toLowerCase();
+        if (RU_COLOR[low]) out += `[${RU_COLOR[low]}]`;
+        else if (/^(h+|m+|s+)$/.test(low)) out += `[${low.replace(/h/g, 'ч').replace(/m/g, 'м').replace(/s/g, 'с')}]`;
+        else out += p;
+        return;
+      }
+      if (date) {
+        const low = p.toLowerCase();
+        if (low === 'y') out += 'Г'; else if (low === 'd') out += 'Д'; else if (low === 'h') out += 'ч'; else if (low === 's') out += 'с';
+        else if (low === 'm') {
+          // минуты — «м» (после часов или перед секундами), месяц — «М»
+          const before = letters.slice(0, i).join('').replace(/m+$/, '');
+          const after = letters.slice(i + 1).join('').replace(/^m+/, '');
+          out += /h$/.test(before) || /^s/.test(after) ? 'м' : 'М';
+        } else if (p === '.' && letters[i - 1] === 's') out += ',';
+        else out += p;
+        return;
+      }
+      if (/^general/i.test(sec.slice(i)) && p.toLowerCase() === 'g') { out += 'Основной'; return; }
+      if (out.endsWith('Основной') && /^eneral/i.test(sec.slice(i, i + 6))) return;
+      if (p === '.') out += ',';
+      else if (p === ',') out += ' ';
+      else if (p === ' ') out += '\\ ';
+      else out += p;
+    });
+    return out;
+  }).join(';');
+}
+export function fromLocalCode(local) {
+  const t = String(local || '').replace(/^\s+/, ''); // пробел в конце — ÷1000, не обрезать
+  if (!t.trim() || /^основной$/i.test(t.trim())) return 'General';
+  return splitSections(t).map((sec) => {
+    const parts = scan(sec);
+    const date = isDateSec(parts, /[дмгчс]/i);
+    const digitAt = (i) => parts[i] && parts[i][1] === 'ch' && /[#0?]/.test(parts[i][0]);
+    let out = '';
+    parts.forEach(([p, k], i) => {
+      if (k === 'q' || k === 'esc') { out += p; return; }
+      if (k === 'br') {
+        const low = p.slice(1, -1).toLowerCase();
+        if (EN_COLOR[low]) out += `[${EN_COLOR[low]}]`;
+        else if (/^(ч+|м+|с+)$/.test(low)) out += `[${low.replace(/ч/g, 'h').replace(/м/g, 'm').replace(/с/g, 's')}]`;
+        else out += p;
+        return;
+      }
+      if (date) {
+        const map = { д: 'd', м: 'm', г: 'y', ч: 'h', с: 's' };
+        const low = p.toLowerCase();
+        if (map[low]) out += map[low];
+        else if (p === ',' && parts[i - 1] && /с/i.test(parts[i - 1][0])) out += '.';
+        else out += p;
+        return;
+      }
+      if (/^основной/i.test(sec.slice(i)) && p.toLowerCase() === 'о') { out += 'General'; return; }
+      if (out.endsWith('General') && /^сновной/i.test(sec.slice(i, i + 7))) return;
+      if (p === ',') { out += '.'; return; }
+      if (SPACE.test(p)) {
+        // пробел между цифрами — разряды; пробелы после последней цифры перед концом, кавычками или % — ÷1000
+        let j = i + 1; while (parts[j] && SPACE.test(parts[j][0])) j++;
+        let b = i - 1; while (parts[b] && SPACE.test(parts[b][0])) b--;
+        if (digitAt(b) && digitAt(j) && /[#0]/.test(parts[j][0]) && parts[b][0] !== '?') { out += ','; return; }
+        if (digitAt(b) && (!parts[j] || parts[j][1] === 'q' || parts[j][0] === '%')) { out += ','; return; }
+        out += '\\ ';
+        return;
+      }
+      out += p;
+    });
+    return out;
+  }).join(';');
+}

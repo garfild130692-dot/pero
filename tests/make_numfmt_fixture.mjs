@@ -1,6 +1,6 @@
 // tests/fixtures/numfmt_excel.json — как Excel показывает значения в числовых форматах (tests/numfmt.test.js).
 // 1) книга с кодами из tests/numfmt_cases.json (коды в файле — английская запись, как их хранит Excel);
-// 2) Excel (COM) открывает её и возвращает текст каждой ячейки. Запуск: node tests/make_numfmt_fixture.mjs
+// 2) Excel (COM) открывает её и возвращает текст каждой ячейки и русскую запись кода (NumberFormatLocal). Запуск: node tests/make_numfmt_fixture.mjs
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import * as m from '../src/sheet/model.js';
@@ -15,9 +15,9 @@ mkdirSync('tests/out', { recursive: true });
 writeFileSync('tests/out/numfmt.xlsx', await exportXlsx(wb));
 const ps = `$xl = New-Object -ComObject Excel.Application; $xl.Visible = $false; $xl.DisplayAlerts = $false
 try { $wb = $xl.Workbooks.Open([IO.Path]::GetFullPath('tests/out/numfmt.xlsx')); $ws = $wb.Worksheets.Item(1); $ws.Range('A:Z').ColumnWidth = 80
-  $rows = @(); for ($r = 1; $r -le ${codes.length}; $r++) { $t = @(); for ($c = 1; $c -le ${values.length}; $c++) { $t += $ws.Cells.Item($r, $c).Text }; $rows += ,$t }
+  $rows = @(); for ($r = 1; $r -le ${codes.length}; $r++) { $t = @($ws.Cells.Item($r, 1).NumberFormatLocal); for ($c = 1; $c -le ${values.length}; $c++) { $t += $ws.Cells.Item($r, $c).Text }; $rows += ,$t }
   $rows | ConvertTo-Json -Depth 3 -Compress | Out-File -Encoding utf8 tests/out/numfmt_texts.json; $wb.Close($false) } finally { $xl.Quit() }`;
 execFileSync('powershell.exe', ['-NoProfile', '-Command', ps], { stdio: 'inherit' });
 const texts = JSON.parse(readFileSync('tests/out/numfmt_texts.json', 'utf8').replace(/^﻿/, ''));
-writeFileSync('tests/fixtures/numfmt_excel.json', JSON.stringify(codes.map((code, i) => ({ code, texts: texts[i].value || texts[i] })), null, 1));
+writeFileSync('tests/fixtures/numfmt_excel.json', JSON.stringify(codes.map((code, i) => { const row = texts[i].value || texts[i]; return { code, local: row[0], texts: row.slice(1) }; }), null, 1));
 console.log('tests/fixtures/numfmt_excel.json:', codes.length, 'кодов');

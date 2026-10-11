@@ -3,7 +3,7 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { formatValue } from '../src/sheet/format.js';
-import { formatCode } from '../src/sheet/numfmt.js';
+import { formatCode, fromLocalCode, toLocalCode } from '../src/sheet/numfmt.js';
 
 const { values } = JSON.parse(readFileSync(new URL('./numfmt_cases.json', import.meta.url), 'utf8'));
 const excel = JSON.parse(readFileSync(new URL('./fixtures/numfmt_excel.json', import.meta.url), 'utf8'));
@@ -17,6 +17,19 @@ describe('числовые форматы', () => {
       values.forEach((v, j) => { const ours = formatValue(v, code); if (norm(ours) !== norm(texts[j])) diffs.push(`${code} / ${v}: Excel «${texts[j]}» Перо «${ours}»`); });
     }
     expect(diffs).toEqual([]);
+  });
+  it('русская запись кодов: из записи Excel и обратно — тот же показ', () => {
+    const bad = [];
+    for (const { code, local } of excel) {
+      const same = (c2) => values.every((v) => formatValue(v, c2) === formatValue(v, code));
+      if (!same(fromLocalCode(local))) bad.push(`${local} → ${fromLocalCode(local)} (ожидался ${code})`);
+      if (!same(fromLocalCode(toLocalCode(code)))) bad.push(`${code} → ${toLocalCode(code)} → ${fromLocalCode(toLocalCode(code))}`);
+    }
+    expect(bad).toEqual([]);
+    expect(toLocalCode('#,##0.00')).toBe('# ##0,00');
+    expect(toLocalCode('dd.mm.yyyy hh:mm')).toBe('ДД.ММ.ГГГГ чч:мм');
+    expect(toLocalCode('0.00;[Red]-0.00')).toBe('0,00;[Красный]-0,00');
+    expect(fromLocalCode('Основной')).toBe('General');
   });
   it('цвет раздела', () => {
     expect(formatCode(-5, '0;[Red]-0')).toEqual({ text: '-5', color: '#ff0000' });
