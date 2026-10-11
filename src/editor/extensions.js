@@ -63,6 +63,8 @@ const PeroDocument = Document.extend({
       watermarkChanged: { default: false },
       pageColor: { default: null },     // цвет страницы '#rrggbb'
       pageColorChanged: { default: false },
+      mirrorMargins: { default: false },  // зеркальные поля (settings.xml w:mirrorMargins)
+      mirrorChanged: { default: false },
       footnotesEdited: { default: false }, // сноски менялись — при сохранении footnotes.xml пишется заново
       defaultTab: { default: DEFAULT_TAB }, // шаг позиций табуляции по умолчанию, pt (settings.xml w:defaultTabStop)
     };
@@ -75,7 +77,7 @@ export function loadDocument(editor, json) {
   editor.commands.setContent(json, { emitUpdate: false });
   const attrs = {
     fontFamily: DEFAULT_FONT, fontSize: DEFAULT_SIZE, para: NEW_DOC_PARA, sectPr: null, hf: EMPTY_HF, styles: [], defaultsModified: false,
-    comments: [], commentsEdited: false, footnotes: [], footnotesEdited: false, headingNumbering: null, charStyles: [], watermark: null, watermarkChanged: false, props: {}, propsChanged: false, pageColor: null, pageColorChanged: false, defaultTab: DEFAULT_TAB,
+    comments: [], commentsEdited: false, footnotes: [], footnotesEdited: false, headingNumbering: null, charStyles: [], watermark: null, watermarkChanged: false, props: {}, propsChanged: false, pageColor: null, pageColorChanged: false, mirrorMargins: false, mirrorChanged: false, defaultTab: DEFAULT_TAB,
     ...((json && json.attrs) || {}),
   };
   const { tr } = editor.state;

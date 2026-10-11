@@ -40,12 +40,13 @@ export const Sections = Extension.create({
 });
 
 // Печать разделов с разной геометрией: свой @page на каждый раздел (имена совпадают с декорациями)
-export function sectionPrintCss(doc) {
+export function sectionPrintCss(doc, mirror = !!doc.attrs.mirrorMargins) {
   const sects = sectionList(doc);
   const frame = sectionFrame(sects);
   if (!frame.mixed) return '';
   return sects.map((xml, i) => {
     const p = pagePx(parseSectPr(xml));
-    return `@page pero-s${i} { size: ${p.width}px ${p.height}px; margin: ${p.top}px ${p.right}px ${p.bottom}px ${p.left}px; }`;
+    const m = `@page pero-s${i} { size: ${p.width}px ${p.height}px; margin: ${p.top}px ${p.right}px ${p.bottom}px ${p.left}px; }`;
+    return mirror ? `${m} @page pero-s${i}:left { margin-left: ${p.right}px; margin-right: ${p.left}px; }` : m;
   }).join(' ');
 }

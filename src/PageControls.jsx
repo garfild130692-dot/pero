@@ -2,7 +2,8 @@
 import React, { useState } from 'react';
 import { usePopover } from './FontControls.jsx';
 import { LayoutParaGroup } from './ParaSpinners.jsx';
-import { EMPTY_HF, MARGIN_PRESETS, PAPER, TWIPS_PER_CM, hfFor, hfText, pagePx, parseSectPr, patchSectPr, sectionAt, sectionList } from './editor/page.js';
+import { EMPTY_HF, MARGIN_PRESETS, PAPER, TWIPS_PER_CM, hfFor, hfText, pagePx, paperOf, parseSectPr, patchSectPr, sectionAt, sectionList } from './editor/page.js';
+import { applyPageSetup, lastMargins } from './PageSetupDialog.jsx';
 import { fmtNum } from './editor/paragraph.js';
 import { SECTION_TYPES } from './editor/breaks.js';
 
@@ -102,21 +103,30 @@ export function BreaksButton({ editor }) {
 // ---------- Вкладка «Макет» ----------
 export function LayoutPanel({ editor, Group, onMargins, onHf, onParagraph }) {
   const g = parseSectPr(sectionAt(editor.state).sectPr);
-  const same = (p) => Math.abs(p.top - g.top) < 15 && Math.abs(p.right - g.right) < 15 && Math.abs(p.bottom - g.bottom) < 15 && Math.abs(p.left - g.left) < 15;
-  const paper = PAPER.find(([, w, h]) => (Math.abs(w - g.w) < 30 && Math.abs(h - g.h) < 30) || (Math.abs(h - g.w) < 30 && Math.abs(w - g.h) < 30));
+  const mirror = !!editor.state.doc.attrs.mirrorMargins;
+  const same = (p, mir = false) => mir === mirror && Math.abs(p.top - g.top) < 15 && Math.abs(p.right - g.right) < 15 && Math.abs(p.bottom - g.bottom) < 15 && Math.abs(p.left - g.left) < 15;
+  const paper = paperOf(g.w, g.h);
+  // заготовка полей: только поля (переплёт сохраняется), «Зеркальные» включают зеркальные поля, остальные — выключают
+  const preset = (m, mir) => applyPageSetup(editor, { patch: { top: m.top, right: m.right, bottom: m.bottom, left: m.left + g.gutter }, mirror: !!mir });
+  const last = lastMargins();
   return (
     <>
-      <Group title="Параметры страницы">
+      <Group title="Параметры страницы" launcher={{ title: 'Параметры страницы…', onClick: () => onMargins('margins') }}>
         <MenuButton icon={<MarginsIcon />} label="Поля" title="Поля страницы">
           {(close) => (
             <>
-              {MARGIN_PRESETS.map(([key, label, m]) => (
-                <Item key={key} checked={same(m)} onClick={() => { close(); setPage(editor, m); }}>
-                  {label}: {cm(m.top)} / {cm(m.right)} / {cm(m.bottom)} / {cm(m.left)} см
+              {last && (
+                <Item checked={same({ ...last, left: last.left }, !!last.mirror)} onClick={() => { close(); preset({ ...last, left: last.left - g.gutter }, last.mirror); }}>
+                  Последнее пользовательское: {cm(last.top)} / {cm(last.right)} / {cm(last.bottom)} / {cm(last.left)} см
+                </Item>
+              )}
+              {MARGIN_PRESETS.map(([key, label, m, mir]) => (
+                <Item key={key} checked={same({ ...m, left: m.left + g.gutter }, !!mir)} onClick={() => { close(); preset(m, mir); }}>
+                  {label}: {mir ? `внутри ${cm(m.left)} / снаружи ${cm(m.right)}` : `${cm(m.top)} / ${cm(m.right)} / ${cm(m.bottom)} / ${cm(m.left)}`} см
                 </Item>
               ))}
               <div className="menu-sep" />
-              <Item onClick={() => { close(); onMargins(); }}>Настраиваемые поля…</Item>
+              <Item onClick={() => { close(); onMargins('margins'); }}>Настраиваемые поля…</Item>
             </>
           )}
         </MenuButton>
@@ -130,62 +140,24 @@ export function LayoutPanel({ editor, Group, onMargins, onHf, onParagraph }) {
         </MenuButton>
         <BreaksButton editor={editor} />
         <MenuButton icon={<SizeIcon />} label="Размер" title="Размер бумаги">
-          {(close) => PAPER.map(([name, w, h]) => (
-            <Item key={name} checked={paper && paper[0] === name} onClick={() => {
-              close();
-              const land = g.orient === 'landscape';
-              setPage(editor, { w: land ? h : w, h: land ? w : h });
-            }}>{name}: {cm(w)} × {cm(h)} см</Item>
-          ))}
+          {(close) => (
+            <>
+              {PAPER.map(([name, w, h, code]) => (
+                <Item key={name} checked={paper && paper[0] === name} onClick={() => {
+                  close();
+                  const land = g.orient === 'landscape';
+                  setPage(editor, { w: land ? h : w, h: land ? w : h, code });
+                }}>{name}: {cm(w)} × {cm(h)} см</Item>
+              ))}
+              <div className="menu-sep" />
+              <Item onClick={() => { close(); onMargins('paper'); }}>Другие размеры бумаги…</Item>
+            </>
+          )}
         </MenuButton>
       </Group>
       <LayoutParaGroup editor={editor} Group={Group} onParagraph={onParagraph} />
       <HfGroup editor={editor} Group={Group} onHf={onHf} />
     </>
-  );
-}
-
-// ---------- Диалог «Поля» ----------
-export function MarginsDialog({ editor, onClose }) {
-  const g = parseSectPr(sectionAt(editor.state).sectPr);
-  const [f, setF] = useState({ top: cm(g.top), bottom: cm(g.bottom), left: cm(g.left), right: cm(g.right), header: cm(g.header), footer: cm(g.footer) });
-  const [err, setErr] = useState('');
-  const apply = () => {
-    const out = {};
-    for (const k of Object.keys(f)) {
-      const v = tw(f[k]);
-      if (v === null) { setErr('Поля — числа от 0 до 55 см'); return; }
-      out[k] = v;
-    }
-    if (out.left + out.right > g.w - 1000 || out.top + out.bottom > g.h - 1000) { setErr('Поля слишком большие для этого размера бумаги'); return; }
-    setPage(editor, out);
-    onClose();
-  };
-  const field = (k, label) => (
-    <label className="pd-field"><span>{label}</span>
-      <span className="pd-input"><input value={f[k]} onChange={(e) => { setErr(''); setF({ ...f, [k]: e.target.value }); }} /><em>см</em></span>
-    </label>
-  );
-  return (
-    <div className="modal-backdrop" onMouseDown={onClose}>
-      <div className="modal pd" role="dialog" aria-label="Поля" onMouseDown={(e) => e.stopPropagation()}
-        onKeyDown={(e) => { if (e.key === 'Escape') onClose(); if (e.key === 'Enter') { e.preventDefault(); apply(); } }}>
-        <div className="modal-title">Параметры страницы — поля</div>
-        <div className="modal-body">
-          <fieldset><legend>Поля</legend>
-            <div className="pd-grid">{field('top', 'Верхнее')}{field('bottom', 'Нижнее')}{field('left', 'Левое')}{field('right', 'Правое')}</div>
-          </fieldset>
-          <fieldset><legend>Колонтитулы от края</legend>
-            <div className="pd-grid">{field('header', 'Верхнего')}{field('footer', 'Нижнего')}</div>
-          </fieldset>
-          {err && <div className="pd-error" role="alert">{err}</div>}
-        </div>
-        <div className="modal-actions">
-          <button className="btn primary" onClick={apply}>ОК</button>
-          <button className="btn" onClick={onClose}>Отмена</button>
-        </div>
-      </div>
-    </div>
   );
 }
 
@@ -306,7 +278,7 @@ function marginBox(paras, page = 'counter(page)', pages = 'counter(pages)') {
     .map((x) => (x === '{PAGE}' ? page : x === '{NUMPAGES}' ? pages : cssString(x))).join(' ')).join(' "\\A" ');
 }
 // firstSectPr — XML первого раздела (w:titlePg — «особый колонтитул первой страницы»)
-export function printCss(sectPr, hf, firstSectPr = sectPr) {
+export function printCss(sectPr, hf, firstSectPr = sectPr, mirror = false) {
   const g = parseSectPr(sectPr);
   const px = pagePx(g);
   const h = hf || EMPTY_HF;
@@ -326,6 +298,8 @@ export function printCss(sectPr, hf, firstSectPr = sectPr) {
   };
   const sectTitlePg = parseSectPr(firstSectPr).titlePg;
   let css = `@page { size: ${px.width}px ${px.height}px; margin: ${px.top}px ${px.right}px ${px.bottom}px ${px.left}px; ${boxesOf((k) => h[k], false)} }`;
+  // зеркальные поля: у чётных (левых) страниц «внутри» — справа
+  if (mirror) css += ` @page :left { margin-left: ${px.right}px; margin-right: ${px.left}px; }`;
   // чётные страницы — левые (первая — правая), первая страница — :first (объявлена последней: перекрывает :left/:right)
   if (h.evenOdd) css += ` @page :left { ${boxesOf((k) => hfFor(h, k, { page: 2, firstOfSection: false, sectTitlePg }), true)} }`;
   const titlePg = h.own && h.own.titlePg ? !!h.titlePg : sectTitlePg;

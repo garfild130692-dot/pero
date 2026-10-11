@@ -7,9 +7,14 @@ export const TWIPS_PER_CM = 567;
 // Параметры страницы по умолчанию (A4, поля как в русском Word) — в твипах
 export const DEFAULT_PAGE = { w: 11906, h: 16838, top: 1134, right: 850, bottom: 1134, left: 1701, header: 708, footer: 708 };
 
+// [имя, ширина, высота (твипы, книжная), код размера бумаги Word (w:code)]
 export const PAPER = [
-  ['A4', 11906, 16838], ['A5', 8391, 11906], ['A3', 16838, 23811], ['Letter', 12240, 15840], ['Legal', 12240, 20160],
+  ['A4', 11906, 16838, 9], ['A5', 8391, 11906, 11], ['A3', 16838, 23811, 8], ['A6', 5953, 8391, 70],
+  ['B4 (JIS)', 14570, 20636, 12], ['B5 (JIS)', 10318, 14570, 13],
+  ['Letter', 12240, 15840, 1], ['Legal', 12240, 20160, 5], ['Executive', 10440, 15120, 7], ['Tabloid', 15840, 24480, 3],
 ];
+// формат бумаги по размеру (любая ориентация, допуск ~0,5 мм)
+export const paperOf = (w, h) => PAPER.find(([, pw, ph]) => (Math.abs(pw - w) < 30 && Math.abs(ph - h) < 30) || (Math.abs(ph - w) < 30 && Math.abs(pw - h) < 30)) || null;
 
 // Предустановки полей (твипы): верх, право, низ, лево
 export const MARGIN_PRESETS = [
@@ -17,6 +22,7 @@ export const MARGIN_PRESETS = [
   ['narrow', 'Узкие', { top: 720, right: 720, bottom: 720, left: 720 }],
   ['moderate', 'Средние', { top: 1440, right: 1080, bottom: 1440, left: 1080 }],
   ['wide', 'Широкие', { top: 1440, right: 2880, bottom: 1440, left: 2880 }],
+  ['mirror', 'Зеркальные', { top: 1440, right: 1440, bottom: 1440, left: 1800 }, true], // внутри 3,18 / снаружи 2,54 (как Word)
 ];
 
 const attr = (tag, name) => {
@@ -26,7 +32,7 @@ const attr = (tag, name) => {
 
 // Геометрия страницы из XML <w:sectPr> (или умолчание). Значения — в твипах.
 export function parseSectPr(xml) {
-  const g = { ...DEFAULT_PAGE, orient: 'portrait', titlePg: false };
+  const g = { ...DEFAULT_PAGE, orient: 'portrait', titlePg: false, gutter: 0, marLeft: DEFAULT_PAGE.left };
   if (!xml) return g;
   const sz = (/<w:pgSz\b[^>]*>/.exec(xml) || [])[0];
   const mar = (/<w:pgMar\b[^>]*>/.exec(xml) || [])[0];
@@ -35,7 +41,11 @@ export function parseSectPr(xml) {
     g.h = attr(sz, 'h') ?? g.h;
     if (/w:orient="landscape"/.test(sz)) g.orient = 'landscape';
   }
-  if (mar) for (const k of ['top', 'right', 'bottom', 'left', 'header', 'footer']) g[k] = attr(mar, k) ?? g[k];
+  if (mar) for (const k of ['top', 'right', 'bottom', 'left', 'header', 'footer', 'gutter']) g[k] = attr(mar, k) ?? g[k];
+  // переплёт (слева) — часть левого поля для раскладки; marLeft — поле без переплёта (как в диалоге Word)
+  g.gutter = Math.max(0, g.gutter || 0);
+  g.marLeft = g.left;
+  g.left += g.gutter;
   // в Word поля сверху/снизу могут быть отрицательными («не сдвигать текст») — берём модуль
   g.top = Math.abs(g.top);
   g.bottom = Math.abs(g.bottom);
@@ -52,23 +62,31 @@ export function pagePx(g) {
   };
 }
 
-// Изменить размер/ориентацию/поля в XML sectPr (остальное — колонтитулы, колонки, сетка — как было)
-export function patchSectPr(xml, { w, h, orient, top, right, bottom, left, header, footer } = {}) {
+// Изменить размер/ориентацию/поля в XML sectPr (остальное — колонтитулы, колонки, сетка — как было).
+// left — поле вместе с переплётом (как в раскладке); gutter — переплёт (нет — прежний); code — код бумаги (w:code; при
+// смене размера без кода прежний код убирается — иначе принтер взял бы старый формат)
+export function patchSectPr(xml, { w, h, orient, top, right, bottom, left, header, footer, gutter, code } = {}) {
   let out = xml || `<w:sectPr><w:pgSz w:w="${DEFAULT_PAGE.w}" w:h="${DEFAULT_PAGE.h}"/><w:pgMar w:top="${DEFAULT_PAGE.top}" w:right="${DEFAULT_PAGE.right}" w:bottom="${DEFAULT_PAGE.bottom}" w:left="${DEFAULT_PAGE.left}" w:header="708" w:footer="708" w:gutter="0"/><w:cols w:space="708"/><w:docGrid w:linePitch="360"/></w:sectPr>`;
   const setAttr = (tag, name, v) => {
     if (v == null) return tag;
     const re = new RegExp(`\\bw:${name}="[^"]*"`);
     return re.test(tag) ? tag.replace(re, `w:${name}="${v}"`) : tag.replace(/\s*\/?>$/, (end) => ` w:${name}="${v}"${end}`);
   };
+  const gut = gutter ?? Math.max(0, attr((/<w:pgMar\b[^>]*>/.exec(out) || [])[0], 'gutter') || 0);
+  if (left != null) left = Math.max(0, left - gut);
+  if (gutter != null) gutter = Math.max(0, gutter);
   out = out.replace(/<w:pgSz\b[^>]*\/>/, (tag) => {
+    const sizeChanged = (w != null && w !== attr(tag, 'w')) || (h != null && h !== attr(tag, 'h'));
     let t = setAttr(setAttr(tag, 'w', w), 'h', h);
+    if (code != null) t = setAttr(t, 'code', code);
+    else if (sizeChanged) t = t.replace(/\s*w:code="[^"]*"/, '');
     if (orient === 'landscape') t = setAttr(t, 'orient', 'landscape');
     if (orient === 'portrait') t = t.replace(/\s*w:orient="[^"]*"/, '');
     return t;
   });
   out = out.replace(/<w:pgMar\b[^>]*\/>/, (tag) => {
     let t = tag;
-    for (const [k, v] of Object.entries({ top, right, bottom, left, header, footer })) t = setAttr(t, k, v);
+    for (const [k, v] of Object.entries({ top, right, bottom, left, header, footer, gutter })) t = setAttr(t, k, v);
     return t;
   });
   return out;
@@ -231,3 +249,20 @@ export function sectionAt(state) {
   state.doc.forEach((n, pos, idx) => { if (!found && idx >= top && n.attrs && n.attrs.sectPr) found = { pos, sectPr: n.attrs.sectPr }; });
   return found || { pos: null, sectPr: state.doc.attrs.sectPr };
 }
+
+// Флажок в settings.xml (w:mirrorMargins и т.п.) на месте по схеме: after — элементы, после которых он стоит (ближайший первым)
+export function patchSettingsFlag(xml, name, on, after) {
+  const s = String(xml).replace(new RegExp(`<w:${name}\\b[^>]*/>`, 'g'), '');
+  if (!on) return s;
+  let at = -1;
+  for (const tag of after) {
+    const m = new RegExp(`<w:${tag}\\b[^>]*(?:/>|>[\\s\\S]*?</w:${tag}>)`).exec(s);
+    if (m) { at = m.index + m[0].length; break; }
+  }
+  if (at < 0) { const m = /<w:settings\b[^>]*>/.exec(s); at = m.index + m[0].length; }
+  return `${s.slice(0, at)}<w:${name}/>${s.slice(at)}`;
+}
+// предшественники w:mirrorMargins в CT_Settings (ближайший первым)
+export const MIRROR_AFTER = ['saveFormsData', 'saveSubsetFonts', 'embedSystemFonts', 'embedTrueTypeFonts', 'printFormsData',
+  'printFractionalCharacterWidth', 'printPostScriptOverText', 'displayBackgroundShape', 'doNotDisplayPageBoundaries',
+  'removeDateAndTime', 'removePersonalInformation', 'zoom', 'view', 'writeProtection'];

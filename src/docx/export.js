@@ -5,7 +5,7 @@ import { DEFAULT_FONT, DEFAULT_SIZE, highlightName, normalizeColor, parseSize } 
 import { NEW_DOC_PARA, ptToTwips } from '../editor/paragraph.js';
 import { CELL_SIDES, GRID_BORDERS, TABLE_SIDES, TWIPS_PER_PX, borderToOoxml } from '../editor/table.js';
 import { EMU_PER_PX, dataUrlToBytes, extOf } from '../editor/image.js';
-import { parseSectPr, setHfRefs, setTitlePg, writeHfPart } from '../editor/page.js';
+import { MIRROR_AFTER, parseSectPr, patchSettingsFlag, setHfRefs, setTitlePg, writeHfPart } from '../editor/page.js';
 import { bulletToLvl } from '../editor/numbering.js';
 import { patchCoreProps } from '../editor/docProps.js';
 import { addWatermark, patchBackground, patchSettingsBackground, stripWatermark, watermarkBox, watermarkRunXml } from '../editor/design.js';
@@ -823,7 +823,7 @@ ${notes.length ? `<Relationship Id="rIdPeroF" Type="${relType('footnotes')}" Tar
     zip.file('word/styles.xml', stylesXml(da.fontFamily || DEFAULT_FONT, parseSize(da.fontSize) || DEFAULT_SIZE, { ...NEW_DOC_PARA, ...(da.para || {}) })
       .replace('</w:styles>', `${customs.map((s) => customStyleXml(s, 'Normal')).join('')}${(da.charStyles || []).map(charStyleXml).join('')}</w:styles>`));
     zip.file('word/numbering.xml', numberingXml(ex.orderedNums, hLevels));
-    zip.file('word/settings.xml', patchSettingsBackground(settingsXml(da.defaultTab, !!hf.evenOdd), !!da.pageColor));
+    zip.file('word/settings.xml', patchSettingsFlag(patchSettingsBackground(settingsXml(da.defaultTab, !!hf.evenOdd), !!da.pageColor), 'mirrorMargins', !!da.mirrorMargins, MIRROR_AFTER));
     zip.file('word/_rels/document.xml.rels', docRels);
     return zip.generateAsync({ type: 'uint8array', compression: 'DEFLATE' });
   }
@@ -992,6 +992,7 @@ ${notes.length ? `<Relationship Id="rIdPeroF" Type="${relType('footnotes')}" Tar
     }
     if (sx && own.evenOdd) sx = setEvenAndOdd(sx, !!hf.evenOdd);
     if (sx && da.pageColorChanged) sx = patchSettingsBackground(sx, !!da.pageColor);
+    if (sx && da.mirrorChanged) sx = patchSettingsFlag(sx, 'mirrorMargins', !!da.mirrorMargins, MIRROR_AFTER);
     if (sx && sx !== orig) zip.file(sPath, sx);
   }
   ct = addImageTypes(ct, ex.images);

@@ -940,6 +940,7 @@ export async function importDocx(data) {
   const props = coreFile ? readCoreProps(await coreFile.async('string')) : {};
   // цвет страницы — w:background перед телом документа
   const rawDoc = await zip.file('word/document.xml').async('string');
+  const mirrorMargins = !!(settings && child(settings.documentElement, 'mirrorMargins') && onOff(child(settings.documentElement, 'mirrorMargins')));
   const pageColor = readBackground(rawDoc.slice(0, Math.max(0, rawDoc.indexOf('<w:body'))));
   // колонки текста (w:cols w:num > 1) сохраняются в sectPr, но на экране и при печати — одной колонкой
   if (sects.some((x) => +((/<w:cols\b[^>]*w:num="(\d+)"/.exec(x || '') || [])[1] || 1) > 1)) imp.preserved.columns = 1;
@@ -954,7 +955,7 @@ export async function importDocx(data) {
   return {
     doc: {
       type: 'doc',
-      attrs: { ...docDefaults, para: docPara, defaultTab, sectPr: imp.bodySectPr, hf, styles: Object.values(imp.usedStyles), charStyles: Object.values(imp.usedCharStyles), comments: commentList, footnotes: footnoteList, watermark, pageColor, props, ...(imp.headingNum ? { headingNumbering: imp.headingNum } : {}) },
+      attrs: { ...docDefaults, para: docPara, defaultTab, sectPr: imp.bodySectPr, hf, styles: Object.values(imp.usedStyles), charStyles: Object.values(imp.usedCharStyles), comments: commentList, footnotes: footnoteList, watermark, pageColor, props, ...(mirrorMargins ? { mirrorMargins } : {}), ...(imp.headingNum ? { headingNumbering: imp.headingNum } : {}) },
       content,
     },
     warnings: imp.warnings,

@@ -34,7 +34,8 @@ import { lineCss } from './editor/paraFormat.js';
 import { insertImageFiles } from './insertImage.js';
 import { EMPTY_HF, pagePx, parseSectPr, sectionFrame, sectionList } from './editor/page.js';
 import { pageChrome, pageInfo } from './editor/pagination.js';
-import { HeaderFooterDialog, MarginsDialog, PageChrome, printCss } from './PageControls.jsx';
+import { HeaderFooterDialog, PageChrome, printCss } from './PageControls.jsx';
+import PageSetupDialog from './PageSetupDialog.jsx';
 import FindBar from './FindBar.jsx';
 import StyleDialog from './StyleDialog.jsx';
 import { styleCss } from './editor/styles.js';
@@ -451,7 +452,7 @@ export default function App({ initialFile, onOpenOther, onNewSheet, autosaveSec 
     editor,
     selector: ({ editor: e }) => (e ? {
       family: e.state.doc.attrs.fontFamily, size: e.state.doc.attrs.fontSize, para: e.state.doc.attrs.para,
-      sectPr: e.state.doc.attrs.sectPr, hf: e.state.doc.attrs.hf, total: pageInfo(e.state).total, styles: e.state.doc.attrs.styles, headingNumbering: e.state.doc.attrs.headingNumbering, charStyles: e.state.doc.attrs.charStyles, pageColor: e.state.doc.attrs.pageColor, chrome: pageChrome(e.state), firstSect: sectionList(e.state.doc)[0], sects: sectionList(e.state.doc), sectCss: sectionPrintCss(e.state.doc),
+      sectPr: e.state.doc.attrs.sectPr, hf: e.state.doc.attrs.hf, total: pageInfo(e.state).total, styles: e.state.doc.attrs.styles, headingNumbering: e.state.doc.attrs.headingNumbering, charStyles: e.state.doc.attrs.charStyles, pageColor: e.state.doc.attrs.pageColor, chrome: pageChrome(e.state), firstSect: sectionList(e.state.doc)[0], sects: sectionList(e.state.doc), sectCss: sectionPrintCss(e.state.doc), mirror: !!e.state.doc.attrs.mirrorMargins,
     } : null),
   });
 
@@ -516,7 +517,7 @@ export default function App({ initialFile, onOpenOther, onNewSheet, autosaveSec 
             setShowComments(true);
           },
         }}
-        onFont={() => setModal('font')} onSymbol={() => setModal('symbol')} onRefDialog={(k) => setModal(k)} onParagraph={() => setModal('para')} onMargins={() => setModal('margins')} onHf={() => setModal('hf')} />}
+        onFont={() => setModal('font')} onSymbol={() => setModal('symbol')} onRefDialog={(k) => setModal(k)} onParagraph={() => setModal('para')} onMargins={(tab) => setModal({ pageSetup: tab || 'margins' })} onHf={() => setModal('hf')} />}
       <div className="main-row">
       {viewPrefs.nav && viewMode !== 'read' && <NavPane editor={editor} onClose={() => setPref('nav')} />}
       <div
@@ -569,7 +570,7 @@ export default function App({ initialFile, onOpenOther, onNewSheet, autosaveSec 
       {modal === 'watermark' && <WatermarkDialog editor={editor} onClose={() => setModal(null)} />}
       {modal === 'pageBorders' && <PageBordersDialog editor={editor} onClose={() => setModal(null)} />}
       {modal === 'zoom' && <ZoomDialog zoom={zoom} onApply={setZoom} onFit={fitTo} onClose={() => setModal(null)} />}
-      {modal === 'margins' && <MarginsDialog editor={editor} onClose={() => setModal(null)} />}
+      {modal && modal.pageSetup && <PageSetupDialog editor={editor} initialTab={modal.pageSetup} onClose={() => setModal(null)} />}
       {modal === 'hf' && <HeaderFooterDialog editor={editor} onClose={() => setModal(null)} />}
       {modal && modal.style && <StyleDialog editor={editor} mode={modal.style} onClose={() => setModal(null)} />}
       {/* пользовательские стили абзацев — правила по data-pstyle */}
@@ -578,8 +579,8 @@ export default function App({ initialFile, onOpenOther, onNewSheet, autosaveSec 
       <style>{`${COUNTER_STYLES_CSS}
 ${headingNumberCss(docFont && docFont.headingNumbering)}`}</style>
       {/* печать/PDF: размер листа, поля и колонтитулы — правилами @page */}
-      <style>{printCss(docFont && docFont.sectPr, (docFont && docFont.hf) || EMPTY_HF, docFont && docFont.firstSect)}{docFont && docFont.sectCss ? `@media print { ${docFont.sectCss} }` : ''}</style>
-      {modal && typeof modal === 'object' && !modal.style && (
+      <style>{printCss(docFont && docFont.sectPr, (docFont && docFont.hf) || EMPTY_HF, docFont && docFont.firstSect, !!(docFont && docFont.mirror))}{docFont && docFont.sectCss ? `@media print { ${docFont.sectCss} }` : ''}</style>
+      {modal && typeof modal === 'object' && Array.isArray(modal.actions) && (
         <Modal
           title={modal.title}
           onClose={() => modal.actions[modal.actions.length - 1][2]()}

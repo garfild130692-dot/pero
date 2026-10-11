@@ -912,3 +912,11 @@ p[data-section-type="nextPage"]::after { content: 'Разрыв раздела (
 .rb-spin-btns { display: flex; flex-direction: column; border-left: 1px solid #ddd; }
 .rb-spin-btns button { flex: 1; width: 15px; padding: 0; border: 0; background: none; font-size: 8px; line-height: 1; cursor: pointer; color: #555; }
 .rb-spin-btns button:hover { background: var(--accent-soft); }
+
+/* «Параметры страницы» */
+.modal.ps-dlg { width: 520px; }
+.ps-row { display: flex; gap: 18px; }
+.ps-bottom { display: flex; align-items: flex-end; justify-content: space-between; gap: 14px; margin-top: 4px; }
+.ps-sample { flex: 0 0 auto; }
+.ps-preview { display: block; margin: 2px auto; }
+.ps-bottom select { width: 200px; }
