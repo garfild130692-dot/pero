@@ -13,6 +13,7 @@ contextBridge.exposeInMainWorld('pero', {
   recentRemove: (p) => ipcRenderer.invoke('recent:remove', p),
   recoveryList: () => ipcRenderer.invoke('recovery:list'),
   settingsGet: () => ipcRenderer.invoke('settings:get'),
+  clipboardRead: () => ipcRenderer.invoke('clipboard:read'),
   winList: () => ipcRenderer.invoke('win:list'),
   winFocus: (id) => ipcRenderer.send('win:focus', id),
   winArrange: () => ipcRenderer.send('win:arrange'),

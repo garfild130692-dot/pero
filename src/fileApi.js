@@ -86,6 +86,11 @@ export const recentRemove = async (p) => native && native.recentRemove && native
 export const recoveryList = async () => (native && native.recoveryList ? native.recoveryList() : []);
 export const settingsGet = async () => (native && native.settingsGet ? native.settingsGet() : { startScreen: true });
 export const settingsSet = async (k, v) => native && native.settingsSet && native.settingsSet(k, v);
+// буфер обмена: { html, text, image } (в браузере — только текст, если разрешено)
+export const clipboardRead = async () => {
+  if (native && native.clipboardRead) return native.clipboardRead();
+  try { return { html: '', text: await navigator.clipboard.readText(), image: false }; } catch { return { html: '', text: '', image: false }; }
+};
 export const winList = async () => (native && native.winList ? native.winList() : []);
 export const winFocus = (id) => native && native.winFocus && native.winFocus(id);
 export const winArrange = () => native && native.winArrange && native.winArrange();

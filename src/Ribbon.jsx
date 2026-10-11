@@ -23,6 +23,7 @@ import { SymbolButton } from './SymbolDialog.jsx';
 import { MultilevelButton } from './NumberingDialogs.jsx';
 import { ViewPanel } from './ViewControls.jsx';
 import { DesignPanel } from './DesignControls.jsx';
+import { PasteButton } from './PasteControls.jsx';
 import { BordersButton, RowHeightField, ShadingButton, TableIcons, tableState } from './TableControls.jsx';
 
 function Btn({ icon, label, title, onClick, onDoubleClick, active, disabled, big, children }) {
@@ -372,7 +373,7 @@ export default function Ribbon({ editor, file, view, onLink, onFont, onSymbol, o
         {activeTab === 'home' && (
           <>
             <Group title="Буфер обмена">
-              <Btn big icon="paste" label="Вставить" onClick={() => { editor.commands.focus(); clipboard('paste'); }} title="Вставить (Ctrl+V)" />
+              <PasteButton editor={editor} Btn={Btn} nativePaste={() => clipboard('paste')} onSpecial={() => onRefDialog('pasteSpecial')} />
               <div className="rb-col">
                 <Btn icon="cut" title="Вырезать (Ctrl+X)" onClick={() => { editor.commands.focus(); clipboard('cut'); }} />
                 <Btn icon="copy" title="Копировать (Ctrl+C)" onClick={() => { editor.commands.focus(); clipboard('copy'); }} />

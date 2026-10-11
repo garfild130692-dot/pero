@@ -813,3 +813,13 @@ p[data-section-break]::after {
 .pb-sheet { width: 110px; height: 150px; background: #fff; border: 1px solid #ccc; box-sizing: border-box; padding: 24px 18px; display: flex; flex-direction: column; gap: 9px; }
 .pb-line { height: 3px; background: #d9e3e0; }
 .pb-body .pd-note { grid-column: 1 / -1; color: #666; font-size: 12px; }
+
+/* «Параметры вставки» */
+.paste-split .paste-arrow { width: 100%; height: 14px; min-width: 0; border-radius: 0 0 3px 3px; }
+.paste-split { flex-direction: column; }
+.paste-tag { position: fixed; z-index: 40; }
+.paste-tag-btn { display: flex; align-items: center; gap: 1px; height: 22px; padding: 0 3px; border: 1px solid #b9b9b9; background: #fff; border-radius: 2px; cursor: pointer; color: #444; font-size: 9px; box-shadow: 0 1px 3px rgba(0,0,0,.12); }
+.paste-tag-btn:hover { border-color: var(--accent); color: var(--accent); }
+.paste-tag-menu { position: absolute; top: 24px; left: 0; min-width: 270px; }
+.paste-tag-menu .menu-item svg { flex: none; }
+@media print { .paste-tag { display: none !important; } }

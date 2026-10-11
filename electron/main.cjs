@@ -407,6 +407,8 @@ ipcMain.on('win:arrange', (e) => {
     w.setBounds({ x: area.x + c * width, y: area.y + r * height, width, height });
   });
 });
+// содержимое буфера обмена для «Параметров вставки» и «Специальной вставки»
+ipcMain.handle('clipboard:read', () => ({ html: clipboard.readHTML() || '', text: clipboard.readText() || '', image: !clipboard.readImage().isEmpty() }));
 ipcMain.handle('settings:get', () => settings.get());
 ipcMain.handle('settings:set', (_e, k, v) => settings.set(k, v));
 ipcMain.handle('recent:clear', () => { recent.clear(); try { app.clearRecentDocuments(); } catch { /* */ } buildMenu(); return true; });

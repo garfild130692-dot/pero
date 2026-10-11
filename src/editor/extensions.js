@@ -31,6 +31,7 @@ import { Fields } from './fields.js';
 import { Footnotes } from './footnotes.js';
 import { Numbering } from './numbering.js';
 import { Design } from './design.js';
+import { PasteOptions } from './paste.js';
 
 // Как оформлены заголовки — font.js (совпадает со styles.css и стилями Heading1–6 в export.js)
 export { HEADING_FONT, HEADING_SIZES };
@@ -283,6 +284,7 @@ export const extensions = [
   Footnotes,
   Numbering,
   Design,
+  PasteOptions,
   PeroTable.configure({ resizable: true }),
   PeroTableRow,
   PeroTableCell,
