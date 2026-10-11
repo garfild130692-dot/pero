@@ -21,6 +21,7 @@ export const Icon = {
   newWindowDoc: (p) => <S {...p}><rect x="3" y="5" width="14" height="12" rx="1" /><path d="M7 3h14v12" /><path d="M10 9v4M8 11h4" /></S>,
   arrange: (p) => <S {...p}><rect x="3" y="4" width="8" height="16" rx="1" /><rect x="13" y="4" width="8" height="16" rx="1" /></S>,
   windows: (p) => <S {...p}><rect x="3" y="7" width="13" height="11" rx="1" /><path d="M7 7V4h14v11h-5" /></S>,
+  select: (p) => <S {...p}><path d="M4 4h4M4 4v4M20 4h-4M20 4v4M4 20h4M4 20v-4M20 20h-4M20 20v-4" /><path d="m10 9 6 3-3 1-1 3z" /></S>,
   home: (p) => <S {...p}><path d="M3 11 12 4l9 7" /><path d="M5 10v10h5v-6h4v6h5V10" /></S>,
   multilevel: (p) => <S {...p}><path d="M9 6h11M12 12h8M15 18h5" /><path d="M3 5h2v3M3 11.5h3M6 17h2v3" strokeWidth="1.4" /></S>,
   footnote: (p) => <S {...p}><path d="M4 5h12M4 9h9" /><path d="M17 7h2v-3" /><path d="M4 16h16" strokeWidth="1" /><path d="M4 19h10" /></S>,

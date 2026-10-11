@@ -10,6 +10,7 @@ import Ribbon, { QuickAccess } from './Ribbon.jsx';
 import Ruler from './Ruler.jsx';
 import ParagraphDialog from './ParagraphDialog.jsx';
 import FontDialog from './FontDialog.jsx';
+import GoToDialog from './GoToDialog.jsx';
 import SymbolDialog from './SymbolDialog.jsx';
 import { BookmarkDialog, CrossRefDialog, DateDialog } from './RefDialogs.jsx';
 import { NavPane, ZoomDialog, clampZoom, fitZoom, loadViewPrefs, saveViewPrefs } from './ViewControls.jsx';
@@ -222,7 +223,9 @@ export default function App({ initialFile, onOpenOther, onNewSheet, autosaveSec 
     if (ws) setZoom(fitZoom(kind, { w: ws.clientWidth, h: ws.clientHeight }, pageSize.current));
   };
   const [modal, setModal] = useState(null);
-  const [findMode, setFindMode] = useState(null); // null | 'find' | 'replace'
+  const [findMode, setFindModeRaw] = useState(null); // null | 'find' | 'replace'
+  const [findInit, setFindInit] = useState({ n: 0 }); // расширенный поиск / формат для поиска (Выделить → похожее)
+  const setFindMode = (m, init = null) => { if (init) setFindInit((x) => ({ ...init, n: x.n + 1 })); setFindModeRaw(m); };
   const [showComments, setShowComments] = useState(false);
   const [stylesPane, setStylesPane] = useState(false); // панель «Стили»
   const [notesPanel, setNotesPanel] = useState(null); // панель «Сноски»: null — скрыта, { active } — открыта
@@ -414,6 +417,7 @@ export default function App({ initialFile, onOpenOther, onNewSheet, autosaveSec 
       if (k === 'KeyD' && !e.shiftKey) { e.preventDefault(); setModal('font'); return; } // Ctrl+Shift+D — двойное подчёркивание
       if (k === 'KeyF') { e.preventDefault(); setFindMode('find'); return; }
       if (k === 'KeyH') { e.preventDefault(); setFindMode('replace'); return; }
+      if (k === 'KeyG' && !e.shiftKey && !e.altKey) { e.preventDefault(); setModal('goto'); return; } // «Перейти»
       if (fileApi.isDesktop) return;
       const h = handlers.current;
       if (k === 'KeyS') { e.preventDefault(); e.shiftKey ? h.saveAs() : h.save(); }
@@ -474,7 +478,7 @@ export default function App({ initialFile, onOpenOther, onNewSheet, autosaveSec 
         onStylesPane={() => setStylesPane((v) => !v)}
         view={{ mode: viewMode, setMode: setViewMode, ruler: viewPrefs.ruler, nav: viewPrefs.nav, toggleRuler: () => setPref('ruler'), toggleNav: () => setPref('nav'),
           setZoom, fit: fitTo, openZoom: () => setModal('zoom') }}
-        onFind={(m) => setFindMode(m)}
+        onFind={(m, init) => setFindMode(m, init)}
         onStyle={(m) => (m && m.remove ? editor.chain().focus().deleteStyle(m.remove).run() : setModal({ style: m }))}
         review={{
           showComments,
@@ -504,7 +508,7 @@ export default function App({ initialFile, onOpenOther, onNewSheet, autosaveSec 
         ref={workspaceRef}
         onWheel={(e) => { if (e.ctrlKey) setZoom((z) => z + (e.deltaY < 0 ? 10 : -10)); }} // Ctrl+колесо — масштаб
       >
-        {findMode && <FindBar editor={editor} mode={findMode} setMode={setFindMode} />}
+        {findMode && <FindBar key={findInit.n} editor={editor} mode={findMode} setMode={(m) => setFindMode(m)} initialFormat={findInit.format || null} initialMore={!!findInit.more} />}
         {viewPrefs.ruler && viewMode !== 'read' && <Ruler editor={editor} zoom={zoom} />}
         <PageScaler scale={zoom / 100}>
           <div className={`page${frame.mixed ? ' pero-multi' : ''}${viewMode === 'draft' ? ' draft' : ''}`} style={{ ...pageVars(docFont), ...pageBox(pageGeo), ...(docFont && docFont.pageColor ? { background: docFont.pageColor, '--page-bg': docFont.pageColor } : {}) }}>
@@ -535,6 +539,7 @@ export default function App({ initialFile, onOpenOther, onNewSheet, autosaveSec 
       {modal === 'listFormat' && <ListFormatDialog editor={editor} onClose={() => setModal(null)} />}
       {modal === 'numberValue' && <NumberValueDialog editor={editor} onClose={() => setModal(null)} />}
       {modal === 'bulletSymbol' && <SymbolDialog editor={editor} title="Определение нового маркера" onPick={(ch) => editor.chain().focus().setBullet(ch).run()} onClose={() => setModal(null)} />}
+      {modal === 'goto' && <GoToDialog editor={editor} onClose={() => setModal(null)} />}
       {modal === 'pasteSpecial' && <PasteSpecialDialog editor={editor} nativePaste={() => fileApi.clipboard('paste')} onClose={() => setModal(null)} />}
       {viewMode !== 'read' && <PasteOptionsTag editor={editor} />}
       {modal === 'watermark' && <WatermarkDialog editor={editor} onClose={() => setModal(null)} />}

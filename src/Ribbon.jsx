@@ -206,6 +206,35 @@ function TablePicker({ onPick, style }) {
   );
 }
 
+// Кнопка с меню (строчная, как «Найти ▾» в Word): щелчок по стрелке — меню
+function MenuSplit({ Btn, icon, label, title, onClick, items }) {
+  const pop = usePopover();
+  return (
+    <div className="split rb-popover-anchor" ref={pop.ref}>
+      <Btn icon={icon} title={title} onClick={onClick || (() => pop.setOpen(!pop.open))}><span className="rb-inline">{label}</span></Btn>
+      <button type="button" className="rb-btn split-arrow" title={title} onMouseDown={(e) => e.preventDefault()} onClick={() => pop.setOpen(!pop.open)}>▾</button>
+      {pop.open && (
+        <div className="menu-pop" style={pop.style} role="menu">
+          {items.map(([l, fn]) => (
+            <button key={l} type="button" className="menu-item" onMouseDown={(e) => e.preventDefault()} onClick={() => { pop.setOpen(false); fn(); }}><span className="check" />{l}</button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Формат текста под курсором — для «Выделить → Текст с похожим форматированием» (поиск по формату)
+function similarFormat(editor) {
+  const { state } = editor;
+  const marks = state.storedMarks || state.selection.$from.marks();
+  const f = {};
+  for (const k of ['bold', 'italic', 'underline', 'strike', 'highlight', 'superscript', 'subscript']) f[k] = marks.some((m) => m.type.name === k);
+  const par = state.selection.$from.parent;
+  f.styleId = par.type.name === 'heading' ? `h${par.attrs.level}` : par.attrs.styleId || null;
+  return f;
+}
+
 // Меню «Стили ▾»: создать, изменить, удалить
 function StylesMenu({ s, onStyle }) {
   const pop = usePopover();
@@ -422,8 +451,16 @@ export default function Ribbon({ editor, file, view, onStylesPane, onLink, onFon
 
             <Group title="Редактирование">
               <div className="rb-rows">
-                <Btn icon="search" title="Найти (Ctrl+F)" onClick={() => onFind('find')}><span className="rb-inline">Найти</span></Btn>
+                <MenuSplit Btn={Btn} icon="search" label="Найти" title="Найти (Ctrl+F)" onClick={() => onFind('find')} items={[
+                  ['Найти… (Ctrl+F)', () => onFind('find')],
+                  ['Расширенный поиск…', () => onFind('find', { more: true })],
+                  ['Перейти… (Ctrl+G)', () => onRefDialog('goto')],
+                ]} />
                 <Btn icon="replace" title="Заменить (Ctrl+H)" onClick={() => onFind('replace')}><span className="rb-inline">Заменить</span></Btn>
+                <MenuSplit Btn={Btn} icon="select" label="Выделить" title="Выделить" items={[
+                  ['Выделить всё (Ctrl+A)', () => editor.chain().focus().selectAll().run()],
+                  ['Текст с похожим форматированием', () => onFind('find', { format: similarFormat(editor) })],
+                ]} />
               </div>
             </Group>
 
