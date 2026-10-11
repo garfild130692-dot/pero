@@ -1,6 +1,7 @@
 // Страница: вкладка «Макет» (поля, ориентация, размер), колонтитулы и номера страниц, CSS для печати/PDF.
 import React, { useState } from 'react';
 import { usePopover } from './FontControls.jsx';
+import { LayoutParaGroup } from './ParaSpinners.jsx';
 import { EMPTY_HF, MARGIN_PRESETS, PAPER, TWIPS_PER_CM, hfFor, hfText, pagePx, parseSectPr, patchSectPr, sectionAt, sectionList } from './editor/page.js';
 import { fmtNum } from './editor/paragraph.js';
 import { SECTION_TYPES } from './editor/breaks.js';
@@ -99,7 +100,7 @@ export function BreaksButton({ editor }) {
 }
 
 // ---------- Вкладка «Макет» ----------
-export function LayoutPanel({ editor, Group, onMargins, onHf }) {
+export function LayoutPanel({ editor, Group, onMargins, onHf, onParagraph }) {
   const g = parseSectPr(sectionAt(editor.state).sectPr);
   const same = (p) => Math.abs(p.top - g.top) < 15 && Math.abs(p.right - g.right) < 15 && Math.abs(p.bottom - g.bottom) < 15 && Math.abs(p.left - g.left) < 15;
   const paper = PAPER.find(([, w, h]) => (Math.abs(w - g.w) < 30 && Math.abs(h - g.h) < 30) || (Math.abs(h - g.w) < 30 && Math.abs(w - g.h) < 30));
@@ -138,6 +139,7 @@ export function LayoutPanel({ editor, Group, onMargins, onHf }) {
           ))}
         </MenuButton>
       </Group>
+      <LayoutParaGroup editor={editor} Group={Group} onParagraph={onParagraph} />
       <HfGroup editor={editor} Group={Group} onHf={onHf} />
     </>
   );

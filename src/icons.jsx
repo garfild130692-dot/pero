@@ -8,6 +8,10 @@ const S = ({ children, size = 18 }) => (
 );
 
 export const Icon = {
+  indLeft: (p) => <S {...p}><path d="M10 6h10M10 10h10M10 14h10M10 18h10" /><path d="M3 9l3 3-3 3" /></S>,
+  indRight: (p) => <S {...p}><path d="M4 6h10M4 10h10M4 14h10M4 18h10" /><path d="M21 9l-3 3 3 3" /></S>,
+  spBefore: (p) => <S {...p}><path d="M4 13h16M4 17h16M4 21h10" /><path d="M12 3v6M9.5 6.5 12 9l2.5-2.5" /></S>,
+  spAfter: (p) => <S {...p}><path d="M4 3h16M4 7h16M4 11h10" /><path d="M12 15v6M9.5 18.5 12 21l2.5-2.5" /></S>,
   fonts: (p) => <S {...p}><path d="M4 19 9 5l5 14M6 14h6" /><path d="M15 19l3-8 3 8M16 16h4" strokeWidth="1.5" /></S>,
   paraSpacing: (p) => <S {...p}><path d="M10 5h10M10 9h10M10 15h10M10 19h10" /><path d="M4 4v16M2.5 6 4 4l1.5 2M2.5 18 4 20l1.5-2" strokeWidth="1.4" /></S>,
   watermark: (p) => <S {...p}><rect x="5" y="3" width="14" height="18" rx="1" /><path d="m8 16 8-8" strokeDasharray="2 2" /></S>,

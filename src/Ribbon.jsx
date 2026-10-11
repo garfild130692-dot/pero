@@ -572,7 +572,7 @@ export default function Ribbon({ editor, file, docFile, onInsertFile, onClip, vi
 
         {activeTab === 'picture' && s.image && <PicturePanel editor={editor} image={s.image} Group={Group} />}
 
-        {activeTab === 'layout' && <LayoutPanel editor={editor} Group={Group} onMargins={onMargins} onHf={onHf} />}
+        {activeTab === 'layout' && <LayoutPanel editor={editor} Group={Group} onMargins={onMargins} onHf={onHf} onParagraph={onParagraph} />}
 
         {activeTab === 'design' && <DesignPanel Group={Group} Btn={Btn} editor={editor} onDialog={onRefDialog} />}
 

@@ -899,3 +899,16 @@ p[data-section-type="nextPage"]::after { content: 'Разрыв раздела (
 .clip-overlay img { max-width: 100%; max-height: 100%; opacity: .75; pointer-events: none; }
 .clip-hint { position: fixed; top: 10px; left: 50%; transform: translateX(-50%); background: rgba(0,0,0,.7); color: #fff; padding: 4px 12px; border-radius: 4px; font: 13px 'Segoe UI', sans-serif; pointer-events: none; }
 .clip-rect { position: fixed; border: 2px solid #fff; box-shadow: 0 0 0 1px #000; background: rgba(255,255,255,.12); pointer-events: none; }
+
+/* «Макет → Абзац»: счётчики */
+.rb-spin-cols { display: flex; gap: 14px; padding: 2px 4px; }
+.rb-spin-col { display: flex; flex-direction: column; gap: 4px; }
+.rb-spin-head { font-size: 11.5px; color: #444; }
+.rb-spin { display: flex; align-items: center; justify-content: space-between; gap: 6px; font-size: 12px; }
+.rb-spin-label { display: flex; align-items: center; gap: 4px; color: #333; }
+.rb-spin-box { display: flex; align-items: stretch; width: 82px; height: 22px; border: 1px solid #bbb; border-radius: 2px; background: #fff; }
+.rb-spin-box:focus-within { border-color: var(--accent); }
+.rb-spin-box input { flex: 1; min-width: 0; border: 0; outline: none; font: 12px 'Segoe UI', sans-serif; padding: 0 4px; background: transparent; }
+.rb-spin-btns { display: flex; flex-direction: column; border-left: 1px solid #ddd; }
+.rb-spin-btns button { flex: 1; width: 15px; padding: 0; border: 0; background: none; font-size: 8px; line-height: 1; cursor: pointer; color: #555; }
+.rb-spin-btns button:hover { background: var(--accent-soft); }
