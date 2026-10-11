@@ -503,6 +503,14 @@ export default function Ribbon({ editor, file, onLink, onFont, onSymbol, onRefDi
               <TocButton editor={editor} Btn={Btn} />
               <Btn title="Обновить оглавление: заголовки и номера страниц" onClick={() => refreshToc(editor)}><span className="rb-inline">Обновить таблицу</span></Btn>
             </Group>
+            <Group title="Сноски">
+              <Btn big icon="footnote" label="Вставить сноску" title="Сноска внизу страницы (Ctrl+Alt+F)" onClick={() => c().insertFootnote().run()} />
+              <div className="rb-rows">
+                <Btn title="Следующая сноска" onClick={() => c().goToFootnote(1).run()}><span className="rb-inline">Следующая ▶</span></Btn>
+                <Btn title="Предыдущая сноска" onClick={() => c().goToFootnote(-1).run()}><span className="rb-inline">◀ Предыдущая</span></Btn>
+                <Btn title="Показать панель сносок" active={review.showNotes} onClick={review.toggleNotes}><span className="rb-inline">Показать сноски</span></Btn>
+              </div>
+            </Group>
             <Group title="Ссылки">
               <Btn big icon="xref" label="Перекрёстная ссылка" title="Ссылка на заголовок или закладку (текст, номер страницы)" onClick={() => onRefDialog('xref')} />
               <Btn big icon="bookmark" label="Закладка" title="Закладка: имя для места в документе" onClick={() => onRefDialog('bookmark')} />

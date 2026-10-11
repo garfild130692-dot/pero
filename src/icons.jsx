@@ -8,6 +8,7 @@ const S = ({ children, size = 18 }) => (
 );
 
 export const Icon = {
+  footnote: (p) => <S {...p}><path d="M4 5h12M4 9h9" /><path d="M17 7h2v-3" /><path d="M4 16h16" strokeWidth="1" /><path d="M4 19h10" /></S>,
   toc: (p) => <S {...p}><path d="M4 5h11M4 10h13M7 15h10M4 20h13" /><path d="M19 5h1M20 10h0M20 15h0M20 20h0" /></S>,
   xref: (p) => <S {...p}><path d="M4 8h13l-3-3M20 16H7l3 3" /></S>,
   bookmark: (p) => <S {...p}><path d="M7 3h10v18l-5-4-5 4z" /></S>,

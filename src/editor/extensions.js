@@ -28,6 +28,7 @@ import { Deletion, Insertion, TrackChanges } from './track.js';
 import { RunFormat } from './runFormat.js';
 import { FormattingMarks } from './marks.js';
 import { Fields } from './fields.js';
+import { Footnotes } from './footnotes.js';
 
 // Как оформлены заголовки — font.js (совпадает со styles.css и стилями Heading1–6 в export.js)
 export { HEADING_FONT, HEADING_SIZES };
@@ -46,6 +47,8 @@ const PeroDocument = Document.extend({
       defaultsModified: { default: false }, // «Обычный» изменён в Пере — при сохранении переписать docDefaults
       comments: { default: [] },       // примечания: [{ id, author, initials, date, text }] (см. comments.js)
       commentsEdited: { default: false }, // примечания менялись — при сохранении comments.xml пишется заново
+      footnotes: { default: [] },      // тексты сносок: [{ id, text, changed }] (см. footnotes.js)
+      footnotesEdited: { default: false }, // сноски менялись — при сохранении footnotes.xml пишется заново
       defaultTab: { default: DEFAULT_TAB }, // шаг позиций табуляции по умолчанию, pt (settings.xml w:defaultTabStop)
     };
   },
@@ -57,7 +60,7 @@ export function loadDocument(editor, json) {
   editor.commands.setContent(json, { emitUpdate: false });
   const attrs = {
     fontFamily: DEFAULT_FONT, fontSize: DEFAULT_SIZE, para: NEW_DOC_PARA, sectPr: null, hf: EMPTY_HF, styles: [], defaultsModified: false,
-    comments: [], commentsEdited: false, defaultTab: DEFAULT_TAB,
+    comments: [], commentsEdited: false, footnotes: [], footnotesEdited: false, defaultTab: DEFAULT_TAB,
     ...((json && json.attrs) || {}),
   };
   const { tr } = editor.state;
@@ -270,6 +273,7 @@ export const extensions = [
   RunFormat,
   FormattingMarks,
   Fields,
+  Footnotes,
   PeroTable.configure({ resizable: true }),
   PeroTableRow,
   PeroTableCell,

@@ -7,6 +7,7 @@ import { CELL_SIDES, GRID_BORDERS, TABLE_SIDES, TWIPS_PER_PX, borderToOoxml } fr
 import { EMU_PER_PX, dataUrlToBytes, extOf } from '../editor/image.js';
 import { setHfRefs, setTitlePg, writeHfPart } from '../editor/page.js';
 import { commentsXml } from '../editor/comments.js';
+import { FOOTNOTES_TYPE, footnotesPartXml } from '../editor/footnotes.js';
 import { layoutXmlHead, layoutXmlTail } from '../editor/paraLayout.js';
 import { DEFAULT_TAB, tabsXml } from '../editor/tabs.js';
 
@@ -606,6 +607,26 @@ function addImageTypes(ct, images) {
   return out;
 }
 
+// id сносок, на которые есть ссылки в тексте (JSON документа)
+function footnoteIds(doc) {
+  const out = new Set();
+  const walk = (n) => {
+    if (n.type === 'opaque' && n.attrs && n.attrs.kind === 'footnote') { const m = /w:id="(-?\d+)"/.exec(n.attrs.xml || ''); if (m) out.add(m[1]); }
+    (n.content || []).forEach(walk);
+  };
+  walk(doc);
+  return out;
+}
+
+// id стиля по внутреннему имени (в русском Word id другие: «a5», «af»…)
+function styleIdByName(stylesXml, name) {
+  for (const m of String(stylesXml || '').matchAll(/<w:style\b[^>]*w:styleId="([^"]+)"[^>]*>([\s\S]*?)<\/w:style>/g)) {
+    const n = /<w:name w:val="([^"]*)"/.exec(m[2]);
+    if (n && n[1].toLowerCase() === name) return m[1];
+  }
+  return null;
+}
+
 function addOverride(ct, partName, type) {
   if (ct.includes(`PartName="/${partName}"`)) return ct;
   return ct.replace('</Types>', `<Override PartName="/${partName}" ContentType="${type}"/></Types>`);
@@ -658,6 +679,8 @@ export async function exportDocx(doc, { source } = {}) {
   const customs = da.styles || [];
   const styleTabs = Object.fromEntries(customs.filter((s) => s.tabs).map((s) => [s.id, s.tabs]));
   if (!source) {
+    const usedNotes = footnoteIds(doc);
+    const notes = (da.footnotes || []).filter((n) => usedNotes.has(String(n.id)));
     const ex = new Exporter({ sect, customStyles: customs.map((s) => s.id), styleTabs });
     let body = ex.blocks(doc.content || []);
     if (!body) body = '<w:p/>';
@@ -671,11 +694,14 @@ ${ex.links.map((href, i) => `<Relationship Id="rIdPeroL${i + 1}" Type="${relType
 ${ex.images.map((img) => `<Relationship Id="${img.rid}" Type="${relType('image')}" Target="${img.path}"/>`).join('\n')}
 ${hfRels}
 ${(da.comments || []).length ? `<Relationship Id="rIdPeroC" Type="${relType('comments')}" Target="comments.xml"/>` : ''}
+${notes.length ? `<Relationship Id="rIdPeroF" Type="${relType('footnotes')}" Target="footnotes.xml"/>` : ''}
 </Relationships>`;
     const zip = new JSZip();
     if ((da.comments || []).length) zip.file('word/comments.xml', commentsXml(da.comments, NS));
+    if (notes.length) zip.file('word/footnotes.xml', footnotesPartXml(notes, NS));
     let ct0 = addHfTypes(addImageTypes(CONTENT_TYPES, ex.images), 'word/');
     if ((da.comments || []).length) ct0 = addOverride(ct0, 'word/comments.xml', COMMENTS_TYPE);
+    if (notes.length) ct0 = addOverride(ct0, 'word/footnotes.xml', FOOTNOTES_TYPE);
     zip.file('[Content_Types].xml', ct0);
     for (const p of hfParts) zip.file('word/' + p.file, p.xml);
     for (const img of ex.images) zip.file('word/' + img.path, img.bytes);
@@ -794,6 +820,21 @@ ${(da.comments || []).length ? `<Relationship Id="rIdPeroC" Type="${relType('com
       zip.remove(cPath);
       rels = rels.replace(cm[0], '');
       ct = ct.replace(new RegExp(`<Override\\b[^>]*PartName="/${cPath.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&')}"[^>]*/>`), '');
+    }
+  }
+  // Сноски менялись в Пере: footnotes.xml — неизменённые сноски исходной разметкой, остальные заново; без ссылок — убираются
+  if (da.footnotesEdited) {
+    const used = footnoteIds(doc);
+    const list = (da.footnotes || []).filter((n) => used.has(String(n.id)));
+    const fm = /<Relationship\b[^>]*Type="[^"]*\/footnotes"[^>]*Target="([^"]+)"[^>]*\/>|<Relationship\b[^>]*Target="([^"]+)"[^>]*Type="[^"]*\/footnotes"[^>]*\/>/.exec(rels);
+    const fPath = fm ? resolvePart(src.dir, fm[1] || fm[2]) : prefix + 'footnotes.xml';
+    const original = fm && zip.file(fPath) ? await zip.file(fPath).async('string') : null;
+    const changed = new Set((da.footnotes || []).filter((n) => n.changed).map((n) => String(n.id)));
+    const styles = { text: styleIdByName(src.styles, 'footnote text'), ref: styleIdByName(src.styles, 'footnote reference') };
+    if (list.length || original) {
+      zip.file(fPath, footnotesPartXml(list, NS, { original, changed, styles }));
+      if (!fm) rels = rels.replace('</Relationships>', `<Relationship Id="rIdPeroF" Type="${relType('footnotes')}" Target="footnotes.xml"/></Relationships>`);
+      ct = addOverride(ct, fPath, FOOTNOTES_TYPE);
     }
   }
   // шаг табуляции изменён в Пере — правим только w:defaultTabStop в исходном settings.xml

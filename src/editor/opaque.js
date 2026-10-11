@@ -7,7 +7,7 @@ import { Node, mergeAttributes } from '@tiptap/core';
 export const OPAQUE_KINDS = {
   drawing: { label: 'Рисунок', title: 'Рисунок или фигура — сохраняется без изменений' },
   object: { label: 'Объект', title: 'Внедрённый объект — сохраняется без изменений' },
-  footnote: { label: '', title: 'Ссылка на сноску — текст сноски сохраняется без изменений' },
+  footnote: { label: '', title: 'Сноска — текст внизу страницы (щелчок по нему — изменить)' },
   endnote: { label: '', title: 'Ссылка на концевую сноску — сохраняется без изменений' },
   comment: { label: '', title: 'Комментарий — сохраняется без изменений' },
   commentRange: { hidden: true },
@@ -24,7 +24,7 @@ export const OPAQUE_KINDS = {
 
 // Какие виды считаются «сохраняются, но не редактируются» — для строки состояния
 export const OPAQUE_SUMMARY = {
-  drawing: 'рисунки', object: 'объекты', footnote: 'сноски', endnote: 'концевые сноски', comment: 'комментарии',
+  drawing: 'рисунки', object: 'объекты', endnote: 'концевые сноски', comment: 'комментарии',
   math: 'формулы', fieldSimple: 'поля', field: 'поля', header: 'колонтитулы',
   columns: 'колонки текста (на экране — одной колонкой)',
 };

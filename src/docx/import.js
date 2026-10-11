@@ -8,6 +8,7 @@ import { CELL_SIDES, NO_BORDERS, TABLE_SIDES, TWIPS_PER_PX, borderFromOoxml } fr
 import { EMU_PER_PX, bytesToBase64, mimeOf } from '../editor/image.js';
 import { EMPTY_HF, readHfPart } from '../editor/page.js';
 import { readComments } from '../editor/comments.js';
+import { readFootnotes } from '../editor/footnotes.js';
 import { layoutAttrs, readLayoutProps } from '../editor/paraLayout.js';
 import { applyTabLayer, readTabs } from '../editor/tabs.js';
 
@@ -844,10 +845,14 @@ export async function importDocx(data) {
   const cRel = Object.values(rels).find((r) => /\/comments$/.test(r.type || ''));
   const cPart = cRel && await read(cRel.target.startsWith('/') ? cRel.target.slice(1) : 'word/' + cRel.target);
   const commentList = cPart ? readComments(cPart) : [];
+  // тексты сносок (связь типа footnotes)
+  const fRel = Object.values(rels).find((r) => /\/footnotes$/.test(r.type || ''));
+  const fPart = fRel && await read(fRel.target.startsWith('/') ? fRel.target.slice(1) : 'word/' + fRel.target);
+  const footnoteList = fPart ? readFootnotes(fPart) : [];
   return {
     doc: {
       type: 'doc',
-      attrs: { ...docDefaults, para: docPara, defaultTab, sectPr: imp.bodySectPr, hf, styles: Object.values(imp.usedStyles), comments: commentList },
+      attrs: { ...docDefaults, para: docPara, defaultTab, sectPr: imp.bodySectPr, hf, styles: Object.values(imp.usedStyles), comments: commentList, footnotes: footnoteList },
       content,
     },
     warnings: imp.warnings,

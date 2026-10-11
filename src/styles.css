@@ -662,3 +662,17 @@ p[data-section-break]::after {
 .bm-opts { display: flex; gap: 12px; align-items: center; font-size: 12.5px; flex-wrap: wrap; }
 .bm-hidden { margin-left: auto; }
 .page-content a[href^="#"] { cursor: text; }
+
+/* сноски внизу листа (pagination.js) */
+.pero-notes-layer { position: absolute; left: 0; right: 0; top: 0; height: 0; z-index: 2; }
+.pero-notes { position: absolute; font-family: var(--doc-font, Calibri, Carlito, sans-serif); font-size: 10pt; line-height: 1.15; color: #000; }
+.pero-notes-probe { visibility: hidden; left: 0; top: 0; pointer-events: none; }
+.pero-note-sep { height: 16px; position: relative; }
+.pero-note-sep::before { content: ''; position: absolute; left: 0; width: 144pt; top: 50%; border-top: 0.5pt solid #000; }
+.pero-note { cursor: pointer; }
+.pero-note:hover { background: rgba(31, 111, 92, 0.06); }
+.pero-note-p { white-space: pre-wrap; }
+.pero-note sup { font-size: 70%; line-height: 0; }
+@media print { .pero-notes-layer, .pero-notes-probe { display: none !important; } }
+.print-notes { display: none; }
+@media print { .print-notes { display: block; margin-top: 12pt; padding-top: 6pt; font-size: 10pt; break-inside: avoid; } .print-notes::before { content: ''; display: block; width: 144pt; border-top: 0.5pt solid #000; margin-bottom: 4pt; } }

@@ -24,6 +24,7 @@ import StyleDialog from './StyleDialog.jsx';
 import { styleCss } from './editor/styles.js';
 import { sectionPrintCss } from './editor/sections.js';
 import CommentsPanel from './CommentsPanel.jsx';
+import FootnotesPanel, { PrintNotes } from './FootnotesPanel.jsx';
 import { orderedComments, commentsKey } from './editor/comments.js';
 import { trackInfo } from './editor/track.js';
 import { useAutosave } from './autosave.js';
@@ -195,6 +196,7 @@ export default function App({ initialFile, onOpenOther, onNewSheet, autosaveSec 
   const [modal, setModal] = useState(null);
   const [findMode, setFindMode] = useState(null); // null | 'find' | 'replace'
   const [showComments, setShowComments] = useState(false);
+  const [notesPanel, setNotesPanel] = useState(null); // панель «Сноски»: null — скрыта, { active } — открыта
   const [userName, setUserName] = useState('Пользователь');
   const revision = useRef(0); // счётчик правок — для автосохранения
   useEffect(() => { fileApi.userName().then((n) => n && setUserName(n)).catch(() => {}); }, []);
@@ -223,6 +225,15 @@ export default function App({ initialFile, onOpenOther, onNewSheet, autosaveSec 
     },
     onUpdate: ({ transaction }) => { if (transaction.docChanged) { revision.current++; setDirtyState(true); } },
   });
+  // открыть панель сносок: после «Вставить сноску» и по щелчку на сноске внизу листа
+  useEffect(() => {
+    if (!editor) return undefined;
+    const open = (id) => { setShowComments(false); setNotesPanel({ active: id == null ? null : String(id) }); };
+    editor.storage.footnotes.onOpen = open;
+    const onNote = (e) => open(e.detail && e.detail.id);
+    document.addEventListener('pero-footnote', onNote); // всплывает от области текста
+    return () => { document.removeEventListener('pero-footnote', onNote); editor.storage.footnotes.onOpen = null; };
+  }, [editor]);
 
   useEffect(() => { if (editor) editor.commands.setTrackAuthor(userName); }, [editor, userName]);
 
@@ -412,7 +423,9 @@ export default function App({ initialFile, onOpenOther, onNewSheet, autosaveSec 
         onStyle={(m) => (m && m.remove ? editor.chain().focus().deleteStyle(m.remove).run() : setModal({ style: m }))}
         review={{
           showComments,
-          toggleComments: () => setShowComments((v) => !v),
+          toggleComments: () => { setNotesPanel(null); setShowComments((v) => !v); },
+          showNotes: !!notesPanel,
+          toggleNotes: () => { setShowComments(false); setNotesPanel((v) => (v ? null : { active: null })); },
           addComment: () => {
             const initials = userName.split(/\s+/).map((x) => x[0] || '').join('').slice(0, 3).toUpperCase();
             editor.chain().focus().addComment({ author: userName, initials }).run();
@@ -440,10 +453,12 @@ export default function App({ initialFile, onOpenOther, onNewSheet, autosaveSec 
           <div className={`page${frame.mixed ? ' pero-multi' : ''}`} style={{ ...pageVars(docFont), ...pageBox(pageGeo) }}>
             <PageChrome geo={chromeGeo.head} footGeo={chromeGeo.foot} hf={(docFont && docFont.hf) || EMPTY_HF} chrome={docFont && docFont.chrome} total={(docFont && docFont.total) || 1} />
             <EditorContent editor={editor} />
+            <PrintNotes editor={editor} />
           </div>
         </PageScaler>
       </div>
       {showComments && <CommentsPanel editor={editor} onClose={() => setShowComments(false)} />}
+      {notesPanel && <FootnotesPanel editor={editor} active={notesPanel.active} onActivate={(id) => setNotesPanel({ active: id })} onClose={() => setNotesPanel(null)} />}
       </div>
       <StatusBar editor={editor} warnings={warnings} preserved={preserved} zoom={zoom} setZoom={setZoom} />
 

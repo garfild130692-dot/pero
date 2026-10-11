@@ -21,12 +21,14 @@ import { Extension } from '@tiptap/core';
 import { Plugin, PluginKey } from '@tiptap/pm/state';
 import { Decoration, DecorationSet } from '@tiptap/pm/view';
 import { EMPTY_HF, hfFor, hfText, parseSectPr, sectionFrame, sectionList } from './page.js';
+import { footnoteRefs } from './footnotes.js';
 
 export const paginationKey = new PluginKey('pagination');
 export const PAGE_GAP = 18; // px между листами на экране
 
 const LIST_TYPES = ['bulletList', 'orderedList'];
 const EPS = 0.5;
+const NOTE_SEP = 16; // px: строка-разделитель над сносками (как у Word: одна строка с чертой)
 
 // Текст колонтитула → HTML-узлы (абзацы с выравниванием)
 export function renderHf(container, paras, page, total) {
@@ -249,12 +251,19 @@ function posAtLine(view, line) {
 
 // Разбиение: список разрывов по единицам (координаты — от верха области текста, px без масштаба).
 // secs — геометрия разделов (px): у каждого листа высота области текста своего раздела.
-function paginate(view, units, secs, rootTop, scale) {
+function paginate(view, units, secs, rootTop, scale, notes = []) {
   const breaks = [];
   let pageTop = 0;
   let pageSect = units.length ? units[0].sect : 0; // раздел текущего листа
   const contentOf = (sct) => { const g = secs[Math.min(sct, secs.length - 1)]; return g.height - g.top - g.bottom; };
   const limit = () => pageTop + contentOf(pageSect);
+  // сноски: строка со ссылкой помещается на лист вместе с текстом сноски (внизу листа, под разделителем)
+  const notesH = (y) => {
+    let h = 0;
+    for (const n of notes) if (n.y > pageTop + EPS && n.y <= y + EPS) h += n.h;
+    return h ? h + NOTE_SEP : 0;
+  };
+  const fitAt = (y) => limit() - (notes.length ? notesH(y) : 0);
   // разрыв: запомнить раздел закрываемого листа (from) и перейти на лист раздела b.sect
   const push = (b) => { b.from = pageSect; breaks.push(b); if (b.sect != null) pageSect = b.sect; };
   const firstOnPage = (u) => u.top <= pageTop + EPS;
@@ -282,18 +291,18 @@ function paginate(view, units, secs, rootTop, scale) {
     if (u.forceBefore && u.top > pageTop + EPS) { i = breakBefore(i); u = units[i]; }
 
     if (u.kind === 'table') {
-      if (u.bottom <= limit() + EPS) continue;
+      if (u.bottom <= fitAt(u.bottom) + EPS) continue;
       const headers = u.rows.filter((r) => r.header);
       const headerH = headers.length ? headers[headers.length - 1].bottom - headers[0].top : 0;
       let rewind = -1;
       for (let k = 0; k < u.rows.length; k++) {
         const r = u.rows[k];
-        if (r.bottom <= limit() + EPS) continue;
+        if (r.bottom <= fitAt(r.bottom) + EPS) continue;
         const atTop = r.top <= pageTop + EPS;
         // строку можно делить посреди ячеек (как Word по умолчанию)
         if (!r.cantSplit && !r.header) {
           const cells = Array.from(r.dom.cells).map((td) => ({ td, lines: cellLines(td, rootTop, scale) }));
-          const splits = cells.map((c) => ({ ...c, k: c.lines.findIndex((l) => l.bottom > limit() + EPS) })).filter((c) => c.k >= 0);
+          const splits = cells.map((c) => ({ ...c, k: c.lines.findIndex((l) => l.bottom > fitAt(l.bottom) + EPS) })).filter((c) => c.k >= 0);
           const someFit = splits.length < cells.length || splits.some((c) => c.k > 0);
           if (splits.length && (someFit || atTop)) {
             const items = [];
@@ -337,14 +346,14 @@ function paginate(view, units, secs, rootTop, scale) {
     }
 
     if (u.kind === 'block') {
-      if (u.bottom > limit() + EPS && !firstOnPage(u)) i = breakBefore(i);
+      if (u.bottom > fitAt(u.bottom) + EPS && !firstOnPage(u)) i = breakBefore(i);
       if (units[i].forceAfter) afterForced(i);
       continue;
     }
 
     // абзац
     const explicitBreak = u.pageBreakAt != null;
-    if (u.textBottom <= limit() + EPS && !explicitBreak) {
+    if (u.textBottom <= fitAt(u.textBottom) + EPS && !explicitBreak) {
       if (u.forceAfter) afterForced(i);
       continue;
     }
@@ -362,7 +371,7 @@ function paginate(view, units, secs, rootTop, scale) {
     let first = 0; // первая строка абзаца на текущем листе
     let rewound = false;
     for (;;) {
-      let k = lines.findIndex((l, idx) => idx >= first && l.bottom > limit() + EPS);
+      let k = lines.findIndex((l, idx) => idx >= first && l.bottom > fitAt(l.bottom) + EPS);
       if (forcedLine > first && (k < 0 || forcedLine < k)) {
         const pos = posAtLine(view, lines[forcedLine]);
         if (pos != null) push({ kind: 'line', pos, fill: limit() - lines[forcedLine].top, sect: u.sect });
@@ -420,7 +429,8 @@ function measure(view) {
   const rootRect = view.dom.getBoundingClientRect();
   const scale = pageScale(view.dom); // масштаб страницы (transform)
   let result = { breaks: [], pages: [{ sect: 0, first: true }], trailing: 0 };
-  if (scale && isFinite(scale)) result = paginate(view, collectUnits(view, rootRect.top, scale), secs, rootRect.top, scale);
+  const notes = scale && isFinite(scale) ? collectNotes(view, rootRect.top, scale) : [];
+  if (scale && isFinite(scale)) result = paginate(view, collectUnits(view, rootRect.top, scale), secs, rootRect.top, scale, notes);
   const { breaks, pages, trailing } = result;
   const total = breaks.length + 1;
   // колонтитулы каждого листа (первая страница раздела, чётные — по правилам Word)
@@ -465,6 +475,107 @@ function measure(view) {
   }).setMeta('addToHistory', false));
   if (scroller && scroller.scrollTop !== scrollTop) scroller.scrollTop = scrollTop;
   placeBands(view, frame, breaks.map((b) => ({ from: b.from, to: b.sect ?? b.from })), chrome.hfOf, total);
+  // сноски — по листам их ссылок
+  const starts = pageStarts(breaks);
+  const perPage = Array.from({ length: total }, () => []);
+  for (const n of notes) perPage[starts.filter((p) => p <= n.pos).length].push(n);
+  placeNotes(view, perPage);
+}
+
+// ---------- Сноски внизу листа ----------
+// Текст сноски на экране: номер надстрочным + абзацы
+function noteContent(el, n) {
+  el.textContent = '';
+  String(n.text || '').split('\n').forEach((t, i) => {
+    const p = document.createElement('div');
+    p.className = 'pero-note-p';
+    if (i === 0) { const sup = document.createElement('sup'); sup.textContent = String(n.n); p.append(sup, ' '); }
+    p.append(t);
+    el.appendChild(p);
+  });
+}
+
+// Ссылки на сноски: позиция, низ строки ссылки (px от верха текста) и высота текста сноски
+function collectNotes(view, rootTop, scale) {
+  const refs = footnoteRefs(view.state.doc);
+  if (!refs.length) return [];
+  const page = view.dom.closest('.page');
+  let probe = page && page.querySelector(':scope > .pero-notes-probe');
+  if (page && !probe) { probe = document.createElement('div'); probe.className = 'pero-notes-probe pero-notes'; page.appendChild(probe); }
+  const cs = getComputedStyle(view.dom);
+  const width = view.dom.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight);
+  if (probe) probe.style.width = `${width}px`;
+  const texts = new Map((view.state.doc.attrs.footnotes || []).map((x) => [String(x.id), x.text]));
+  const out = [];
+  for (const r of refs) {
+    const dom = view.nodeDOM(r.pos);
+    if (!dom || dom.nodeType !== 1) continue;
+    const rect = dom.getBoundingClientRect();
+    const note = { pos: r.pos, id: r.id, n: r.n, text: texts.get(String(r.id)) || '', y: (rect.bottom - rootTop) / scale, h: 0 };
+    if (probe) {
+      const el = document.createElement('div');
+      el.className = 'pero-note';
+      noteContent(el, note);
+      probe.appendChild(el);
+      note.h = el.offsetHeight;
+      el.remove();
+    }
+    out.push(note);
+  }
+  return out;
+}
+
+// Область сносок внизу текста каждого листа: черта-разделитель и тексты; щелчок — событие pero-footnote (панель сносок)
+function placeNotes(view, perPage) {
+  const page = view.dom.closest('.page');
+  if (!page) return;
+  let layer = page.querySelector(':scope > .pero-notes-layer');
+  if (!perPage.some((x) => x.length)) { if (layer) layer.remove(); return; }
+  if (!layer) {
+    layer = document.createElement('div');
+    layer.className = 'pero-notes-layer';
+    layer.addEventListener('mousedown', (e) => {
+      const el = e.target.closest('.pero-note');
+      if (!el) return;
+      e.preventDefault();
+      view.dom.dispatchEvent(new CustomEvent('pero-footnote', { bubbles: true, detail: { id: el.dataset.id } }));
+    });
+    page.appendChild(layer);
+  }
+  const pr = page.getBoundingClientRect();
+  const scale = pageScale(page);
+  const vr = view.dom.getBoundingClientRect();
+  const cs = getComputedStyle(view.dom);
+  const left = (vr.left - pr.left) / scale + parseFloat(cs.paddingLeft);
+  const width = view.dom.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight);
+  // низ области текста листа: верх полосы после него; у последнего — низ текста документа
+  const bands = Array.from(page.querySelectorAll(':scope > .pero-bands > .pero-page-band')).map((b) => b.offsetTop);
+  const lastBottom = (vr.bottom - pr.top) / scale - parseFloat(cs.paddingBottom);
+  const sig = JSON.stringify([bands, Math.round(lastBottom), Math.round(left), Math.round(width), perPage.map((l) => l.map((n) => [n.n, n.id, n.text]))]);
+  if (layer.dataset.sig === sig) return;
+  layer.dataset.sig = sig;
+  layer.textContent = '';
+  perPage.forEach((list, i) => {
+    if (!list.length) return;
+    const bottom = i < bands.length ? bands[i] : lastBottom;
+    const area = document.createElement('div');
+    area.className = 'pero-notes';
+    area.style.left = `${left}px`;
+    area.style.width = `${width}px`;
+    const sep = document.createElement('div');
+    sep.className = 'pero-note-sep';
+    area.appendChild(sep);
+    for (const n of list) {
+      const el = document.createElement('div');
+      el.className = 'pero-note';
+      el.dataset.id = n.id;
+      el.title = 'Щелчок — изменить текст сноски';
+      noteContent(el, n);
+      area.appendChild(el);
+    }
+    layer.appendChild(area);
+    area.style.top = `${bottom - area.offsetHeight}px`;
+  });
 }
 
 // Полосы стоят там, где сейчас распорки? (раскладка могла сдвинуться позже замера: шрифты, стили документа)
@@ -623,7 +734,11 @@ export const Pagination = Extension.create({
           const meta = tr.getMeta(paginationKey);
           if (meta) return meta;
           if (!tr.docChanged) return old;
-          return { ...old, deco: old.deco.map(tr.mapping, tr.doc), breaks: old.breaks.map((p) => tr.mapping.map(p)) };
+          const deco = old.deco.map(tr.mapping, tr.doc);
+          // распорки удалены вместе с текстом (замена всего документа тем же по раскладке, отмена) — следующий замер
+          // не должен счесть их «теми же» по ключу
+          const lost = deco.find().length !== old.deco.find().length;
+          return { ...old, deco, key: lost ? null : old.key, breaks: old.breaks.map((p) => tr.mapping.map(p)) };
         },
       },
       props: {
