@@ -94,3 +94,27 @@ describe('расстановка переносов', () => {
     }
   });
 });
+
+describe('номера строк', () => {
+  it('w:lnNumType ↔ параметры: начало в файле с нуля, место по схеме sectPr', async () => {
+    const { parseLnNum, patchLnNum } = await import('../src/editor/lineNumbers.js');
+    const src = readFileSync('tests/fixtures/linenum.docx');
+    const { doc } = await importDocx(src);
+    expect(parseLnNum(doc.attrs.sectPr)).toEqual({ countBy: 2, start: 5, distance: 360, restart: 'continuous' });
+    const s = '<w:sectPr><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="1134"/><w:cols w:space="708"/><w:docGrid w:linePitch="360"/></w:sectPr>';
+    const x = patchLnNum(s, { countBy: 1, start: 1, distance: null, restart: 'newPage' });
+    expect(x).toContain('<w:pgMar w:top="1134"/><w:lnNumType w:countBy="1" w:restart="newPage"/><w:cols');
+    expect(patchLnNum(x, null)).toBe(s);
+    expect(parseLnNum(patchLnNum(s, { countBy: 5, start: 10, distance: 567, restart: 'newSection' }))).toEqual({ countBy: 5, start: 10, distance: 567, restart: 'newSection' });
+  });
+  it('запрет нумерации у абзаца читается и пишется (после numPr, перед pBdr)', async () => {
+    const src = readFileSync('tests/fixtures/linenum.docx');
+    const { doc } = await importDocx(src);
+    const flags = doc.content.filter((n) => n.type === 'paragraph').map((n) => !!n.attrs.noLineNumbers);
+    expect(flags.filter(Boolean)).toHaveLength(1);
+    const out = await exportDocx(doc, { source: src });
+    const xml = await (await JSZip.loadAsync(out)).file('word/document.xml').async('string');
+    expect(xml).toContain('<w:suppressLineNumbers/>');
+    expect((await importDocx(out)).doc.content.filter((n) => n.attrs && n.attrs.noLineNumbers)).toHaveLength(1);
+  });
+});

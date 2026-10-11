@@ -98,7 +98,7 @@ function headerCopy(tr) {
 // ---------- Замер (по чистой раскладке, без распорок) ----------
 // Строки текстового блока: [{ top, bottom, x, y }] — top/bottom в координатах от верха области текста,
 // x/y — экранная точка в начале строки (для posAtCoords)
-function textLines(dom, rootTop, scale) {
+export function textLines(dom, rootTop, scale) {
   const rects = [];
   const walk = (n) => {
     for (let c = n.firstChild; c; c = c.nextSibling) {
@@ -109,6 +109,7 @@ function textLines(dom, rootTop, scale) {
         for (const x of r.getClientRects()) if (x.width > 0 || x.height > 0) rects.push({ top: x.top, bottom: x.bottom, left: x.left, height: x.height, src: c });
       } else if (c.nodeType === 1) {
         if (c.dataset && c.dataset.peroSpacer) continue;
+        if (c.classList.contains('pero-ln')) continue; // номера строк — вне текста
         if (c.classList.contains('ProseMirror-trailingBreak')) continue;
         const inline = /^(inline|inline-block|inline-flex)$/.test(getComputedStyle(c).display);
         if (inline && (c.contentEditable === 'false' || c.tagName === 'IMG')) {
@@ -235,7 +236,7 @@ function collectUnits(view, rootTop, scale) {
 
 // Начало строки (документная позиция первого символа строки) — по DOM-узлу, с которого строка начинается.
 // posAtCoords в таблицах ненадёжен (слои изменения ширины столбцов): точка текста ячейки давала позицию таблицы.
-function posAtLine(view, line) {
+export function posAtLine(view, line) {
   const src = line.src;
   try {
     if (src && src.nodeType === 3) {

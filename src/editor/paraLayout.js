@@ -11,12 +11,13 @@ import { Decoration, DecorationSet } from '@tiptap/pm/view';
 import { borderFromOoxml } from './table.js';
 
 const TYPES = ['paragraph', 'heading'];
-export const LAYOUT_KEYS = ['keepNext', 'keepLines', 'pageBreakBefore', 'widowControl', 'noHyphens']; // noHyphens ↔ w:suppressAutoHyphens
+// noHyphens ↔ w:suppressAutoHyphens, noLineNumbers ↔ w:suppressLineNumbers
+export const LAYOUT_KEYS = ['keepNext', 'keepLines', 'pageBreakBefore', 'widowControl', 'noHyphens', 'noLineNumbers'];
 export const PBDR_SIDES = ['top', 'left', 'bottom', 'right', 'between'];
 
 // Умолчания Word (проверено через COM: новый абзац — WidowControl, заголовок — KeepWithNext + KeepTogether)
 export function layoutDefaults(isHeading) {
-  return { keepNext: !!isHeading, keepLines: !!isHeading, pageBreakBefore: false, widowControl: true, noHyphens: false };
+  return { keepNext: !!isHeading, keepLines: !!isHeading, pageBreakBefore: false, widowControl: true, noHyphens: false, noLineNumbers: false };
 }
 export function effectiveLayout(node) {
   const d = layoutDefaults(node.type.name === 'heading');
@@ -35,7 +36,7 @@ const onOff = (el, wAttr) => {
 export function readLayoutProps(pPr, child, wAttr) {
   const out = {};
   if (!pPr) return out;
-  const map = { keepNext: 'keepNext', keepLines: 'keepLines', pageBreakBefore: 'pageBreakBefore', widowControl: 'widowControl', noHyphens: 'suppressAutoHyphens' };
+  const map = { keepNext: 'keepNext', keepLines: 'keepLines', pageBreakBefore: 'pageBreakBefore', widowControl: 'widowControl', noHyphens: 'suppressAutoHyphens', noLineNumbers: 'suppressLineNumbers' };
   for (const [k, tag] of Object.entries(map)) {
     const v = onOff(child(pPr, tag), wAttr);
     if (v !== null) out[k] = v;
@@ -82,9 +83,11 @@ export function layoutXmlHead(a) {
   flag('widowControl', a.widowControl);
   return x;
 }
-// …и после numPr: pBdr, shd
+// …и после numPr: suppressLineNumbers, pBdr, shd
 export function layoutXmlTail(a) {
   let x = '';
+  if (a.noLineNumbers === true) x += '<w:suppressLineNumbers/>';
+  else if (a.noLineNumbers === false) x += '<w:suppressLineNumbers w:val="0"/>';
   const b = a.pBorders;
   if (b) {
     const sides = PBDR_SIDES.filter((s) => b[s]);
@@ -165,6 +168,7 @@ export const ParaLayout = Extension.create({
         pageBreakBefore: { ...flag('pageBreakBefore', 'data-page-break-before'), keepOnSplit: false },
         widowControl: flag('widowControl', 'data-widow-control'),
         noHyphens: flag('noHyphens', 'data-no-hyphens'),
+        noLineNumbers: flag('noLineNumbers', 'data-no-line-numbers'),
         pBorders: {
           default: null,
           keepOnSplit: true,

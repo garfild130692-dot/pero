@@ -41,6 +41,7 @@ import StyleDialog from './StyleDialog.jsx';
 import { styleCss } from './editor/styles.js';
 import { COUNTER_STYLES_CSS, headingNumberCss } from './editor/numbering.js';
 import { sectionPrintCss } from './editor/sections.js';
+import { lnPrintPad } from './editor/lineNumbers.js';
 import CommentsPanel from './CommentsPanel.jsx';
 import FootnotesPanel, { PrintNotes } from './FootnotesPanel.jsx';
 import { orderedComments, commentsKey } from './editor/comments.js';
@@ -452,7 +453,7 @@ export default function App({ initialFile, onOpenOther, onNewSheet, autosaveSec 
     editor,
     selector: ({ editor: e }) => (e ? {
       family: e.state.doc.attrs.fontFamily, size: e.state.doc.attrs.fontSize, para: e.state.doc.attrs.para,
-      sectPr: e.state.doc.attrs.sectPr, hf: e.state.doc.attrs.hf, total: pageInfo(e.state).total, styles: e.state.doc.attrs.styles, headingNumbering: e.state.doc.attrs.headingNumbering, charStyles: e.state.doc.attrs.charStyles, pageColor: e.state.doc.attrs.pageColor, chrome: pageChrome(e.state), firstSect: sectionList(e.state.doc)[0], sects: sectionList(e.state.doc), sectCss: sectionPrintCss(e.state.doc), mirror: !!e.state.doc.attrs.mirrorMargins,
+      sectPr: e.state.doc.attrs.sectPr, hf: e.state.doc.attrs.hf, total: pageInfo(e.state).total, styles: e.state.doc.attrs.styles, headingNumbering: e.state.doc.attrs.headingNumbering, charStyles: e.state.doc.attrs.charStyles, pageColor: e.state.doc.attrs.pageColor, chrome: pageChrome(e.state), firstSect: sectionList(e.state.doc)[0], sects: sectionList(e.state.doc), sectCss: sectionPrintCss(e.state.doc, !!e.state.doc.attrs.mirrorMargins, lnPrintPad(sectionList(e.state.doc), !!e.state.doc.attrs.mirrorMargins)), mirror: !!e.state.doc.attrs.mirrorMargins, lnPad: lnPrintPad(sectionList(e.state.doc), !!e.state.doc.attrs.mirrorMargins),
     } : null),
   });
 
@@ -579,7 +580,7 @@ export default function App({ initialFile, onOpenOther, onNewSheet, autosaveSec 
       <style>{`${COUNTER_STYLES_CSS}
 ${headingNumberCss(docFont && docFont.headingNumbering)}`}</style>
       {/* печать/PDF: размер листа, поля и колонтитулы — правилами @page */}
-      <style>{printCss(docFont && docFont.sectPr, (docFont && docFont.hf) || EMPTY_HF, docFont && docFont.firstSect, !!(docFont && docFont.mirror))}{docFont && docFont.sectCss ? `@media print { ${docFont.sectCss} }` : ''}</style>
+      <style>{printCss(docFont && docFont.sectPr, (docFont && docFont.hf) || EMPTY_HF, docFont && docFont.firstSect, !!(docFont && docFont.mirror), (docFont && docFont.lnPad) || 0)}{docFont && docFont.sectCss ? `@media print { ${docFont.sectCss} }` : ''}</style>
       {modal && typeof modal === 'object' && Array.isArray(modal.actions) && (
         <Modal
           title={modal.title}

@@ -37,6 +37,7 @@ import { Sorting } from './sort.js';
 import { Breaks } from './breaks.js';
 import { TableConvert } from './tableConvert.js';
 import { Hyphenation } from './hyphen.js';
+import { LineNumbers } from './lineNumbers.js';
 
 // Как оформлены заголовки — font.js (совпадает со styles.css и стилями Heading1–6 в export.js)
 export { HEADING_FONT, HEADING_SIZES };
@@ -303,6 +304,7 @@ export const extensions = [
   Breaks,
   TableConvert,
   Hyphenation,
+  LineNumbers,
   PeroTable.configure({ resizable: true }),
   PeroTableRow,
   PeroTableCell,

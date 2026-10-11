@@ -4,6 +4,7 @@ import { usePopover } from './FontControls.jsx';
 import { LayoutParaGroup } from './ParaSpinners.jsx';
 import { EMPTY_HF, MARGIN_PRESETS, PAPER, TWIPS_PER_CM, hfFor, hfText, pagePx, paperOf, parseSectPr, patchSectPr, sectionAt, sectionList } from './editor/page.js';
 import { applyPageSetup, lastMargins } from './PageSetupDialog.jsx';
+import { LN_AUTO_DISTANCE, parseLnNum } from './editor/lineNumbers.js';
 import { fmtNum } from './editor/paragraph.js';
 import { SECTION_TYPES } from './editor/breaks.js';
 
@@ -52,6 +53,7 @@ const SizeIcon = () => <S><rect x="5" y="3" width="14" height="18" /><path d="M8
 const HfIcon = () => <S><rect x="5" y="3" width="14" height="18" /><path d="M5 7h14M5 17h14" /><path d="M8 5h5M8 19h3" strokeWidth="1.2" /></S>;
 const BreaksIcon = () => <S><path d="M5 3v6h14V3M5 21v-6h14v6" /><path d="M3 12h3M9 12h2M14 12h2M19 12h2" /></S>;
 const HyphIcon = () => <S><path d="M4 7h9M4 12h6M4 17h12" /><path d="M13 12h4" strokeWidth="2.2" /></S>;
+const LnIcon = () => <S><path d="M10 7h10M10 12h10M10 17h10" /><text x="5" y="9" fontSize="5" textAnchor="middle" fill="currentColor" stroke="none">1</text><text x="5" y="14" fontSize="5" textAnchor="middle" fill="currentColor" stroke="none">2</text><text x="5" y="19" fontSize="5" textAnchor="middle" fill="currentColor" stroke="none">3</text></S>;
 const NumIcon = () => <S><rect x="5" y="3" width="14" height="18" /><text x="12" y="19" fontSize="6" textAnchor="middle" fill="currentColor" stroke="none">1</text></S>;
 
 // ---------- Колонтитулы и номер страницы (вкладки «Вставка» и «Макет») ----------
@@ -155,11 +157,85 @@ export function LayoutPanel({ editor, Group, onMargins, onHf, onParagraph }) {
           )}
         </MenuButton>
         <BreaksButton editor={editor} />
+        <LineNumbersButton editor={editor} sectPr={sectionAt(editor.state).sectPr} />
         <HyphenButton editor={editor} />
       </Group>
       <LayoutParaGroup editor={editor} Group={Group} onParagraph={onParagraph} />
       <HfGroup editor={editor} Group={Group} onHf={onHf} />
     </>
+  );
+}
+
+// ---------- Номера строк ----------
+const RESTARTS = [['continuous', 'Непрерывно'], ['newPage', 'Заново на каждой странице'], ['newSection', 'Заново в каждом разделе']];
+const RESTART_DLG = { continuous: 'непрерывная', newPage: 'на каждой странице', newSection: 'в каждом разделе' };
+function LineNumbersButton({ editor, sectPr }) {
+  const [dlg, setDlg] = useState(false);
+  const ln = parseLnNum(sectPr);
+  const set = (restart) => editor.chain().focus().setLineNumbering(restart ? { countBy: 1, start: 1, distance: null, ...(ln || {}), restart } : null).run();
+  const para = editor.state.selection.$from.parent;
+  return (
+    <>
+      <MenuButton icon={<LnIcon />} label="Номера строк" title="Номера строк на полях рядом с текстом">
+        {(close) => (
+          <>
+            <Item checked={!ln} onClick={() => { close(); set(null); }}>Нет</Item>
+            {RESTARTS.map(([k, label]) => <Item key={k} checked={!!ln && ln.restart === k} onClick={() => { close(); set(k); }}>{label}</Item>)}
+            <div className="menu-sep" />
+            <Item checked={!!para.attrs.noLineNumbers} onClick={() => { close(); editor.chain().focus().toggleNoLineNumbers().run(); }}>Запретить в текущем абзаце</Item>
+            <div className="menu-sep" />
+            <Item onClick={() => { close(); setDlg(true); }}>Варианты нумерации строк…</Item>
+          </>
+        )}
+      </MenuButton>
+      {dlg && <LineNumbersDialog editor={editor} ln={ln} onClose={() => setDlg(false)} />}
+    </>
+  );
+}
+
+function LineNumbersDialog({ editor, ln, onClose }) {
+  const [on, setOn] = useState(!!ln);
+  const [start, setStart] = useState(String(ln ? ln.start : 1));
+  const [dist, setDist] = useState(ln && ln.distance != null ? cm(ln.distance) : 'Авто');
+  const [step, setStep] = useState(String(ln ? ln.countBy : 1));
+  const [restart, setRestart] = useState(ln ? ln.restart : 'newPage');
+  const [err, setErr] = useState('');
+  const apply = () => {
+    if (!on) { editor.chain().focus().setLineNumbering(null).run(); onClose(); return; }
+    const s = parseInt(start, 10); const c = parseInt(step, 10);
+    const d = /^\s*(авто)?\s*$/i.test(dist) ? null : parseFloat(String(dist).replace(',', '.'));
+    if (!(s >= 1 && s <= 32767) || !(c >= 1 && c <= 100) || (d != null && !(d >= 0 && d <= 55))) { setErr('Начать с — 1…32767, шаг — 1…100, от текста — «Авто» или 0…55 см'); return; }
+    editor.chain().focus().setLineNumbering({ start: s, countBy: c, distance: d == null ? null : Math.round(d * TWIPS_PER_CM), restart }).run();
+    onClose();
+  };
+  return (
+    <div className="modal-backdrop" onMouseDown={onClose}>
+      <div className="modal pd" role="dialog" aria-label="Нумерация строк" onMouseDown={(e) => e.stopPropagation()}
+        onKeyDown={(e) => { if (e.key === 'Escape') onClose(); if (e.key === 'Enter' && e.target.tagName !== 'SELECT') { e.preventDefault(); apply(); } }}>
+        <div className="modal-title">Нумерация строк</div>
+        <div className="modal-body">
+          <label className="pd-check"><input type="checkbox" checked={on} onChange={(e) => setOn(e.target.checked)} /> Добавить нумерацию строк</label>
+          <div className="pd-grid">
+            <label className="pd-field"><span>Начать с</span><span className="pd-input"><input disabled={!on} value={start} onChange={(e) => { setErr(''); setStart(e.target.value); }} /></span></label>
+            <label className="pd-field"><span>От текста</span><span className="pd-input"><input disabled={!on} value={dist} onChange={(e) => { setErr(''); setDist(e.target.value); }} /><em>см</em></span></label>
+            <label className="pd-field"><span>Шаг</span><span className="pd-input"><input disabled={!on} value={step} onChange={(e) => { setErr(''); setStep(e.target.value); }} /></span></label>
+          </div>
+          <fieldset><legend>Нумерация</legend>
+            <div className="pd-checks">
+              {RESTARTS.map(([k, label]) => (
+                <label key={k} className="pd-check"><input type="radio" disabled={!on} checked={restart === k} onChange={() => setRestart(k)} /> {RESTART_DLG[k]}</label>
+              ))}
+            </div>
+          </fieldset>
+          <div className="hf-hint">Применяется к текущему разделу. «Авто» — {cm(LN_AUTO_DISTANCE)} см.</div>
+          {err && <div className="pd-error" role="alert">{err}</div>}
+        </div>
+        <div className="modal-actions">
+          <button className="btn primary" onClick={apply}>ОК</button>
+          <button className="btn" onClick={onClose}>Отмена</button>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -328,7 +404,7 @@ function marginBox(paras, page = 'counter(page)', pages = 'counter(pages)') {
     .map((x) => (x === '{PAGE}' ? page : x === '{NUMPAGES}' ? pages : cssString(x))).join(' ')).join(' "\\A" ');
 }
 // firstSectPr — XML первого раздела (w:titlePg — «особый колонтитул первой страницы»)
-export function printCss(sectPr, hf, firstSectPr = sectPr, mirror = false) {
+export function printCss(sectPr, hf, firstSectPr = sectPr, mirror = false, lnPad = 0) {
   const g = parseSectPr(sectPr);
   const px = pagePx(g);
   const h = hf || EMPTY_HF;
@@ -347,9 +423,11 @@ export function printCss(sectPr, hf, firstSectPr = sectPr, mirror = false) {
     return out.join(' ');
   };
   const sectTitlePg = parseSectPr(firstSectPr).titlePg;
-  let css = `@page { size: ${px.width}px ${px.height}px; margin: ${px.top}px ${px.right}px ${px.bottom}px ${px.left}px; ${boxesOf((k) => h[k], false)} }`;
+  // lnPad — колонка номеров строк внутри области печати (lnPrintPad)
+  let css = `@page { size: ${px.width}px ${px.height}px; margin: ${px.top}px ${px.right}px ${px.bottom}px ${px.left - lnPad}px; ${boxesOf((k) => h[k], false)} }`;
   // зеркальные поля: у чётных (левых) страниц «внутри» — справа
-  if (mirror) css += ` @page :left { margin-left: ${px.right}px; margin-right: ${px.left}px; }`;
+  if (mirror) css += ` @page :left { margin-left: ${px.right - lnPad}px; margin-right: ${px.left}px; }`;
+  if (lnPad) css += ` @media print { .page .page-content { padding-left: ${lnPad}px !important; } }`;
   // чётные страницы — левые (первая — правая), первая страница — :first (объявлена последней: перекрывает :left/:right)
   if (h.evenOdd) css += ` @page :left { ${boxesOf((k) => hfFor(h, k, { page: 2, firstOfSection: false, sectTitlePg }), true)} }`;
   const titlePg = h.own && h.own.titlePg ? !!h.titlePg : sectTitlePg;
