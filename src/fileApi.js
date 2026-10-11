@@ -86,6 +86,9 @@ export const recentRemove = async (p) => native && native.recentRemove && native
 export const recoveryList = async () => (native && native.recoveryList ? native.recoveryList() : []);
 export const settingsGet = async () => (native && native.settingsGet ? native.settingsGet() : { startScreen: true });
 export const settingsSet = async (k, v) => native && native.settingsSet && native.settingsSet(k, v);
+export const winList = async () => (native && native.winList ? native.winList() : []);
+export const winFocus = (id) => native && native.winFocus && native.winFocus(id);
+export const winArrange = () => native && native.winArrange && native.winArrange();
 export const recentClear = async () => native && native.recentClear && native.recentClear();
 export const setDoc = (meta) => native && native.setDoc && native.setDoc(meta);
 export const autosave = async (meta, data) => native && native.autosave && native.autosave(meta, data);

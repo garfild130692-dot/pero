@@ -748,3 +748,28 @@ p[data-section-break]::after {
 .start-recovery .start-row { border-bottom: 1px solid #f0e2c4; }
 .start-recovery .start-row:last-child { border-bottom: 0; }
 .start-note { margin: 0 0 6px; font-size: 12.5px; color: #6b5420; }
+
+/* вкладка «Вид» */
+.rb-check { display: flex; align-items: center; gap: 6px; font-size: 12.5px; padding: 1px 6px; cursor: pointer; white-space: nowrap; }
+.statusbar .view-btns { display: flex; gap: 2px; margin-right: 10px; }
+.statusbar .view-btn { border: 0; background: transparent; width: 24px; height: 20px; display: flex; align-items: center; justify-content: center; cursor: pointer; color: inherit; border-radius: 2px; }
+.statusbar .view-btn:hover { background: rgba(0,0,0,.08); }
+.statusbar .view-btn.on { background: rgba(0,0,0,.14); }
+.statusbar button.zoom-val { border: 0; background: transparent; font: inherit; color: inherit; cursor: pointer; padding: 0 4px; }
+.modal.zoom-dlg { width: 340px; }
+.zoom-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 14px; margin-bottom: 12px; }
+/* черновик: один сплошной лист без колонтитулов */
+.page.draft { min-height: 0 !important; }
+/* режим чтения */
+.read-bar { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 6px 16px; background: #f1f4f3; border-bottom: 1px solid var(--line); font-size: 13px; color: #333; }
+.read-mode .workspace { background: #e7e9e8; }
+.read-mode .page-content { caret-color: transparent; }
+/* область навигации */
+.nav-pane { flex: none; width: 260px; display: flex; flex-direction: column; background: #f7f7f5; border-right: 1px solid var(--line); padding: 8px; min-height: 0; }
+.nav-search { width: auto; margin: 4px 0 8px; }
+.nav-list { flex: 1; overflow-y: auto; display: flex; flex-direction: column; }
+.nav-item { border: 0; background: transparent; text-align: left; font: inherit; font-size: 13px; padding: 5px 8px; cursor: pointer; border-left: 3px solid transparent; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: #222; }
+.nav-item:hover { background: rgba(0,0,0,.05); }
+.nav-item.current { background: var(--accent-soft); border-left-color: var(--accent); }
+.nav-num { color: #666; margin-right: 6px; }
+@media print { .nav-pane, .read-bar { display: none !important; } }

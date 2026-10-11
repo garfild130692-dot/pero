@@ -8,6 +8,14 @@ const S = ({ children, size = 18 }) => (
 );
 
 export const Icon = {
+  readMode: (p) => <S {...p}><path d="M3 5c3-1 6-1 9 1v14c-3-2-6-2-9-1z" /><path d="M21 5c-3-1-6-1-9 1v14c3-2 6-2 9-1z" /></S>,
+  printLayout: (p) => <S {...p}><rect x="5" y="3" width="14" height="18" rx="1" /><path d="M8 7h8M8 10h8M8 13h5" /></S>,
+  draft: (p) => <S {...p}><path d="M4 5h16M4 9h16M4 13h16M4 17h10" /></S>,
+  zoom: (p) => <S {...p}><circle cx="10" cy="10" r="6" /><path d="m15 15 5 5M8 10h4M10 8v4" /></S>,
+  zoom100: (p) => <S {...p}><rect x="3" y="5" width="18" height="14" rx="1" /><path d="M7 9v6M10 9h3v6h-3zM15 9h3v6h-3z" strokeWidth="1.4" /></S>,
+  newWindowDoc: (p) => <S {...p}><rect x="3" y="5" width="14" height="12" rx="1" /><path d="M7 3h14v12" /><path d="M10 9v4M8 11h4" /></S>,
+  arrange: (p) => <S {...p}><rect x="3" y="4" width="8" height="16" rx="1" /><rect x="13" y="4" width="8" height="16" rx="1" /></S>,
+  windows: (p) => <S {...p}><rect x="3" y="7" width="13" height="11" rx="1" /><path d="M7 7V4h14v11h-5" /></S>,
   home: (p) => <S {...p}><path d="M3 11 12 4l9 7" /><path d="M5 10v10h5v-6h4v6h5V10" /></S>,
   multilevel: (p) => <S {...p}><path d="M9 6h11M12 12h8M15 18h5" /><path d="M3 5h2v3M3 11.5h3M6 17h2v3" strokeWidth="1.4" /></S>,
   footnote: (p) => <S {...p}><path d="M4 5h12M4 9h9" /><path d="M17 7h2v-3" /><path d="M4 16h16" strokeWidth="1" /><path d="M4 19h10" /></S>,

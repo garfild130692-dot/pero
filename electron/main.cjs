@@ -3,7 +3,7 @@
 // Один процесс на все окна (как Word: каждый файл — своё окно, процесс один). Повторный запуск программы
 // (двойной клик по файлу, ярлык) передаёт аргументы первому экземпляру и завершается.
 // Ключ --new-instance запускает независимый процесс (отладка, особые случаи).
-const { app, BrowserWindow, Menu, dialog, ipcMain, shell, clipboard } = require('electron');
+const { app, BrowserWindow, Menu, dialog, ipcMain, shell, clipboard, screen } = require('electron');
 const path = require('path');
 const os = require('os');
 const fs = require('fs/promises');
@@ -387,6 +387,26 @@ ipcMain.handle('recent:list', (_e, check) => recent.list().map((x) => (check ? {
 ipcMain.handle('recent:pin', (_e, p, v) => { const ok = recent.pin(p, !!v); buildMenu(); return ok; });
 ipcMain.handle('recent:remove', (_e, p) => { recent.remove(p); buildMenu(); return true; });
 ipcMain.handle('recovery:list', () => autosave.scan());
+// Вкладка «Вид → Окно»: список окон, переход, «Упорядочить все» (окна рядом по ширине экрана, как в Word)
+ipcMain.handle('win:list', (e) => [...wins.values()].filter((s) => !s.win.isDestroyed())
+  .map((s) => ({ id: s.win.id, title: s.win.getTitle(), current: s.win.webContents.id === e.sender.id })));
+ipcMain.on('win:focus', (_e, id) => { const s = [...wins.values()].find((x) => x.win.id === id); if (s) focus(s.win); });
+ipcMain.on('win:arrange', (e) => {
+  const list = [...wins.values()].filter((s) => !s.win.isDestroyed()).map((s) => s.win);
+  if (!list.length) return;
+  const cur = BrowserWindow.fromWebContents(e.sender) || list[0];
+  const area = screen.getDisplayMatching(cur.getBounds()).workArea;
+  const n = list.length;
+  const cols = n <= 3 ? n : Math.ceil(Math.sqrt(n));
+  const rows = Math.ceil(n / cols);
+  list.forEach((w, i) => {
+    if (w.isMinimized()) w.restore();
+    if (w.isMaximized()) w.unmaximize();
+    const c = i % cols; const r = Math.floor(i / cols);
+    const width = Math.floor(area.width / cols); const height = Math.floor(area.height / rows);
+    w.setBounds({ x: area.x + c * width, y: area.y + r * height, width, height });
+  });
+});
 ipcMain.handle('settings:get', () => settings.get());
 ipcMain.handle('settings:set', (_e, k, v) => settings.set(k, v));
 ipcMain.handle('recent:clear', () => { recent.clear(); try { app.clearRecentDocuments(); } catch { /* */ } buildMenu(); return true; });

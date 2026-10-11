@@ -410,7 +410,23 @@ function paginate(view, units, secs, rootTop, scale, notes = []) {
   return { breaks, pages, trailing: Math.max(0, pageTop + contentOf(pageSect) - lastBottom) };
 }
 
+// Режим «Черновик» (вкладка «Вид»): текст сплошной лентой, без листов, колонтитулов и сносок внизу листов
+const draftViews = new WeakSet();
+export function setDraft(view, on) {
+  if (on) draftViews.add(view); else draftViews.delete(view);
+  view.dom.dispatchEvent(new Event('pero-remeasure'));
+}
+
 function measure(view) {
+  if (draftViews.has(view)) {
+    const prev = paginationKey.getState(view.state);
+    if (prev.deco !== DecorationSet.empty || prev.breaks.length) {
+      view.dispatch(view.state.tr.setMeta(paginationKey, { key: null, deco: DecorationSet.empty, breaks: [], total: 1, chrome: null }).setMeta('addToHistory', false));
+    }
+    const page = view.dom.closest('.page');
+    if (page) for (const el of page.querySelectorAll(':scope > .pero-bands, :scope > .pero-notes-layer, :scope > .pero-sheets')) el.remove();
+    return;
+  }
   const { doc } = view.state;
   const frame = sectionFrame(sectionList(doc));
   const secs = frame.sections;
@@ -767,6 +783,7 @@ export const Pagination = Extension.create({
         };
         const ro = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(schedule) : null;
         if (ro) ro.observe(view.dom);
+        view.dom.addEventListener('pero-remeasure', schedule);
         if (document.fonts) document.fonts.addEventListener('loadingdone', schedule);
         schedule();
         return {

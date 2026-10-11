@@ -12,6 +12,9 @@ import ParagraphDialog from './ParagraphDialog.jsx';
 import FontDialog from './FontDialog.jsx';
 import SymbolDialog from './SymbolDialog.jsx';
 import { BookmarkDialog, CrossRefDialog, DateDialog } from './RefDialogs.jsx';
+import { NavPane, ZoomDialog, clampZoom, fitZoom, loadViewPrefs, saveViewPrefs } from './ViewControls.jsx';
+import { setDraft } from './editor/pagination.js';
+import { Icon } from './icons.jsx';
 import { ListFormatDialog, MultilevelDialog } from './NumberingDialogs.jsx';
 import { cssFontStack } from './editor/font.js';
 import { NEW_DOC_PARA } from './editor/paragraph.js';
@@ -149,7 +152,7 @@ function LinkDialog({ editor, onClose }) {
   );
 }
 
-function StatusBar({ editor, warnings, preserved, zoom, setZoom }) {
+function StatusBar({ editor, warnings, preserved, zoom, setZoom, viewMode, setViewMode, onZoomDialog }) {
   const { words, chars, page, total, track } = useEditorState({
     editor,
     selector: ({ editor: e }) => {
@@ -179,10 +182,16 @@ function StatusBar({ editor, warnings, preserved, zoom, setZoom }) {
         </span>
       )}
       <span className="spacer" />
-      <button className="zoom-btn" onClick={() => setZoom((z) => Math.max(50, z - 10))}>−</button>
-      <input type="range" min="50" max="200" step="10" value={zoom} onChange={(e) => setZoom(+e.target.value)} />
-      <button className="zoom-btn" onClick={() => setZoom((z) => Math.min(200, z + 10))}>+</button>
-      <span className="zoom-val">{zoom}%</span>
+      {/* режимы просмотра, как справа внизу в Word */}
+      <span className="view-btns">
+        <button type="button" className="view-btn" title="Режим чтения" onClick={() => setViewMode('read')}><Icon.readMode size={15} /></button>
+        <button type="button" className={`view-btn${viewMode === 'print' ? ' on' : ''}`} title="Разметка страницы" onClick={() => setViewMode('print')}><Icon.printLayout size={15} /></button>
+        <button type="button" className={`view-btn${viewMode === 'draft' ? ' on' : ''}`} title="Черновик" onClick={() => setViewMode('draft')}><Icon.draft size={15} /></button>
+      </span>
+      <button className="zoom-btn" onClick={() => setZoom((z) => z - 10)}>−</button>
+      <input type="range" min="10" max="500" step="10" value={zoom} onChange={(e) => setZoom(+e.target.value)} />
+      <button className="zoom-btn" onClick={() => setZoom((z) => z + 10)}>+</button>
+      <button type="button" className="zoom-val" title="Масштаб…" onClick={onZoomDialog}>{zoom}%</button>
     </div>
   );
 }
@@ -194,7 +203,18 @@ export default function App({ initialFile, onOpenOther, onNewSheet, autosaveSec 
   const [preserved, setPreserved] = useState({}); // что сохраняется как есть
   // Исходный .docx: при сохранении всё, что Перо не меняет, переносится из него без изменений
   const source = useRef(null);
-  const [zoom, setZoom] = useState(100);
+  const [zoom, setZoomRaw] = useState(100);
+  const setZoom = useCallback((z) => setZoomRaw((old) => clampZoom(typeof z === 'function' ? z(old) : z)), []);
+  // вкладка «Вид»: режим ('print' — разметка страницы, 'draft' — черновик, 'read' — чтение), линейка, область навигации
+  const [viewMode, setViewMode] = useState('print');
+  const [viewPrefs, setViewPrefs] = useState(loadViewPrefs);
+  const setPref = (k) => setViewPrefs((p) => { const n = { ...p, [k]: !p[k] }; saveViewPrefs(n); return n; });
+  const workspaceRef = useRef(null);
+  const pageSize = useRef({ width: 794, height: 1123 }); // лист текущего раздела, px — для «по ширине» и «страница целиком»
+  const fitTo = (kind) => {
+    const ws = workspaceRef.current;
+    if (ws) setZoom(fitZoom(kind, { w: ws.clientWidth, h: ws.clientHeight }, pageSize.current));
+  };
   const [modal, setModal] = useState(null);
   const [findMode, setFindMode] = useState(null); // null | 'find' | 'replace'
   const [showComments, setShowComments] = useState(false);
@@ -238,6 +258,17 @@ export default function App({ initialFile, onOpenOther, onNewSheet, autosaveSec 
   }, [editor]);
 
   useEffect(() => { if (editor) editor.commands.setTrackAuthor(userName); }, [editor, userName]);
+
+  // режимы просмотра: черновик — без разбиения на листы; чтение — без правки, Esc — выход
+  useEffect(() => {
+    if (!editor || editor.isDestroyed) return undefined;
+    setDraft(editor.view, viewMode === 'draft');
+    editor.setEditable(viewMode !== 'read');
+    if (viewMode !== 'read') return undefined;
+    const onKey = (e) => { if (e.key === 'Escape') setViewMode('print'); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [editor, viewMode]);
 
   useEffect(() => {
     fileApi.setDirty(dirty);
@@ -359,7 +390,7 @@ export default function App({ initialFile, onOpenOther, onNewSheet, autosaveSec 
     else if (cmd === 'print') h.doPrint();
     else if (cmd === 'find' || cmd === 'replace') setFindMode(cmd);
     else if (cmd === 'pdf') h.doPdf();
-    else if (cmd === 'zoom') setZoom((z) => (payload === 0 ? 100 : Math.min(200, Math.max(50, z + payload * 10))));
+    else if (cmd === 'zoom') setZoom((z) => (payload === 0 ? 100 : z + payload * 10));
   }), []);
 
   // Горячие клавиши, которые в Electron обслуживает меню, а в браузере (режим отладки) — мы сами; плюс Ctrl+K
@@ -367,6 +398,9 @@ export default function App({ initialFile, onOpenOther, onNewSheet, autosaveSec 
     const onKey = (e) => {
       if (!(e.ctrlKey || e.metaKey)) return;
       const k = e.code;
+      // Ctrl+Alt+P — разметка страницы, Ctrl+Alt+N — черновик (как в Word)
+      if (e.altKey && k === 'KeyP') { e.preventDefault(); setViewMode('print'); return; }
+      if (e.altKey && k === 'KeyN') { e.preventDefault(); setViewMode('draft'); return; }
       if (k === 'KeyK') { e.preventDefault(); setModal('link'); return; }
       if (k === 'KeyD' && !e.shiftKey) { e.preventDefault(); setModal('font'); return; } // Ctrl+Shift+D — двойное подчёркивание
       if (k === 'KeyF') { e.preventDefault(); setFindMode('find'); return; }
@@ -410,17 +444,26 @@ export default function App({ initialFile, onOpenOther, onNewSheet, autosaveSec 
   const pageGeo = frame.mixed
     ? { ...geo, width: frame.width, height: firstSec.height, top: firstSec.top, bottom: lastSec.bottom, left: frame.padLeft, right: frame.padRight }
     : geo;
+  pageSize.current = { width: pageGeo.width, height: pageGeo.height };
   const chromeGeo = frame.mixed
     ? { head: { ...firstSec, left: firstSec.offset + firstSec.left, right: frame.width - firstSec.offset - firstSec.width + firstSec.right },
       foot: { ...lastSec, left: lastSec.offset + lastSec.left, right: frame.width - lastSec.offset - lastSec.width + lastSec.right } }
     : { head: geo, foot: geo };
 
   return (
-    <div className="app" onDragOver={(e) => e.preventDefault()} onDrop={onDrop}>
+    <div className={`app${viewMode === 'read' ? ' read-mode' : ''}`} onDragOver={(e) => e.preventDefault()} onDrop={onDrop}>
       <TitleBar name={doc.name} dirty={dirty}>
         <QuickAccess editor={editor} onSave={() => save()} />
       </TitleBar>
-      <Ribbon editor={editor} file={{ newDoc, newSheet, open, openHere, save: () => save(), saveAs, print: doPrint, pdf: doPdf }} onLink={() => setModal('link')}
+      {viewMode === 'read' && (
+        <div className="read-bar">
+          <span>Режим чтения</span>
+          <button type="button" className="btn small" onClick={() => setViewMode('print')} title="Вернуться к редактированию (Esc)">Редактировать документ</button>
+        </div>
+      )}
+      {viewMode !== 'read' && <Ribbon editor={editor} file={{ newDoc, newSheet, open, openHere, save: () => save(), saveAs, print: doPrint, pdf: doPdf }} onLink={() => setModal('link')}
+        view={{ mode: viewMode, setMode: setViewMode, ruler: viewPrefs.ruler, nav: viewPrefs.nav, toggleRuler: () => setPref('ruler'), toggleNav: () => setPref('nav'),
+          setZoom, fit: fitTo, openZoom: () => setModal('zoom') }}
         onFind={(m) => setFindMode(m)}
         onStyle={(m) => (m && m.remove ? editor.chain().focus().deleteStyle(m.remove).run() : setModal({ style: m }))}
         review={{
@@ -442,18 +485,20 @@ export default function App({ initialFile, onOpenOther, onNewSheet, autosaveSec 
             setShowComments(true);
           },
         }}
-        onFont={() => setModal('font')} onSymbol={() => setModal('symbol')} onRefDialog={(k) => setModal(k)} onParagraph={() => setModal('para')} onMargins={() => setModal('margins')} onHf={() => setModal('hf')} />
+        onFont={() => setModal('font')} onSymbol={() => setModal('symbol')} onRefDialog={(k) => setModal(k)} onParagraph={() => setModal('para')} onMargins={() => setModal('margins')} onHf={() => setModal('hf')} />}
       <div className="main-row">
+      {viewPrefs.nav && viewMode !== 'read' && <NavPane editor={editor} onClose={() => setPref('nav')} />}
       <div
         className="workspace"
         onMouseDown={(e) => { if (e.target === e.currentTarget) editor.commands.focus('end'); }}
-        onWheel={(e) => { if (e.ctrlKey) setZoom((z) => Math.min(200, Math.max(50, z + (e.deltaY < 0 ? 10 : -10)))); }} // Ctrl+колесо — масштаб
+        ref={workspaceRef}
+        onWheel={(e) => { if (e.ctrlKey) setZoom((z) => z + (e.deltaY < 0 ? 10 : -10)); }} // Ctrl+колесо — масштаб
       >
         {findMode && <FindBar editor={editor} mode={findMode} setMode={setFindMode} />}
-        <Ruler editor={editor} zoom={zoom} />
+        {viewPrefs.ruler && viewMode !== 'read' && <Ruler editor={editor} zoom={zoom} />}
         <PageScaler scale={zoom / 100}>
-          <div className={`page${frame.mixed ? ' pero-multi' : ''}`} style={{ ...pageVars(docFont), ...pageBox(pageGeo) }}>
-            <PageChrome geo={chromeGeo.head} footGeo={chromeGeo.foot} hf={(docFont && docFont.hf) || EMPTY_HF} chrome={docFont && docFont.chrome} total={(docFont && docFont.total) || 1} />
+          <div className={`page${frame.mixed ? ' pero-multi' : ''}${viewMode === 'draft' ? ' draft' : ''}`} style={{ ...pageVars(docFont), ...pageBox(pageGeo) }}>
+            {viewMode !== 'draft' && <PageChrome geo={chromeGeo.head} footGeo={chromeGeo.foot} hf={(docFont && docFont.hf) || EMPTY_HF} chrome={docFont && docFont.chrome} total={(docFont && docFont.total) || 1} />}
             <EditorContent editor={editor} />
             <PrintNotes editor={editor} />
           </div>
@@ -462,7 +507,7 @@ export default function App({ initialFile, onOpenOther, onNewSheet, autosaveSec 
       {showComments && <CommentsPanel editor={editor} onClose={() => setShowComments(false)} />}
       {notesPanel && <FootnotesPanel editor={editor} active={notesPanel.active} onActivate={(id) => setNotesPanel({ active: id })} onClose={() => setNotesPanel(null)} />}
       </div>
-      <StatusBar editor={editor} warnings={warnings} preserved={preserved} zoom={zoom} setZoom={setZoom} />
+      {viewMode !== 'read' && <StatusBar editor={editor} warnings={warnings} preserved={preserved} zoom={zoom} setZoom={setZoom} viewMode={viewMode} setViewMode={setViewMode} onZoomDialog={() => setModal('zoom')} />}
 
       {modal === 'link' && <LinkDialog editor={editor} onClose={() => setModal(null)} />}
       {modal === 'para' && <ParagraphDialog editor={editor} onClose={() => setModal(null)} />}
@@ -473,6 +518,7 @@ export default function App({ initialFile, onOpenOther, onNewSheet, autosaveSec 
       {modal === 'date' && <DateDialog editor={editor} onClose={() => setModal(null)} />}
       {modal === 'multilevel' && <MultilevelDialog editor={editor} onClose={() => setModal(null)} />}
       {modal === 'listFormat' && <ListFormatDialog editor={editor} onClose={() => setModal(null)} />}
+      {modal === 'zoom' && <ZoomDialog zoom={zoom} onApply={setZoom} onFit={fitTo} onClose={() => setModal(null)} />}
       {modal === 'margins' && <MarginsDialog editor={editor} onClose={() => setModal(null)} />}
       {modal === 'hf' && <HeaderFooterDialog editor={editor} onClose={() => setModal(null)} />}
       {modal && modal.style && <StyleDialog editor={editor} mode={modal.style} onClose={() => setModal(null)} />}

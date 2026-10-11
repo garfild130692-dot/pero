@@ -21,6 +21,7 @@ import { CASES, painterKey } from './editor/runFormat.js';
 import { marksKey } from './editor/marks.js';
 import { SymbolButton } from './SymbolDialog.jsx';
 import { MultilevelButton } from './NumberingDialogs.jsx';
+import { ViewPanel } from './ViewControls.jsx';
 import { BordersButton, RowHeightField, ShadingButton, TableIcons, tableState } from './TableControls.jsx';
 
 function Btn({ icon, label, title, onClick, onDoubleClick, active, disabled, big, children }) {
@@ -262,7 +263,7 @@ function TableStylesButton({ editor }) {
   );
 }
 
-export default function Ribbon({ editor, file, onLink, onFont, onSymbol, onRefDialog, onParagraph, onMargins, onHf, onFind, onStyle, review }) {
+export default function Ribbon({ editor, file, view, onLink, onFont, onSymbol, onRefDialog, onParagraph, onMargins, onHf, onFind, onStyle, review }) {
   const [tab, setTab] = useState('home');
   const tablePicker = usePopover();
 
@@ -317,6 +318,7 @@ export default function Ribbon({ editor, file, onLink, onFont, onSymbol, onRefDi
     ['layout', 'Макет'],
     ['refs', 'Ссылки'],
     ['review', 'Рецензирование'],
+    ['view', 'Вид'],
   ];
 
   return (
@@ -534,6 +536,8 @@ export default function Ribbon({ editor, file, onLink, onFont, onSymbol, onRefDi
         {activeTab === 'picture' && s.image && <PicturePanel editor={editor} image={s.image} Group={Group} />}
 
         {activeTab === 'layout' && <LayoutPanel editor={editor} Group={Group} onMargins={onMargins} onHf={onHf} />}
+
+        {activeTab === 'view' && <ViewPanel Group={Group} Btn={Btn} editor={editor} view={view} showMarks={s.showMarks} />}
 
         {activeTab === 'review' && (
           <>
