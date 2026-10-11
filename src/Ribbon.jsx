@@ -97,6 +97,38 @@ function UnderlineButton({ editor, kind }) {
   );
 }
 
+// Оглавление: после изменения номера страниц сдвигаются — второе обновление по новому разбиению (как в Word)
+function refreshToc(editor) {
+  editor.chain().focus().updateToc().run();
+  setTimeout(() => editor.commands.updateToc(), 400);
+}
+
+// «Оглавление ▾»: автособираемое (уровни 1–3 или 1–2), обновить, удалить
+function TocButton({ editor, Btn }) {
+  const pop = usePopover();
+  const item = (label, fn) => (
+    <button type="button" className="menu-item" onMouseDown={(e) => e.preventDefault()} onClick={() => { pop.setOpen(false); fn(); }}><span className="check" />{label}</button>
+  );
+  const insert = (levels) => {
+    editor.chain().focus().insertToc(`TOC \\o "${levels}" \\h \\z \\u`).run();
+    setTimeout(() => editor.commands.updateToc(), 400);
+  };
+  return (
+    <div className="rb-popover-anchor" ref={pop.ref}>
+      <Btn big icon="toc" label="Оглавление" title="Оглавление по заголовкам" active={pop.open} onClick={() => pop.setOpen(!pop.open)} />
+      {pop.open && (
+        <div className="menu-pop" style={pop.style} role="menu">
+          {item('Автособираемое оглавление (уровни 1–3)', () => insert('1-3'))}
+          {item('Автособираемое оглавление (уровни 1–2)', () => insert('1-2'))}
+          <div className="menu-sep" />
+          {item('Обновить оглавление', () => refreshToc(editor))}
+          {item('Удалить оглавление', () => editor.chain().focus().removeToc().run())}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // «Регистр» (Аа▾): как в предложениях, все строчные, ВСЕ ПРОПИСНЫЕ, Начинать С Прописных, иЗМЕНИТЬ РЕГИСТР; Shift+F3 — по кругу
 function CaseButton({ editor }) {
   const pop = usePopover();
@@ -229,7 +261,7 @@ function TableStylesButton({ editor }) {
   );
 }
 
-export default function Ribbon({ editor, file, onLink, onFont, onSymbol, onParagraph, onMargins, onHf, onFind, onStyle, review }) {
+export default function Ribbon({ editor, file, onLink, onFont, onSymbol, onRefDialog, onParagraph, onMargins, onHf, onFind, onStyle, review }) {
   const [tab, setTab] = useState('home');
   const tablePicker = usePopover();
 
@@ -276,6 +308,7 @@ export default function Ribbon({ editor, file, onLink, onFont, onSymbol, onParag
     ['home', 'Главная'],
     ['insert', 'Вставка'],
     ['layout', 'Макет'],
+    ['refs', 'Ссылки'],
     ['review', 'Рецензирование'],
   ];
 
@@ -445,6 +478,10 @@ export default function Ribbon({ editor, file, onLink, onFont, onSymbol, onParag
             <Group title="Ссылки">
               <Btn big icon="link" label="Ссылка" title="Вставить ссылку (Ctrl+K)" onClick={onLink} />
               <Btn big icon="unlink" label="Убрать ссылку" disabled={!s.link} onClick={() => c().extendMarkRange('link').unsetLink().run()} />
+              <div className="rb-col">
+                <Btn title="Закладка: имя для места в документе (для ссылок и перехода)" onClick={() => onRefDialog('bookmark')}><span className="rb-inline">Закладка…</span></Btn>
+                <Btn title="Перекрёстная ссылка на заголовок или закладку" onClick={() => onRefDialog('xref')}><span className="rb-inline">Перекрёстная ссылка…</span></Btn>
+              </div>
             </Group>
             <Group title="Иллюстрации">
               <Btn big icon="picture" label="Рисунок" title="Вставить рисунок из файла (можно и перетащить или вставить из буфера)"
@@ -452,9 +489,27 @@ export default function Ribbon({ editor, file, onLink, onFont, onSymbol, onParag
             </Group>
             <Group title="Текст">
               <Btn big icon="lineBreak" label="Разрыв строки" title="Разрыв строки (Shift+Enter)" onClick={() => c().setHardBreak().run()} />
+              <Btn big icon="calendar" label="Дата и время" title="Вставить текущую дату и время" onClick={() => onRefDialog('date')} />
             </Group>
             <Group title="Символы">
               <SymbolButton editor={editor} Btn={Btn} onMore={onSymbol} />
+            </Group>
+          </>
+        )}
+
+        {activeTab === 'refs' && (
+          <>
+            <Group title="Оглавление">
+              <TocButton editor={editor} Btn={Btn} />
+              <Btn title="Обновить оглавление: заголовки и номера страниц" onClick={() => refreshToc(editor)}><span className="rb-inline">Обновить таблицу</span></Btn>
+            </Group>
+            <Group title="Ссылки">
+              <Btn big icon="xref" label="Перекрёстная ссылка" title="Ссылка на заголовок или закладку (текст, номер страницы)" onClick={() => onRefDialog('xref')} />
+              <Btn big icon="bookmark" label="Закладка" title="Закладка: имя для места в документе" onClick={() => onRefDialog('bookmark')} />
+            </Group>
+            <Group title="Поля">
+              <Btn big label="Обновить поля" title="Обновить все поля документа: оглавление, номера страниц, даты, ссылки (F9 — в выделении)"
+                onClick={() => { c().updateFields(true).run(); setTimeout(() => editor.commands.updateFields(true), 400); }} icon="refresh" />
             </Group>
           </>
         )}

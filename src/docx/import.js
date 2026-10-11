@@ -358,9 +358,10 @@ function readRunMarks(rPr, theme = {}) {
   return marks;
 }
 
-function marksToArray(m, link) {
+// plainLink — гиперссылка без стиля «Гиперссылка» (как пункты оглавления Word): на экране и в файле — без синего подчёркивания
+function marksToArray(m, link, plainLink = false) {
   const out = [];
-  if (link) out.push({ type: 'link', attrs: { href: link } });
+  if (link) out.push({ type: 'link', attrs: plainLink ? { href: link, class: 'plain' } : { href: link } });
   if (m.bold) out.push({ type: 'bold' });
   if (m.italic) out.push({ type: 'italic' });
   if (m.strike) out.push({ type: 'strike' });
@@ -473,7 +474,7 @@ class Importer {
       if (m.fontSize === hd.fontSize) delete m.fontSize;
       if (m.color && m.color.toLowerCase() === hd.color) delete m.color;
     }
-    const marks = marksToArray(m, link);
+    const marks = marksToArray(m, link, !!link && link.startsWith('#') && !(rStyle && this.styles[rStyle] && this.styles[rStyle].name === 'hyperlink'));
     if (this.rev) marks.push({ type: this.rev.type, attrs: this.rev.attrs });
     if (child(rPr, 'rPrChange')) this.warn('исправления форматирования');
     const text = (t) => t && push(marks.length ? { type: 'text', text: t, marks } : { type: 'text', text: t });

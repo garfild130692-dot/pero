@@ -11,6 +11,7 @@ import Ruler from './Ruler.jsx';
 import ParagraphDialog from './ParagraphDialog.jsx';
 import FontDialog from './FontDialog.jsx';
 import SymbolDialog from './SymbolDialog.jsx';
+import { BookmarkDialog, CrossRefDialog, DateDialog } from './RefDialogs.jsx';
 import { cssFontStack } from './editor/font.js';
 import { NEW_DOC_PARA } from './editor/paragraph.js';
 import { lineCss } from './editor/paraFormat.js';
@@ -426,7 +427,7 @@ export default function App({ initialFile, onOpenOther, onNewSheet, autosaveSec 
             setShowComments(true);
           },
         }}
-        onFont={() => setModal('font')} onSymbol={() => setModal('symbol')} onParagraph={() => setModal('para')} onMargins={() => setModal('margins')} onHf={() => setModal('hf')} />
+        onFont={() => setModal('font')} onSymbol={() => setModal('symbol')} onRefDialog={(k) => setModal(k)} onParagraph={() => setModal('para')} onMargins={() => setModal('margins')} onHf={() => setModal('hf')} />
       <div className="main-row">
       <div
         className="workspace"
@@ -450,6 +451,9 @@ export default function App({ initialFile, onOpenOther, onNewSheet, autosaveSec 
       {modal === 'para' && <ParagraphDialog editor={editor} onClose={() => setModal(null)} />}
       {modal === 'font' && <FontDialog editor={editor} onClose={() => setModal(null)} />}
       {modal === 'symbol' && <SymbolDialog editor={editor} onClose={() => setModal(null)} />}
+      {modal === 'bookmark' && <BookmarkDialog editor={editor} onClose={() => setModal(null)} />}
+      {modal === 'xref' && <CrossRefDialog editor={editor} onClose={() => setModal(null)} />}
+      {modal === 'date' && <DateDialog editor={editor} onClose={() => setModal(null)} />}
       {modal === 'margins' && <MarginsDialog editor={editor} onClose={() => setModal(null)} />}
       {modal === 'hf' && <HeaderFooterDialog editor={editor} onClose={() => setModal(null)} />}
       {modal && modal.style && <StyleDialog editor={editor} mode={modal.style} onClose={() => setModal(null)} />}

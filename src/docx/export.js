@@ -25,7 +25,9 @@ function customStyleXml(st, normalId) {
   if (r.underline) rPr += '<w:u w:val="single"/>';
   const jc = { center: 'center', right: 'right', justify: 'both' }[st.align];
   const pPr = tabsXml(st.tabs) + spacingXml(p) + indXml(p) + (jc ? `<w:jc w:val="${jc}"/>` : '');
-  return `<w:style w:type="paragraph" w:customStyle="1" w:styleId="${esc(st.id)}"><w:name w:val="${esc(st.name || st.id)}"/>` +
+  // встроенные имена Word (toc 1…9, TOC Heading) — без customStyle: Word узнаёт свой стиль
+  const builtin = /^(toc [1-9]|toc heading)$/i.test(st.name || '');
+  return `<w:style w:type="paragraph"${builtin ? '' : ' w:customStyle="1"'} w:styleId="${esc(st.id)}"><w:name w:val="${esc(st.name || st.id)}"/>` +
     `${normalId ? `<w:basedOn w:val="${esc(normalId)}"/>` : ''}<w:qFormat/>${pPr ? `<w:pPr>${pPr}</w:pPr>` : ''}${rPr ? `<w:rPr>${rPr}</w:rPr>` : ''}</w:style>`;
 }
 
@@ -151,7 +153,7 @@ class Exporter {
     // порядок элементов rPr задан схемой (CT_RPr): rStyle, rFonts, b, bCs, i, iCs, caps, smallCaps, strike, color,
     // spacing, sz, szCs, highlight, u, shd, vertAlign
     let rPr = '';
-    if (link) rPr += `<w:rStyle w:val="${this.styleIds.Hyperlink}"/>`;
+    if (link && link.attrs.class !== 'plain') rPr += `<w:rStyle w:val="${this.styleIds.Hyperlink}"/>`;
     if (font) rPr += `<w:rFonts w:ascii="${esc(font)}" w:hAnsi="${esc(font)}" w:eastAsia="${esc(font)}" w:cs="${esc(font)}"/>`;
     if (has('bold')) rPr += '<w:b/><w:bCs/>';
     if (has('italic')) rPr += '<w:i/><w:iCs/>';

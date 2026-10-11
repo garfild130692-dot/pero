@@ -652,3 +652,13 @@ p[data-section-break]::after {
 .sym-row.sel { background: var(--accent); color: #fff; }
 .sym-row em { font-style: normal; opacity: .75; }
 .sym-ch { text-align: center; font-size: 15px; }
+.page-content a.plain { color: inherit; text-decoration: inherit; }
+
+/* «Закладка», «Перекрёстная ссылка», «Дата и время» */
+.modal.bm-dlg, .modal.xref-dlg, .modal.date-dlg { width: 440px; }
+.bm-list { height: 220px; overflow-y: auto; border: 1px solid var(--line); margin: 8px 0; background: #fff; }
+.bm-row { grid-template-columns: 1fr; }
+.bm-empty { color: var(--muted); padding: 10px; font-size: 12.5px; }
+.bm-opts { display: flex; gap: 12px; align-items: center; font-size: 12.5px; flex-wrap: wrap; }
+.bm-hidden { margin-left: auto; }
+.page-content a[href^="#"] { cursor: text; }

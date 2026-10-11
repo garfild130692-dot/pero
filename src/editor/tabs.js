@@ -98,7 +98,8 @@ function segmentWidth(p, after, before, scale) {
   const r = document.createRange();
   r.setStartAfter(after);
   if (before) r.setEndBefore(before); else r.setEnd(p, p.childNodes.length);
-  const rects = r.getClientRects();
+  // пустые прямоугольники (значки полей, разделители ProseMirror у inline-узлов) стоят на другой высоте — не в счёт
+  const rects = Array.from(r.getClientRects()).filter((x) => x.width > 0.5);
   if (!rects.length) return 0;
   const top = rects[0].top;
   let left = Infinity; let right = -Infinity;
