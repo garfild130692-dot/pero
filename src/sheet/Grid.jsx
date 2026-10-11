@@ -95,7 +95,7 @@ const OUT_STEP = 14; // ширина уровня в поле структуры
 // refMarks — ссылки редактируемой формулы (цветные рамки); showFormulas — формулы вместо значений (Ctrl+`);
 // arrows — стрелки влияющих/зависимых ячеек [{ from: диапазон, to: { r, c } }]; onErrorInfo — значок у ячейки с ошибкой
 export default function Grid({ sheet, sel, setSel, editing, setEditing, onCommit, onColWidth, onRowHeight, onRefInsert, onOutline, gridRef,
-  refMarks = [], showFormulas = false, arrows = [], onErrorInfo, names = [], onFill, onFilterMenu, cf = null, dvList = false, dvPrompt = null, onDvList }) {
+  refMarks = [], showFormulas = false, arrows = [], onErrorInfo, names = [], onFill, onFilterMenu, cf = null, dvList = false, dvPrompt = null, onDvList, pageBreaks = null }) {
   const scrollRef = useRef(null);
   const [view, setView] = useState({ top: 0, left: 0, w: 800, h: 500 });
   // размеры области: использованная часть + запас (как «бесконечный» лист)
@@ -345,6 +345,19 @@ export default function Grid({ sheet, sel, setSel, editing, setEditing, onCommit
             onClick={(e) => { e.stopPropagation(); onFilterMenu(j, e.currentTarget.getBoundingClientRect()); }}>{on ? '⏷' : '▾'}</button>
         );
       })}
+      {pageBreaks && pageBreaks.area && (() => {
+        // разрывы страниц — пунктир по границам страниц области печати (как Excel после просмотра)
+        const { r1, c1, r2, c2 } = pageBreaks.area;
+        const x1 = colPos[c1]; const x2 = colPos[Math.min(c2 + 1, cols)]; const y1 = rowPos[r1]; const y2 = rowPos[Math.min(r2 + 1, rows)];
+        const manual = sheet.breaks || {};
+        return (
+          <svg className="gbreaks" width={colPos[cols]} height={rowPos[rows]}>
+            <rect x={x1 + 0.5} y={y1 + 0.5} width={x2 - x1 - 1} height={y2 - y1 - 1} fill="none" />
+            {pageBreaks.rowBreaks.map((r) => <line key={`r${r}`} className={(manual.rows || []).includes(r) ? 'man' : ''} x1={x1} x2={x2} y1={rowPos[r] + 0.5} y2={rowPos[r] + 0.5} />)}
+            {pageBreaks.colBreaks.map((c) => <line key={`c${c}`} className={(manual.cols || []).includes(c) ? 'man' : ''} y1={y1} y2={y2} x1={colPos[c] + 0.5} x2={colPos[c] + 0.5} />)}
+          </svg>
+        );
+      })()}
       {dvList && (
         <button type="button" className="gdvbtn" title="Выбрать из списка (Alt+↓)" style={{ left: colPos[active.c2 + 1] + 1, top: rowPos[active.r1], height: rowPos[active.r2 + 1] - rowPos[active.r1] }}
           onMouseDown={(e) => { e.preventDefault(); e.stopPropagation(); }} onClick={(e) => { e.stopPropagation(); const b = e.currentTarget.getBoundingClientRect(); const w = colPos[active.c2 + 1] - colPos[active.c1]; onDvList({ left: b.left - w - 1, bottom: b.bottom, width: w }); }}>▾</button>

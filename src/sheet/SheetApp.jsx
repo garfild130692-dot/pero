@@ -16,12 +16,12 @@ const absRange = (rg) => {
 import { formatValue } from './format.js';
 import {
   DEFAULT_COL_W, DEFAULT_ROW_H, addSheet, autoSumFormula, blockToText, clearRange, collapseGroup, copyBlock, deleteSheet, expandGroup, fill, inputOf,
-  addCfRule, applyCellFormat, clearCf, setValidation, currentRegion, fillSeries, isHidden, isValidName, mergeAt, nameTarget, newWorkbook, reapplyFilter, recalc, setAutoFilter, setCalcMode,
+  addCfRule, applyCellFormat, clearCf, setPageBreak, setValidation, currentRegion, fillSeries, isHidden, isValidName, mergeAt, nameTarget, newWorkbook, reapplyFilter, recalc, setAutoFilter, setCalcMode,
   setColumnFilter, setNames, sortRows, spillAnchorAt, valueAt, viewContext, pasteBlock, pasteText, renameSheet, setColWidth, setInput, setRowHeight, showLevels, usedRange,
 } from './model.js';
 import { exportXlsx, importXlsx } from './xlsx.js';
 import { exportCsv, importCsv } from './csv.js';
-import { pageOf, printGeometry, printScale } from './pageSetup.js';
+import { setPage } from './pageSetup.js';
 import { isLocked, isProtected, protectionViolation, setProtection } from './protect.js';
 import ProtectDialog from './ProtectDialog.jsx';
 import NamesDialog from './NamesDialog.jsx';
@@ -30,6 +30,8 @@ import SortDialog from './SortDialog.jsx';
 import FormatCellsDialog from './FormatCellsDialog.jsx';
 import FindDialog from './FindDialog.jsx';
 import DvDialog, { DvErrorDialog } from './DvDialog.jsx';
+import PrintPreview, { PrintPages } from './PrintPreview.jsx';
+import { paginate } from './printPages.js';
 import { dvAt, listItems, validate } from './dv.js';
 import { CfDialog } from './CfMenu.jsx';
 import { cfView } from './cf.js';
@@ -69,6 +71,8 @@ export default function SheetApp({ initialFile, onOpenOther, onNewDoc, autosaveS
   const [fcDlg, setFcDlg] = useState(false); // «Формат ячеек»
   const [findDlg, setFindDlg] = useState(null); // 'find' | 'replace'
   const [dvDlg, setDvDlg] = useState(false); // «Проверка данных»
+  const [preview, setPreview] = useState(false); // «Печать» — предварительный просмотр
+  const [showBreaks, setShowBreaks] = useState(false); // пунктир разрывов страниц на листе (после просмотра, как Excel)
   const [dvErr, setDvErr] = useState(null); // { rule, ed, text, dir } — значение не прошло проверку
   const [dvPop, setDvPop] = useState(null); // { r, c, items, x, y } — выпадающий список ячейки
   const [showFormulas, setShowFormulas] = useState(false); // Ctrl+` — формулы вместо значений
@@ -87,6 +91,7 @@ export default function SheetApp({ initialFile, onOpenOther, onNewDoc, autosaveS
   const si = wb.active;
   const sheet = wb.sheets[si];
   const cfMap = useMemo(() => cfView(wb, si), [wb, si]); // условное форматирование: что показать поверх стилей
+  const pageBreaks = useMemo(() => (showBreaks ? paginate(sheet) : null), [showBreaks, sheet]);
 
   // изменение книги с записью в историю отмены
   const change = useCallback((fn) => {
@@ -211,7 +216,8 @@ export default function SheetApp({ initialFile, onOpenOther, onNewDoc, autosaveS
     else if (cmd === 'saveAs') h.saveAs();
     else if (cmd === 'openData') { if (/\.docx$/i.test(payload.name)) onOpenOther(payload); else h.load(payload); }
     else if (cmd === 'saveAndClose') h.save(() => fileApi.closeNow());
-    else if (cmd === 'print' || cmd === 'pdf') { if (cmd === 'print') fileApi.print(); else fileApi.exportPdf(doc.name.replace(/\.(xlsx|csv)$/i, '') + '.pdf'); }
+    else if (cmd === 'print') { setPreview(true); setShowBreaks(true); }
+    else if (cmd === 'pdf') fileApi.exportPdf(doc.name.replace(/\.(xlsx|csv)$/i, '') + '.pdf');
   }), [onOpenOther, doc.name]);
 
   // ---------- Ввод ----------
@@ -357,6 +363,8 @@ export default function SheetApp({ initialFile, onOpenOther, onNewDoc, autosaveS
     recalc: () => setWb((w) => recalc(w, { full: true })),
     formatCells: () => setFcDlg(true),
     validation: () => setDvDlg(true),
+    showBreaks, toggleBreaks: () => setShowBreaks((v) => !v),
+    pageBreak: (mode) => { change((w) => setPageBreak(w, si, sel.r, sel.c, mode)); setShowBreaks(true); },
     find: (mode) => setFindDlg(mode),
     // условное форматирование выделенного диапазона
     cfDialog: (kind) => setCfDlg(kind),
@@ -372,7 +380,7 @@ export default function SheetApp({ initialFile, onOpenOther, onNewDoc, autosaveS
     setCalcMode: (mode) => change((w) => setCalcMode(w, mode)),
     protect: () => setProtectDlg(isProtected(sheet) ? 'unprotect' : 'protect'),
     wb, sheet, si, sel, rg, change, undo, redo, canUndo: history.current.undo.length > 0, canRedo: history.current.redo.length > 0,
-    file: { newDocument, newBook, open, openHere, save: () => save(), saveAs: () => write(true), saveCsv, print: () => fileApi.print(), pdf: () => fileApi.exportPdf(doc.name.replace(/\.(xlsx|csv)$/i, '') + '.pdf') },
+    file: { newDocument, newBook, open, openHere, save: () => save(), saveAs: () => write(true), saveCsv, print: () => { setPreview(true); setShowBreaks(true); }, pdf: () => fileApi.exportPdf(doc.name.replace(/\.(xlsx|csv)$/i, '') + '.pdf') },
     autoSum: () => {
       const target = rg.r2 > rg.r1 || rg.c2 > rg.c1 ? { r: rg.r2 + 1, c: rg.c1 } : { r: sel.r, c: sel.c };
       const f = rg.r2 > rg.r1 && rg.c1 === rg.c2 ? `SUM(${addr(rg.r1, rg.c1)}:${addr(rg.r2, rg.c1)})` : autoSumFormula(sheet, target.r, target.c);
@@ -504,6 +512,7 @@ export default function SheetApp({ initialFile, onOpenOther, onNewDoc, autosaveS
           refMarks={refMarks} showFormulas={showFormulas} arrows={arrows}
           onErrorInfo={(r, c, rect) => setErrPop({ r, c, x: rect.right + 4, y: rect.top })}
           cf={cfMap}
+          pageBreaks={pageBreaks}
           dvList={(() => { const rule = dvAt(sheet, sel.r, sel.c); return rule && rule.type === 'list' && rule.inCellDropdown !== false && !editing; })()}
           dvPrompt={(() => { const rule = dvAt(sheet, sel.r, sel.c); return rule && rule.showPrompt && (rule.prompt || rule.promptTitle) && !editing ? rule : null; })()}
           onDvList={(rect) => openDvList(sel.r, sel.c, rect)}
@@ -552,7 +561,7 @@ export default function SheetApp({ initialFile, onOpenOther, onNewDoc, autosaveS
         )}
         {isErr(activeCell && activeCell.v) && <span className="warn">{errorHint(activeCell.v.error)}</span>}
       </div>
-      <PrintTable sheet={sheet} />
+      <PrintPages sheet={sheet} cf={cfMap} />
       {evalAt && (
         <EvalDialog cellName={`${sheetPrefix(sheet.name)}${addr(evalAt.r, evalAt.c)}`} formula={(sheet.cells.get(key(evalAt.r, evalAt.c)) || {}).f || ''}
           ctx={viewContext(wb, si, evalAt.r, evalAt.c)} onClose={() => { setEvalAt(null); gridRef.current && gridRef.current.focus(); }} />
@@ -597,6 +606,12 @@ export default function SheetApp({ initialFile, onOpenOther, onNewDoc, autosaveS
           head={shownText(sheet.cells.get(key(sheet.autoFilter.ref.r1, sheet.autoFilter.ref.c1 + customFilter.j))) || `Столбец ${colName(sheet.autoFilter.ref.c1 + customFilter.j)}`}
           onClose={() => { setCustomFilter(null); gridRef.current && gridRef.current.focus(); }}
           onApply={(crit) => { const { j } = customFilter; setCustomFilter(null); change((w) => setColumnFilter(w, si, j, crit)); gridRef.current && gridRef.current.focus(); }} />
+      )}
+      {preview && (
+        <PrintPreview sheet={sheet} cf={cfMap} onClose={() => { setPreview(false); gridRef.current && gridRef.current.focus(); }}
+          onPage={(patch) => change((w) => setPage(w, si, patch))}
+          onPrint={() => fileApi.print()}
+          onPdf={() => fileApi.exportPdf(doc.name.replace(/\.(xlsx|csv)$/i, '') + '.pdf')} />
       )}
       {dvPop && (
         <div className="modal-backdrop clear" onMouseDown={() => setDvPop(null)}>
@@ -653,61 +668,6 @@ function errorHint(code) {
     '#NAME?': 'Неизвестная функция или имя', '#N/A': 'Значение не найдено', '#NUM!': 'Недопустимое число', '#CIRC!': 'Циклическая ссылка',
     '#SPILL!': 'Результат-массив не помещается: ячейки рядом заняты', '#CALC!': 'Пустой результат (например, ФИЛЬТР ничего не нашёл)',
   }[code] || code;
-}
-
-// Для печати/PDF — таблица области печати листа (видна только при печати): параметры страницы, «вписать»,
-// сквозные строки (в <thead> — Chromium повторяет его на каждом листе), скрытые строки/столбцы не печатаются
-const BORDER_CSS = { thin: '1px solid', medium: '2px solid', thick: '3px solid', dashed: '1px dashed', dotted: '1px dotted', double: '3px double', hair: '1px dotted' };
-const bcss = (b) => (b ? `${BORDER_CSS[b.style] || '1px solid'} ${b.color || '#000'}` : undefined);
-function PrintTable({ sheet }) {
-  const page = pageOf(sheet);
-  const area = sheet.printArea || usedRange(sheet);
-  if (!area) return null;
-  const visCols = [];
-  for (let c = area.c1; c <= area.c2; c++) if (!isHidden(sheet, 'col', c)) visCols.push(c);
-  const visRows = (a, b) => { const out = []; for (let r = a; r <= b; r++) if (!isHidden(sheet, 'row', r)) out.push(r); return out; };
-  const t = sheet.printTitles && sheet.printTitles.rows;
-  const headRows = t ? visRows(t[0], t[1]) : [];
-  const bodyRows = visRows(area.r1, area.r2).filter((r) => !headRows.includes(r));
-  const widths = visCols.map((c) => sheet.colW[c] ?? DEFAULT_COL_W);
-  const heightOf = (r) => sheet.rowH[r] ?? DEFAULT_ROW_H;
-  const tableW = widths.reduce((a, b) => a + b, 0);
-  const tableH = [...headRows, ...bodyRows].reduce((a, r) => a + heightOf(r), 0);
-  const zoom = printScale(page, tableW, tableH);
-  const row = (r) => {
-    const tds = [];
-    for (const c of visCols) {
-      const m = mergeAt(sheet, r, c);
-      if (m && (m.r1 !== r || m.c1 !== c)) continue;
-      const own = sheet.cells.get(key(r, c));
-      const cell = own && (own.v != null || own.f != null) ? own : { ...(own || {}), v: valueAt(sheet, r, c) };
-      const s = (cell && cell.s) || {};
-      const b = s.border || {};
-      tds.push(
-        <td key={c} rowSpan={m ? m.r2 - m.r1 + 1 : undefined} colSpan={m ? visCols.filter((x) => x >= m.c1 && x <= m.c2).length : undefined}
-          style={{ fontWeight: s.bold ? 'bold' : undefined, fontStyle: s.italic ? 'italic' : undefined, background: s.fill, color: s.color,
-            textDecoration: [s.underline && 'underline', s.strike && 'line-through'].filter(Boolean).join(' ') || undefined,
-            fontSize: s.fontSize ? `${s.fontSize}pt` : undefined, fontFamily: s.fontFamily || undefined,
-            textAlign: s.align || (cell && typeof cell.v === 'number' ? 'right' : 'left'),
-            verticalAlign: s.valign === 'top' ? 'top' : s.valign === 'center' ? 'middle' : 'bottom',
-            whiteSpace: s.wrap ? 'pre-wrap' : 'pre',
-            borderTop: bcss(b.top), borderBottom: bcss(b.bottom), borderLeft: bcss(b.left), borderRight: bcss(b.right) }}>
-          {cellText(cell)}
-        </td>,
-      );
-    }
-    return <tr key={r} style={{ height: heightOf(r) }}>{tds}</tr>;
-  };
-  return (
-    <>
-      <style>{`@media print { ${printGeometry(page).css} }`}</style>
-      <table className={`sheet-print${page.gridLines ? ' grid' : ''}`} style={{ width: tableW, zoom, margin: page.centerH ? '0 auto' : undefined }}>
-        <colgroup>{widths.map((w, i) => <col key={visCols[i]} style={{ width: w }} />)}</colgroup>
-        {headRows.length > 0 && <thead>{headRows.map(row)}</thead>}
-        <tbody>{bodyRows.map(row)}</tbody>
-      </table>
-    </>
-  );
 }
 
 // Строка формул с подсказками функций и F4 (те же, что в редакторе ячейки)

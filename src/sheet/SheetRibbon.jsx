@@ -308,6 +308,11 @@ export default function SheetRibbon({ api }) {
                 ['Альбомная', () => setPg({ orientation: 'landscape' }), page.orientation === 'landscape'],
               ]} />
               <MenuButton title="Размер бумаги" label="Размер" items={Object.entries(PAPERS).map(([code, p]) => [`${p.name} (${p.w} × ${p.h} мм)`, () => setPg({ paper: +code }), page.paper === +code])} />
+              <MenuButton title="Разрывы страниц" label="Разрывы" items={[
+                ['Вставить разрыв страницы', () => api.pageBreak('insert')],
+                ['Удалить разрыв страницы', () => api.pageBreak('remove')],
+                ['Сброс разрывов страниц', () => api.pageBreak('reset')],
+              ]} />
               <MenuButton title="Область печати" label="Область печати" items={[
                 ['Задать (выделенный диапазон)', () => change((w) => setPrintArea(w, si, rg))],
                 ['Убрать', () => change((w) => setPrintArea(w, si, null)), false],
@@ -424,6 +429,10 @@ export default function SheetRibbon({ api }) {
                 ['Закрепить верхнюю строку', () => change((w) => setFreeze(w, si, { rows: 1, cols: 0 }))],
                 ['Закрепить первый столбец', () => change((w) => setFreeze(w, si, { rows: 0, cols: 1 }))],
               ]} />
+            </Group>
+            <Group title="Режимы просмотра">
+              <Btn title="Показать разрывы страниц на листе (пунктир)" active={api.showBreaks} onClick={api.toggleBreaks}><T>┆</T> Разрывы страниц</Btn>
+              <Btn title="Предварительный просмотр печати (Ctrl+P)" onClick={api.file.print}><T>▭</T> Просмотр печати</Btn>
             </Group>
           </>
         )}

@@ -86,15 +86,41 @@ input.sheet-tab.editing { width: 120px; background: #fff; border: 1px solid var(
 .sheet-del { color: #999; font-weight: 400; font-size: 14px; padding: 0 2px; border-radius: 2px; }
 .sheet-del:hover { color: #c00000; background: #f4dede; }
 
-/* печать: только таблица использованной области */
-.sheet-print { display: none; }
+/* печать: готовые страницы (printPages.js); на экране не видны */
+.pp-print { display: none; }
 @media print {
-  .sheet-app .formula-bar, .sheet-app .sheet-main, .sheet-app .sheet-tabs { display: none !important; }
-  .sheet-print { display: table; border-collapse: collapse; font-family: Calibri, Carlito, sans-serif; font-size: 11pt; table-layout: fixed; }
-  .sheet-print td { padding: 0 3px; overflow: hidden; line-height: 1.2; }
-  .sheet-print.grid td { outline: 1px solid #c8c8c8; outline-offset: -1px; } /* «Печать сетки» */
-  .sheet-print thead { display: table-header-group; }
+  .sheet-app .formula-bar, .sheet-app .sheet-main, .sheet-app .sheet-tabs, .pp-overlay { display: none !important; }
+  .pp-print { display: block; }
+  .pp-print .pp-sheet { break-after: page; box-shadow: none !important; margin: 0 !important; }
+  .pp-print .pp-sheet:last-child { break-after: auto; }
 }
+.pp-paper { position: relative; background: #fff; overflow: hidden; flex: none; }
+.pp-content { position: absolute; overflow: hidden; }
+.pp-table { border-collapse: collapse; font-family: Calibri, Carlito, sans-serif; font-size: 11pt; table-layout: fixed; }
+.pp-table td { padding: 0 3px; overflow: hidden; line-height: 1.2; position: relative; }
+.pp-table.grid td { outline: 1px solid #c8c8c8; outline-offset: -1px; }
+.pp-bar { position: absolute; left: 1px; top: 2px; bottom: 2px; z-index: 0; }
+
+/* предварительный просмотр */
+.pp-overlay { position: fixed; inset: 34px 0 0 0; z-index: 90; display: flex; background: #e9ecea; outline: none; }
+.pp-side { width: 270px; flex: none; background: #fff; border-right: 1px solid var(--line); padding: 14px 18px; display: flex; flex-direction: column; gap: 8px; overflow: auto; }
+.pp-side h2 { margin: 4px 0; font-size: 20px; font-weight: 600; color: var(--accent); }
+.pp-back { align-self: flex-start; border: 0; background: transparent; color: var(--accent); cursor: pointer; font: inherit; padding: 2px 0; }
+.pp-actions { display: flex; gap: 8px; margin: 6px 0 10px; }
+.pp-sub { font-weight: 600; margin-top: 6px; }
+.pp-field { display: flex; flex-direction: column; gap: 3px; }
+.pp-field select, .pp-field input { width: 100%; box-sizing: border-box; }
+.pp-note { color: #666; font-size: 12px; margin-top: 6px; }
+.pp-main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+.pp-stage { flex: 1; overflow: auto; display: flex; justify-content: center; align-items: flex-start; padding: 24px; }
+.pp-shadow { box-shadow: 0 2px 12px rgba(0,0,0,.25); }
+.pp-empty { color: #666; margin-top: 60px; }
+.pp-nav { display: flex; justify-content: center; align-items: center; gap: 12px; padding: 8px; border-top: 1px solid var(--line); background: #f6f6f6; }
+
+/* пунктир разрывов страниц на листе */
+.gbreaks { position: absolute; left: 0; top: 0; pointer-events: none; z-index: 2; }
+.gbreaks line, .gbreaks rect { stroke: #4a6fa5; stroke-width: 1; stroke-dasharray: 4 3; }
+.gbreaks line.man { stroke-dasharray: none; stroke-width: 1.5; }
 
 .sheet-lock { font-size: 11px; margin-right: 4px; opacity: .75; }
 
