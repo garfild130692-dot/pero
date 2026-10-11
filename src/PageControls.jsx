@@ -3,6 +3,7 @@ import React, { useState } from 'react';
 import { usePopover } from './FontControls.jsx';
 import { EMPTY_HF, MARGIN_PRESETS, PAPER, TWIPS_PER_CM, hfFor, hfText, pagePx, parseSectPr, patchSectPr, sectionAt, sectionList } from './editor/page.js';
 import { fmtNum } from './editor/paragraph.js';
+import { SECTION_TYPES } from './editor/breaks.js';
 
 // Изменить атрибут документа одной транзакцией (с отменой по Ctrl+Z)
 const setDocAttr = (editor, name, value) => editor.chain().focus().command(({ tr }) => { tr.setDocAttribute(name, value); return true; }).run();
@@ -47,13 +48,11 @@ const MarginsIcon = () => <S><rect x="5" y="3" width="14" height="18" /><rect x=
 const OrientIcon = () => <S><rect x="3" y="7" width="13" height="10" /><rect x="11" y="3" width="9" height="13" opacity=".5" /></S>;
 const SizeIcon = () => <S><rect x="5" y="3" width="14" height="18" /><path d="M8 8h8M8 12h8M8 16h5" /></S>;
 const HfIcon = () => <S><rect x="5" y="3" width="14" height="18" /><path d="M5 7h14M5 17h14" /><path d="M8 5h5M8 19h3" strokeWidth="1.2" /></S>;
+const BreaksIcon = () => <S><path d="M5 3v6h14V3M5 21v-6h14v6" /><path d="M3 12h3M9 12h2M14 12h2M19 12h2" /></S>;
 const NumIcon = () => <S><rect x="5" y="3" width="14" height="18" /><text x="12" y="19" fontSize="6" textAnchor="middle" fill="currentColor" stroke="none">1</text></S>;
 
-// ---------- Вкладка «Макет» ----------
-export function LayoutPanel({ editor, Group, onMargins, onHf }) {
-  const g = parseSectPr(sectionAt(editor.state).sectPr);
-  const same = (p) => Math.abs(p.top - g.top) < 15 && Math.abs(p.right - g.right) < 15 && Math.abs(p.bottom - g.bottom) < 15 && Math.abs(p.left - g.left) < 15;
-  const paper = PAPER.find(([, w, h]) => (Math.abs(w - g.w) < 30 && Math.abs(h - g.h) < 30) || (Math.abs(h - g.w) < 30 && Math.abs(w - g.h) < 30));
+// ---------- Колонтитулы и номер страницы (вкладки «Вставка» и «Макет») ----------
+export function HfGroup({ editor, Group, onHf, extra = null }) {
   const hf = editor.state.doc.attrs.hf || EMPTY_HF;
   const pageNum = (where) => {
     const para = [{ text: '{PAGE}', align: where.endsWith('right') ? 'right' : 'center' }];
@@ -62,6 +61,48 @@ export function LayoutPanel({ editor, Group, onMargins, onHf }) {
     else { next.footer = para; next.own = { ...next.own, footer: true }; }
     setDocAttr(editor, 'hf', next);
   };
+  return (
+      <Group title="Колонтитулы">
+        <button type="button" className="rb-btn big" title="Верхний и нижний колонтитулы" onMouseDown={(e) => e.preventDefault()} onClick={onHf}>
+          <HfIcon /><span className="rb-label">Колонтитулы</span>
+        </button>
+        <MenuButton icon={<NumIcon />} label="Номер страницы" title="Номера страниц">
+          {(close) => (
+            <>
+              <Item onClick={() => { close(); pageNum('bottom-center'); }}>Внизу по центру</Item>
+              <Item onClick={() => { close(); pageNum('bottom-right'); }}>Внизу справа</Item>
+              <Item onClick={() => { close(); pageNum('top-right'); }}>Вверху справа</Item>
+            </>
+          )}
+        </MenuButton>
+        {extra}
+      </Group>
+  );
+}
+
+// ---------- «Разрывы ▾»: страницы, колонки, разделов ----------
+export function BreaksButton({ editor }) {
+  const c = () => editor.chain().focus();
+  return (
+    <MenuButton icon={<BreaksIcon />} label="Разрывы" title="Разрывы страниц и разделов">
+      {(close) => (
+        <>
+          <div className="pop-title">Разрывы страниц</div>
+          <Item onClick={() => { close(); c().insertBreak('page').run(); }}>Страница (Ctrl+Enter)</Item>
+          <Item onClick={() => { close(); c().insertBreak('column').run(); }}>Колонка (Ctrl+Shift+Enter)</Item>
+          <div className="pop-title">Разрывы разделов</div>
+          {SECTION_TYPES.map(([k, l]) => <Item key={k} onClick={() => { close(); c().insertSectionBreak(k).run(); }}>{l}</Item>)}
+        </>
+      )}
+    </MenuButton>
+  );
+}
+
+// ---------- Вкладка «Макет» ----------
+export function LayoutPanel({ editor, Group, onMargins, onHf }) {
+  const g = parseSectPr(sectionAt(editor.state).sectPr);
+  const same = (p) => Math.abs(p.top - g.top) < 15 && Math.abs(p.right - g.right) < 15 && Math.abs(p.bottom - g.bottom) < 15 && Math.abs(p.left - g.left) < 15;
+  const paper = PAPER.find(([, w, h]) => (Math.abs(w - g.w) < 30 && Math.abs(h - g.h) < 30) || (Math.abs(h - g.w) < 30 && Math.abs(w - g.h) < 30));
   return (
     <>
       <Group title="Параметры страницы">
@@ -86,6 +127,7 @@ export function LayoutPanel({ editor, Group, onMargins, onHf }) {
             </>
           )}
         </MenuButton>
+        <BreaksButton editor={editor} />
         <MenuButton icon={<SizeIcon />} label="Размер" title="Размер бумаги">
           {(close) => PAPER.map(([name, w, h]) => (
             <Item key={name} checked={paper && paper[0] === name} onClick={() => {
@@ -96,20 +138,7 @@ export function LayoutPanel({ editor, Group, onMargins, onHf }) {
           ))}
         </MenuButton>
       </Group>
-      <Group title="Колонтитулы">
-        <button type="button" className="rb-btn big" title="Верхний и нижний колонтитулы" onMouseDown={(e) => e.preventDefault()} onClick={onHf}>
-          <HfIcon /><span className="rb-label">Колонтитулы</span>
-        </button>
-        <MenuButton icon={<NumIcon />} label="Номер страницы" title="Номера страниц">
-          {(close) => (
-            <>
-              <Item onClick={() => { close(); pageNum('bottom-center'); }}>Внизу по центру</Item>
-              <Item onClick={() => { close(); pageNum('bottom-right'); }}>Внизу справа</Item>
-              <Item onClick={() => { close(); pageNum('top-right'); }}>Вверху справа</Item>
-            </>
-          )}
-        </MenuButton>
-      </Group>
+      <HfGroup editor={editor} Group={Group} onHf={onHf} />
     </>
   );
 }

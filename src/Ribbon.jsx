@@ -7,7 +7,7 @@ import { QuickButton } from './TitleBar.jsx';
 import RecentButton from './RecentButton.jsx';
 import { insertImageFiles } from './insertImage.js';
 import { PicturePanel } from './PictureControls.jsx';
-import { LayoutPanel } from './PageControls.jsx';
+import { HfGroup, LayoutPanel } from './PageControls.jsx';
 import { TABLE_STYLES } from './editor/tableFormat.js';
 import { trackInfo } from './editor/track.js';
 import { sectionAt } from './editor/page.js';
@@ -487,6 +487,10 @@ export default function Ribbon({ editor, file, view, onStylesPane, onLink, onFon
 
         {activeTab === 'insert' && (
           <>
+            <Group title="Страницы">
+              <Btn big icon="blankPage" label="Пустая страница" title="Вставить пустую страницу" onClick={() => c().insertBlankPage().run()} />
+              <Btn big icon="pageBreak" label="Разрыв страницы" title="Следующий текст — с новой страницы (Ctrl+Enter)" onClick={() => c().insertBreak('page').run()} />
+            </Group>
             <Group title="Таблицы">
               <div className="rb-popover-anchor" ref={tablePicker.ref}>
                 <Btn big icon="table" label="Таблица" onClick={() => tablePicker.setOpen(!tablePicker.open)} />
@@ -517,6 +521,10 @@ export default function Ribbon({ editor, file, view, onStylesPane, onLink, onFon
               <Btn big icon="lineBreak" label="Разрыв строки" title="Разрыв строки (Shift+Enter)" onClick={() => c().setHardBreak().run()} />
               <Btn big icon="calendar" label="Дата и время" title="Вставить текущую дату и время" onClick={() => onRefDialog('date')} />
             </Group>
+            <Group title="Примечания">
+              <Btn big icon="comment" label="Примечание" title="Примечание к выделенному фрагменту" onClick={review.addComment} />
+            </Group>
+            <HfGroup editor={editor} Group={Group} onHf={onHf} />
             <Group title="Символы">
               <SymbolButton editor={editor} Btn={Btn} onMore={onSymbol} />
             </Group>

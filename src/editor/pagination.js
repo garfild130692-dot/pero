@@ -22,6 +22,7 @@ import { Plugin, PluginKey } from '@tiptap/pm/state';
 import { Decoration, DecorationSet } from '@tiptap/pm/view';
 import { EMPTY_HF, hfFor, hfText, parseSectPr, sectionFrame, sectionList } from './page.js';
 import { footnoteRefs } from './footnotes.js';
+import { sectionType } from './breaks.js';
 
 export const paginationKey = new PluginKey('pagination');
 export const PAGE_GAP = 18; // px между листами на экране
@@ -158,6 +159,7 @@ function cellLines(td, rootTop, scale) {
 // Единицы разбиения в порядке документа
 function collectUnits(view, rootTop, scale) {
   const units = [];
+  const sectList = sectionList(view.state.doc);
   const box = (dom) => {
     const r = dom.getBoundingClientRect();
     const cs = getComputedStyle(dom);
@@ -221,7 +223,8 @@ function collectUnits(view, rootTop, scale) {
       keepLines: text && (lay.keepLines ?? heading),
       widow: text && (lay.widowControl ?? true),
       forceBefore: text && !!lay.pageBreakBefore,
-      forceAfter: !!(node.attrs && node.attrs.sectPr) || breakAtEnd,
+      // разрыв раздела — с новой страницы, кроме «на текущей странице» (w:type continuous у следующего раздела)
+      forceAfter: (!!(node.attrs && node.attrs.sectPr) && sectionType(sectList[sect + 1]) !== 'continuous') || breakAtEnd,
       pageBreakAt,
       sect,
     });

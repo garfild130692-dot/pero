@@ -21,6 +21,8 @@ export const Icon = {
   newWindowDoc: (p) => <S {...p}><rect x="3" y="5" width="14" height="12" rx="1" /><path d="M7 3h14v12" /><path d="M10 9v4M8 11h4" /></S>,
   arrange: (p) => <S {...p}><rect x="3" y="4" width="8" height="16" rx="1" /><rect x="13" y="4" width="8" height="16" rx="1" /></S>,
   windows: (p) => <S {...p}><rect x="3" y="7" width="13" height="11" rx="1" /><path d="M7 7V4h14v11h-5" /></S>,
+  blankPage: (p) => <S {...p}><path d="M6 2h8l4 4v16H6z" /><path d="M14 2v4h4" /></S>,
+  pageBreak: (p) => <S {...p}><path d="M6 3v6h12V3M6 21v-6h12v6" /><path d="M3 12h4M10 12h4M17 12h4" /></S>,
   sort: (p) => <S {...p}><path d="M4 10 6.5 4 9 10M4.8 8h3.4M4 14h5l-5 6h5" strokeWidth="1.5" /><path d="M17 4v16m-3-3 3 3 3-3" /></S>,
   select: (p) => <S {...p}><path d="M4 4h4M4 4v4M20 4h-4M20 4v4M4 20h4M4 20v-4M20 20h-4M20 20v-4" /><path d="m10 9 6 3-3 1-1 3z" /></S>,
   home: (p) => <S {...p}><path d="M3 11 12 4l9 7" /><path d="M5 10v10h5v-6h4v6h5V10" /></S>,

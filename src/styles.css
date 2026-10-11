@@ -338,7 +338,7 @@ body { background: var(--workspace); overflow: hidden; }
   .page { zoom: 1 !important; width: auto !important; min-height: 0 !important; padding: 0 !important; margin: 0; box-shadow: none; }
   .page-content { min-height: 0; }
   p:has(> .opaque-pageBreak) { break-after: page; }
-  [data-section-break] { break-after: page; }
+  [data-section-break]:not([data-section-type="continuous"]) { break-after: page; }
   [data-section-break]::after, .opaque-pageBreak, .opaque-columnBreak { display: none !important; }
   .pero-image.selected { outline: none; }
   .pero-image-handle { display: none !important; }
@@ -862,3 +862,9 @@ p[data-section-break]::after {
 .goto-body .bm-list { height: 240px; margin: 0; }
 .goto-side { display: flex; flex-direction: column; gap: 8px; }
 .sort-order { display: flex; gap: 18px; margin: 10px 0; }
+
+/* подписи разрывов раздела по типу следующего раздела */
+p[data-section-type="continuous"]::after { content: 'Разрыв раздела (на текущей странице)'; border-top-style: dotted; }
+p[data-section-type="evenPage"]::after { content: 'Разрыв раздела (с чётной страницы)'; }
+p[data-section-type="oddPage"]::after { content: 'Разрыв раздела (с нечётной страницы)'; }
+p[data-section-type="nextPage"]::after { content: 'Разрыв раздела (со следующей страницы)'; }

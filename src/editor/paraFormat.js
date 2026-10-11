@@ -84,7 +84,7 @@ export const ParaFormat = Extension.create({
           default: null,
           keepOnSplit: false,
           parseHTML: () => null,
-          renderHTML: (a) => (a.sectPr ? { 'data-section-break': 'true' } : {}),
+          renderHTML: (a) => (a.sectPr ? { 'data-section-break': 'true' } : {}), // подпись — плагин sectionBreakLabels (тип следующего раздела)
         },
       },
     }];
