@@ -92,6 +92,8 @@ const esc = (s) =>
 
 // Идентификаторы стилей, на которые ссылается экспорт. В исходном файле они могут быть другими
 // (русский Word: «1» вместо Heading1) — тогда берутся из его styles.xml по внутреннему имени стиля.
+const RUN_SPECIAL = { '\t': '<w:tab/>', '‑': '<w:noBreakHyphen/>', '­': '<w:softHyphen/>' };
+
 const OUR_STYLE_IDS = {
   Heading1: 'Heading1', Heading2: 'Heading2', Heading3: 'Heading3', Heading4: 'Heading4', Heading5: 'Heading5', Heading6: 'Heading6',
   ListParagraph: 'ListParagraph', Hyperlink: 'Hyperlink', TableGrid: 'TableGrid',
@@ -177,10 +179,11 @@ class Exporter {
       const pt = node.attrs && node.attrs.ptab;
       inner = pt ? `<w:ptab w:relativeTo="${esc(pt.relativeTo || 'margin')}" w:alignment="${esc(pt.alignment || 'left')}" w:leader="${esc(pt.leader || 'none')}"/>` : '<w:tab/>';
     } else {
-      node.text.split('\t').forEach((p, i) => {
-        if (i > 0) inner += '<w:tab/>';
-        if (p) inner += `<${tTag} xml:space="preserve">${esc(p)}</${tTag}>`;
-      });
+      // табуляция, неразрывный дефис (U+2011) и мягкий перенос (U+00AD) — отдельными элементами, как пишет Word
+      for (const p of node.text.split(/([\t‑­])/)) {
+        if (RUN_SPECIAL[p]) inner += RUN_SPECIAL[p];
+        else if (p) inner += `<${tTag} xml:space="preserve">${esc(p)}</${tTag}>`;
+      }
     }
     let r = `<w:r>${rPrXml}${inner}</w:r>`;
     // исправления: w:ins / w:del вокруг прогона (гиперссылка — снаружи)

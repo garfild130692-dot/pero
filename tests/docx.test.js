@@ -940,3 +940,15 @@ describe('колонки текста', () => {
     expect(out).toContain('<w:cols w:num="2" w:space="720"/>');
   });
 });
+
+describe('особые символы', () => {
+  it('неразрывный дефис и мягкий перенос ↔ w:noBreakHyphen / w:softHyphen, неразрывный пробел — текстом', async () => {
+    const json = { type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text: 'из‑за пере­нос 10 км' }] }] };
+    const bytes = await exportDocx(json);
+    const xml = await (await JSZip.loadAsync(bytes)).file('word/document.xml').async('string');
+    expect(xml).toContain('<w:t xml:space="preserve">из</w:t><w:noBreakHyphen/><w:t xml:space="preserve">за пере</w:t><w:softHyphen/>');
+    expect(xml).toContain('10 км');
+    const back = (await importDocx(bytes)).doc;
+    expect(back.content[0].content.map((n) => n.text).join('')).toBe('из‑за пере­нос 10 км');
+  });
+});

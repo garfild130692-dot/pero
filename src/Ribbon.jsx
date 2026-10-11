@@ -18,6 +18,8 @@ import { LINE_PRESETS, fmtNum } from './editor/paragraph.js';
 import { ParaBordersButton, ParaShadingButton } from './ParaLayoutControls.jsx';
 import { UNDERLINES } from './editor/extensions.js';
 import { CASES, painterKey } from './editor/runFormat.js';
+import { marksKey } from './editor/marks.js';
+import { SymbolButton } from './SymbolDialog.jsx';
 import { BordersButton, RowHeightField, ShadingButton, TableIcons, tableState } from './TableControls.jsx';
 
 function Btn({ icon, label, title, onClick, onDoubleClick, active, disabled, big, children }) {
@@ -227,7 +229,7 @@ function TableStylesButton({ editor }) {
   );
 }
 
-export default function Ribbon({ editor, file, onLink, onFont, onParagraph, onMargins, onHf, onFind, onStyle, review }) {
+export default function Ribbon({ editor, file, onLink, onFont, onSymbol, onParagraph, onMargins, onHf, onFind, onStyle, review }) {
   const [tab, setTab] = useState('home');
   const tablePicker = usePopover();
 
@@ -239,6 +241,7 @@ export default function Ribbon({ editor, file, onLink, onFont, onParagraph, onMa
       underline: e.isActive('underline'),
       underlineKind: e.isActive('underline') ? e.getAttributes('underline').kind || 'single' : null,
       painter: painterKey.getState(e.state).mode,
+      showMarks: marksKey.getState(e.state).on,
       strike: e.isActive('strike'),
       bullet: e.isActive('bulletList'),
       ordered: e.isActive('orderedList'),
@@ -376,6 +379,7 @@ export default function Ribbon({ editor, file, onLink, onFont, onParagraph, onMa
                   <Btn icon="alignJustify" title="По ширине (Ctrl+Shift+J)" active={s.align === 'justify'} onClick={() => c().setTextAlign('justify').run()} />
                   <LineSpacingButton editor={editor} para={s.para} onMore={onParagraph} />
                   <ParaShadingButton editor={editor} />
+                  <Btn title="Отобразить все знаки (Ctrl+Shift+8)" active={s.showMarks} onClick={() => c().toggleFormattingMarks().run()}><span className="glyph">¶</span></Btn>
                   <ParaBordersButton editor={editor} />
                 </div>
               </div>
@@ -448,6 +452,9 @@ export default function Ribbon({ editor, file, onLink, onFont, onParagraph, onMa
             </Group>
             <Group title="Текст">
               <Btn big icon="lineBreak" label="Разрыв строки" title="Разрыв строки (Shift+Enter)" onClick={() => c().setHardBreak().run()} />
+            </Group>
+            <Group title="Символы">
+              <SymbolButton editor={editor} Btn={Btn} onMore={onSymbol} />
             </Group>
           </>
         )}

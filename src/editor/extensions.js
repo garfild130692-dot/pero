@@ -26,6 +26,7 @@ import { ParagraphStyles, styleOf } from './styles.js';
 import { Comments } from './comments.js';
 import { Deletion, Insertion, TrackChanges } from './track.js';
 import { RunFormat } from './runFormat.js';
+import { FormattingMarks } from './marks.js';
 
 // Как оформлены заголовки — font.js (совпадает со styles.css и стилями Heading1–6 в export.js)
 export { HEADING_FONT, HEADING_SIZES };
@@ -266,6 +267,7 @@ export const extensions = [
   Deletion,
   TrackChanges,
   RunFormat,
+  FormattingMarks,
   PeroTable.configure({ resizable: true }),
   PeroTableRow,
   PeroTableCell,
