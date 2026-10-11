@@ -7,7 +7,7 @@ import { fmtNum } from './editor/paragraph.js';
 // Изменить атрибут документа одной транзакцией (с отменой по Ctrl+Z)
 const setDocAttr = (editor, name, value) => editor.chain().focus().command(({ tr }) => { tr.setDocAttribute(name, value); return true; }).run();
 // Параметры страницы — раздела под курсором (как в Word): абзац с разрывом раздела или последний раздел документа
-const setPage = (editor, patch) => {
+export const setPage = (editor, patch) => {
   const sec = sectionAt(editor.state);
   if (sec.pos == null) { setDocAttr(editor, 'sectPr', patchSectPr(sec.sectPr, patch)); return; }
   editor.chain().focus().command(({ tr }) => {

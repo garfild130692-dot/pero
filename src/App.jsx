@@ -15,6 +15,7 @@ import { BookmarkDialog, CrossRefDialog, DateDialog } from './RefDialogs.jsx';
 import { NavPane, ZoomDialog, clampZoom, fitZoom, loadViewPrefs, saveViewPrefs } from './ViewControls.jsx';
 import { setDraft } from './editor/pagination.js';
 import { Icon } from './icons.jsx';
+import VRuler from './VRuler.jsx';
 import { ListFormatDialog, MultilevelDialog } from './NumberingDialogs.jsx';
 import { cssFontStack } from './editor/font.js';
 import { NEW_DOC_PARA } from './editor/paragraph.js';
@@ -499,6 +500,7 @@ export default function App({ initialFile, onOpenOther, onNewSheet, autosaveSec 
         <PageScaler scale={zoom / 100}>
           <div className={`page${frame.mixed ? ' pero-multi' : ''}${viewMode === 'draft' ? ' draft' : ''}`} style={{ ...pageVars(docFont), ...pageBox(pageGeo) }}>
             {viewMode !== 'draft' && <PageChrome geo={chromeGeo.head} footGeo={chromeGeo.foot} hf={(docFont && docFont.hf) || EMPTY_HF} chrome={docFont && docFont.chrome} total={(docFont && docFont.total) || 1} />}
+            {viewPrefs.ruler && viewMode === 'print' && <VRuler editor={editor} />}
             <EditorContent editor={editor} />
             <PrintNotes editor={editor} />
           </div>

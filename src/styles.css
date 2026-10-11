@@ -773,3 +773,12 @@ p[data-section-break]::after {
 .nav-item.current { background: var(--accent-soft); border-left-color: var(--accent); }
 .nav-num { color: #666; margin-right: 6px; }
 @media print { .nav-pane, .read-bar { display: none !important; } }
+
+/* вертикальная линейка (VRuler.jsx): слева от листа, на высоте текущего листа */
+.vruler { position: absolute; left: -26px; width: 16px; z-index: 3; user-select: none; }
+.vruler svg { display: block; width: 16px; height: 100%; }
+.vruler .ruler-ticks text { font: 7px 'Segoe UI', sans-serif; }
+.vruler .vm { position: absolute; left: 0; width: 18px; height: 7px; margin-top: -3.5px; cursor: ns-resize; }
+.vruler .vm:hover { background: rgba(31, 111, 92, .25); }
+.vruler-guide { position: absolute; left: 0; width: 100vw; border-top: 1px dashed #333; pointer-events: none; }
+@media print { .vruler { display: none !important; } }

@@ -496,6 +496,7 @@ function measure(view) {
   const perPage = Array.from({ length: total }, () => []);
   for (const n of notes) perPage[starts.filter((p) => p <= n.pos).length].push(n);
   placeNotes(view, perPage);
+  view.dom.dispatchEvent(new Event('pero-paginated', { bubbles: true })); // вертикальная линейка и т.п. — листы на местах
 }
 
 // ---------- Сноски внизу листа ----------
