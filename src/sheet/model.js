@@ -775,6 +775,21 @@ export function shiftCells(wb, si, axis, at, count) {
         next.printArea = span ? { ...sheet.printArea, [k1]: span[0], [k2]: span[1] } : null;
         if (!span) delete next.printArea;
       }
+      // условное форматирование: диапазоны и формулы правил
+      if (sheet.cf) {
+        const cf = [];
+        for (const b of sheet.cf) {
+          const ranges = b.ranges.map((g) => { const sp = shiftSpan(g[k1], g[k2], at, count); return sp ? { ...g, [k1]: sp[0], [k2]: sp[1] } : null; }).filter(Boolean);
+          if (!ranges.length) continue;
+          const rules = b.rules.map((rule) => {
+            if (!rule.formulas && !(rule.raw && /<formula>/.test(rule.raw))) return rule;
+            const formulas = rule.formulas && rule.formulas.map((f) => shiftFormula(f, { sheet: name, current: sheet.name, axis, at, count }));
+            return { ...rule, ...(formulas ? { formulas } : {}), edited: true };
+          });
+          cf.push({ ranges, rules });
+        }
+        next.cf = cf;
+      }
       // автофильтр: диапазон и номера столбцов условий
       if (sheet.autoFilter) {
         const af = sheet.autoFilter;
@@ -1100,6 +1115,42 @@ export function fillSeries(wb, si, src, dst, opts = {}) {
   return recalc(withSheet(wb, si, { ...sheet, cells }));
 }
 const cleanFormula = (cell) => { for (const n of ['arr', 'ax', 'legacy', 'cse']) delete cell[n]; return cell; };
+
+// ---------- Условное форматирование ----------
+// Новое правило — с наивысшим приоритетом (1), остальные сдвигаются, как в Excel. ranges — куда применить
+export function addCfRule(wb, si, ranges, rule) {
+  const sheet = wb.sheets[si];
+  const cf = (sheet.cf || []).map((b) => ({ ...b, rules: b.rules.map((r) => ({ ...r, priority: r.priority + 1 })) }));
+  cf.push({ ranges, rules: [{ ...rule, priority: 1, edited: true }] });
+  return withSheet(wb, si, { ...sheet, cf });
+}
+// Вычесть прямоугольник b из a: до четырёх частей
+function subtractRect(a, b) {
+  if (b.r1 > a.r2 || b.r2 < a.r1 || b.c1 > a.c2 || b.c2 < a.c1) return [a];
+  const out = [];
+  if (a.r1 < b.r1) out.push({ r1: a.r1, c1: a.c1, r2: b.r1 - 1, c2: a.c2 });
+  if (a.r2 > b.r2) out.push({ r1: b.r2 + 1, c1: a.c1, r2: a.r2, c2: a.c2 });
+  const r1 = Math.max(a.r1, b.r1); const r2 = Math.min(a.r2, b.r2);
+  if (a.c1 < b.c1) out.push({ r1, c1: a.c1, r2, c2: b.c1 - 1 });
+  if (a.c2 > b.c2) out.push({ r1, c1: b.c2 + 1, r2, c2: a.c2 });
+  return out;
+}
+// Удалить правила: из выделенных ячеек (rg) — диапазоны правил урезаются; rg = null — со всего листа
+export function clearCf(wb, si, rg) {
+  const sheet = wb.sheets[si];
+  if (!sheet.cf) return wb;
+  const next = { ...sheet };
+  if (!rg) delete next.cf;
+  else {
+    next.cf = sheet.cf.map((b) => {
+      const ranges = b.ranges.flatMap((g) => subtractRect(g, rg));
+      const changed = ranges.length !== b.ranges.length || ranges.some((g, i) => JSON.stringify(g) !== JSON.stringify(b.ranges[i]));
+      return changed ? { ranges, rules: b.rules } : b;
+    }).filter((b) => b.ranges.length);
+    if (!next.cf.length) delete next.cf;
+  }
+  return withSheet(wb, si, next);
+}
 
 // ---------- Автофильтр и сортировка ----------
 // «Текущая область» вокруг ячейки (как Ctrl+A / Ctrl+Shift+L в Excel): расширяется, пока по краям есть данные

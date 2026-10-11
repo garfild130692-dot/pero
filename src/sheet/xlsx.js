@@ -7,6 +7,7 @@ import { BUILTIN_FMT } from './format.js';
 import { maxLevel, newSheet, recalc, DEFAULT_COL_W, DEFAULT_ROW_H } from './model.js';
 import { parsePrintArea, parsePrintTitles, printAreaText, printTitlesText } from './pageSetup.js';
 import { filterColumnXml, readFilterColumn } from './filter.js';
+import { cfSignature, cfXml, dxfXml, readCf, readDxf } from './cf.js';
 
 const NS = 'http://schemas.openxmlformats.org/spreadsheetml/2006/main';
 const R = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships';
@@ -157,6 +158,9 @@ async function readBook(zip) {
   const stylesPath = relOf('styles') ? relOf('styles').target : null;
   const stylesDoc = stylesPath ? await read(stylesPath) : null;
   const styles = parseStyles(stylesDoc, theme);
+  // стили условного форматирования (dxfs)
+  const colorOf = (el) => readColor(el, theme);
+  const dxfs = stylesDoc ? kids(kid(stylesDoc.documentElement, 'dxfs'), 'dxf').map((d) => readDxf(d, colorOf)) : [];
   const sstPath = relOf('sharedStrings') ? relOf('sharedStrings').target : null;
   const sstDoc = sstPath ? await read(sstPath) : null;
   const sstEls = sstDoc ? kids(sstDoc.documentElement, 'si') : [];
@@ -173,7 +177,7 @@ async function readBook(zip) {
     const rel = rels[rid];
     return { name: se.getAttribute('name'), rid, target: rel ? rel.target : null, worksheet: !!rel && /\/worksheet$/.test(rel.type) };
   });
-  return { text, read, wbPath, wbDoc, dir, relsPath, rels, stylesPath, stylesDoc, styles, sstPath, sst, sstPlain, date1904, sheets };
+  return { text, read, wbPath, wbDoc, dir, relsPath, rels, stylesPath, stylesDoc, styles, dxfs, colorOf, sstPath, sst, sstPlain, date1904, sheets };
 }
 
 // Ячейки листа: on.cell(r, c, cell, el, shared) — для каждой непустой <c>; on.row(r, el) — для каждой <row>
@@ -286,6 +290,9 @@ function readProtection(root) {
   for (let i = 0; i < el.attributes.length; i++) attrs[el.attributes[i].name] = el.attributes[i].value;
   return { attrs };
 }
+// Условное форматирование листа (cf.js)
+const serializeEl = (el) => new XMLSerializer().serializeToString(el).replace(/\sxmlns(:\w+)?="[^"]*"/g, '');
+const readSheetCf = (root, book) => readCf(root, { dxfs: book.dxfs, readColor: book.colorOf, parseRange, serialize: serializeEl });
 // Автофильтр: { ref, cols, raw } (filter.js); непонятные условия столбцов (top10, по цвету…) — исходным XML
 function readAutoFilter(root) {
   const el = kid(root, 'autoFilter');
@@ -457,7 +464,11 @@ export async function importXlsx(data, { recalc: doRecalc = true } = {}) {
     const pn = readPrintNames(wbDoc, idx);
     if (pn.printArea) sheet.printArea = pn.printArea;
     if (pn.printTitles) sheet.printTitles = pn.printTitles;
-    if (kid(root, 'conditionalFormatting')) keep('условное форматирование');
+    const cf = readSheetCf(root, book);
+    if (cf.length) {
+      sheet.cf = cf;
+      if (cf.some((b) => b.rules.some((r) => r.unknown))) keep('наборы значков в условном форматировании');
+    }
     if (kid(root, 'dataValidations')) keep('проверка данных');
     if (kid(root, 'drawing')) keep('рисунки и диаграммы');
     if (kid(root, 'tableParts')) keep('«умные» таблицы');
@@ -513,6 +524,16 @@ function buildStyles(wb, base = null) {
   const fmtIds = base ? { ...base.fmts } : {};
   let nextFmt = Math.max(163, ...Object.values(fmtIds)) + 1;
   const numFmts = []; // новые { id, code }
+  // стили условного форматирования: исходные — на местах, новые — в конец
+  const dxfs = base ? Array(base.counts.dxfs || 0).fill(null) : [];
+  const dxfSrc = new Map(); const dxfIndex = new Map();
+  if (base && base.dxfs) base.dxfs.forEach((d, i) => dxfSrc.set(d, i));
+  const dxfIdOf = (d) => {
+    if (dxfSrc.has(d)) return dxfSrc.get(d);
+    const k = JSON.stringify(d);
+    if (!dxfIndex.has(k)) { dxfs.push(dxfXml(d)); dxfIndex.set(k, dxfs.length - 1); }
+    return dxfIndex.get(k);
+  };
   const index = new Map(); // JSON стиля → номер xf
   const srcIndex = new Map(); // стиль файла (объект) → его номер xf
   if (base) base.styles.forEach((s, i) => { if (s && !srcIndex.has(s)) srcIndex.set(s, i); });
@@ -552,8 +573,10 @@ function buildStyles(wb, base = null) {
     index.set(k, xfs.length - 1);
     return xfs.length - 1;
   };
-  // проходим все ячейки заранее, чтобы таблица стилей была полной
+  // проходим все ячейки и правила заранее, чтобы таблица стилей была полной
   for (const sh of wb.sheets) for (const cell of sh.cells.values()) xfOf(cell.s);
+  for (const sh of wb.sheets) for (const b of sh.cf || []) for (const r of b.rules) if (r.dxf && (!r.raw || r.edited)) dxfIdOf(r.dxf);
+  xfOf.dxf = dxfIdOf;
   const added = (arr, n) => arr.slice(n);
   if (base) {
     return {
@@ -562,6 +585,7 @@ function buildStyles(wb, base = null) {
         numFmts: numFmts.map((f) => `<numFmt numFmtId="${f.id}" formatCode="${esc(f.code)}"/>`),
         fonts: added(fonts, base.counts.fonts), fills: added(fills, base.counts.fills),
         borders: added(borders, base.counts.borders), cellXfs: added(xfs, base.counts.xfs),
+        dxfs: added(dxfs, base.counts.dxfs || 0),
       },
     };
   }
@@ -571,7 +595,8 @@ function buildStyles(wb, base = null) {
     `<borders count="${borders.length}">${borders.join('')}</borders>` +
     '<cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>' +
     `<cellXfs count="${xfs.length}">${xfs.join('')}</cellXfs>` +
-    '<cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles></styleSheet>';
+    '<cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles>' +
+    (dxfs.length ? `<dxfs count="${dxfs.length}">${dxfs.join('')}</dxfs>` : '') + '</styleSheet>';
   return { xml, xfOf };
 }
 
@@ -731,7 +756,7 @@ function newSheetXml(sheet, active, xfOf, str, cm = '1') {
   const cols = colsXml(sheet, false);
   const xml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<worksheet xmlns="${NS}" xmlns:r="${R}">` +
     `${dimensionXml(sheet)}<sheetViews><sheetView workbookViewId="0"${active ? ' tabSelected="1"' : ''}${sheet.freeze ? `>${paneXml(sheet.freeze)}</sheetView>` : '/>'}</sheetViews>` +
-    `${formatPrXml('<sheetFormatPr defaultRowHeight="15"/>', sheet)}${cols}${sheetDataXml(sheet, (r, c, cell) => cellXml(cell, addr(r, c), xfOf, str, formulaFx(sheet, key(r, c), cell, cm)), false, xfOf, str)}${protectionXml(sheet.protection)}${autoFilterXml(sheet.autoFilter)}${mergesXml(sheet)}` +
+    `${formatPrXml('<sheetFormatPr defaultRowHeight="15"/>', sheet)}${cols}${sheetDataXml(sheet, (r, c, cell) => cellXml(cell, addr(r, c), xfOf, str, formulaFx(sheet, key(r, c), cell, cm)), false, xfOf, str)}${protectionXml(sheet.protection)}${autoFilterXml(sheet.autoFilter)}${mergesXml(sheet)}${cfXml(sheet.cf, xfOf.dxf, rangeName)}` +
     `${marginsXml((sheet.page && sheet.page.margins) || {})}</worksheet>`;
   return sheet.page ? setPageXml(xml, sheet.page) : xml;
 }
@@ -811,6 +836,7 @@ function patchSheetXml(xml, sheet, active, root, book, xfOf, str, cm) {
   if (JSON.stringify(readPage(root)) !== JSON.stringify(sheet.page || null)) out = setPageXml(out, sheet.page || {});
   if (JSON.stringify(readProtection(root)) !== JSON.stringify(sheet.protection || null)) out = setSheetEl(out, 'sheetProtection', protectionXml(sheet.protection));
   const afChanged = JSON.stringify(readAutoFilter(root)) !== JSON.stringify(sheet.autoFilter || null);
+  const cfChanged = cfSignature(readSheetCf(root, book)) !== cfSignature(sheet.cf);
   const fp = findEl(out, 'sheetFormatPr');
   if (fp) out = out.slice(0, fp.start) + formatPrXml(out.slice(fp.start, fp.end), sheet) + out.slice(fp.end);
   else if (maxLevel(sheet, 'row') || maxLevel(sheet, 'col')) out = setSheetEl(out, 'sheetFormatPr', formatPrXml('<sheetFormatPr defaultRowHeight="15"/>', sheet));
@@ -822,6 +848,12 @@ function patchSheetXml(xml, sheet, active, root, book, xfOf, str, cm) {
   }
   // автофильтр изменён в Пере (или сдвинут) — заново из модели (sortState Excel при этом не сохраняется)
   if (afChanged || shifts.length) out = setSheetEl(out, 'autoFilter', autoFilterXml(sheet.autoFilter));
+  // условное форматирование изменено (или сдвинуто) — все блоки заново из модели; правила, которые Перо не меняло,
+  // пишутся исходной разметкой
+  if (cfChanged || shifts.length) {
+    out = out.replace(/<conditionalFormatting\b[\s\S]*?<\/conditionalFormatting>/g, '');
+    out = setSheetEl(out, 'conditionalFormatting', cfXml(sheet.cf, xfOf.dxf, rangeName));
+  }
   return out;
 }
 
@@ -919,7 +951,7 @@ async function exportWithSource(wb, source) {
   const fmts = {};
   for (const f of kids(kid(stylesRoot, 'numFmts'), 'numFmt')) fmts[f.getAttribute('formatCode')] = +f.getAttribute('numFmtId');
   const base = stylesRoot
-    ? { styles: book.styles, fmts, counts: { fonts: count('fonts', 'font'), fills: count('fills', 'fill'), borders: count('borders', 'border'), xfs: count('cellXfs', 'xf') } }
+    ? { styles: book.styles, dxfs: book.dxfs, fmts, counts: { fonts: count('fonts', 'font'), fills: count('fills', 'fill'), borders: count('borders', 'border'), xfs: count('cellXfs', 'xf'), dxfs: count('dxfs', 'dxf') } }
     : null;
   const st = buildStyles(wb, base);
 
@@ -1106,6 +1138,14 @@ async function exportWithSource(wb, source) {
     sx = appendToList(sx, 'fills', a.fills);
     sx = appendToList(sx, 'borders', a.borders);
     sx = appendToList(sx, 'cellXfs', a.cellXfs);
+    if (a.dxfs.length) {
+      // dxfs стоят после cellStyles (перед tableStyles/colors/extLst); нет — вставить туда
+      if (/<dxfs\b/.test(sx)) sx = appendToList(sx, 'dxfs', a.dxfs);
+      else {
+        const m = /<(tableStyles|colors|extLst)\b|<\/styleSheet>/.exec(sx);
+        sx = `${sx.slice(0, m.index)}<dxfs count="${a.dxfs.length}">${a.dxfs.join('')}</dxfs>${sx.slice(m.index)}`;
+      }
+    }
     zip.file(book.stylesPath, sx);
   } else {
     // в книге без стилей номера xf считались по новой таблице — она и пишется
