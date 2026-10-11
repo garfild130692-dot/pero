@@ -16,6 +16,7 @@ import { key, unkey } from './address.js';
 import { ERR, err, fromUser, localize, evaluate, isErr, offsetFormula, parse, rewriteRefs, shiftFormula } from './formula.js';
 import { parseInput } from './format.js';
 import { extendLine } from './fill.js';
+import { applyFilter } from './filter.js';
 
 export const DEFAULT_COL_W = 72;  // px (≈ 8,43 символа Calibri 11, как в Excel)
 export const DEFAULT_ROW_H = 20;  // px (15 pt)
@@ -273,6 +274,7 @@ export function recalc(wb, opts = {}) {
         get, sheet: sheetName, extent, sheetsBetween, name: nameValue(sheetName), spill: spillRef, markArray, cur: null, depRange, depDone,
         formulaAt: (sh, r, c) => { const s0 = sheetByName(wb, sh); const cell = s0 && s0.cells.get(key(r, c)); return cell && cell.f != null ? cell.f : null; },
         rowHidden: (sh, r) => { const s0 = sheetByName(wb, sh); return !!(s0 && s0.rowInfo && s0.rowInfo[r] && s0.rowInfo[r].hidden); },
+        rowFiltered: (sh, r) => { const s0 = sheetByName(wb, sh); return !!(s0 && s0.rowInfo && s0.rowInfo[r] && s0.rowInfo[r].hidden && s0.rowInfo[r].filtered); },
         sheetIndex: (name) => wb.sheets.findIndex((x) => x.name.toLowerCase() === String(name).toLowerCase()),
         sheetCount: () => wb.sheets.length,
         nameDef: (n) => {
@@ -624,6 +626,7 @@ export function viewContext(wb, si, r, c) {
     spill: (sh, rr, cc) => { const s = sheetOf(sh); const cell = s && s.cells.get(key(rr, cc)); if (!cell || cell.f == null) return err(ERR.REF); return cell.arr || [[cell.v]]; },
     formulaAt: (sh, rr, cc) => { const s = sheetOf(sh); const cell = s && s.cells.get(key(rr, cc)); return cell && cell.f != null ? cell.f : null; },
     rowHidden: (sh, rr) => { const s = sheetOf(sh); return !!(s && s.rowInfo && s.rowInfo[rr] && s.rowInfo[rr].hidden); },
+    rowFiltered: (sh, rr) => { const s = sheetOf(sh); return !!(s && s.rowInfo && s.rowInfo[rr] && s.rowInfo[rr].hidden && s.rowInfo[rr].filtered); },
     sheetIndex: (name) => wb.sheets.findIndex((x) => x.name.toLowerCase() === String(name).toLowerCase()),
     sheetCount: () => wb.sheets.length,
   };
@@ -771,6 +774,28 @@ export function shiftCells(wb, si, axis, at, count) {
         const span = shiftSpan(sheet.printArea[k1], sheet.printArea[k2], at, count);
         next.printArea = span ? { ...sheet.printArea, [k1]: span[0], [k2]: span[1] } : null;
         if (!span) delete next.printArea;
+      }
+      // автофильтр: диапазон и номера столбцов условий
+      if (sheet.autoFilter) {
+        const af = sheet.autoFilter;
+        const span = shiftSpan(af.ref[k1], af.ref[k2], at, count);
+        if (!span) delete next.autoFilter;
+        else {
+          let { cols, raw } = af;
+          if (axis === 'col') {
+            const move = (o) => {
+              const out = {};
+              for (const [j, x] of Object.entries(o || {})) {
+                const c = af.ref.c1 + +j;
+                if (count < 0 && c >= at && c < at - count) continue;
+                out[(c >= at ? c + count : c) - span[0]] = x;
+              }
+              return out;
+            };
+            cols = move(cols); raw = move(raw);
+          }
+          next.autoFilter = { ...af, ref: { ...af.ref, [k1]: span[0], [k2]: span[1] }, cols, ...(raw ? { raw } : {}) };
+        }
       }
       const tk = axis === 'row' ? 'rows' : 'cols';
       if (sheet.printTitles && sheet.printTitles[tk]) {
@@ -951,33 +976,7 @@ export const mergeAt = (sheet, r, c) => sheet.merges.find((m) => r >= m.r1 && r 
 // ---------- Сортировка ----------
 // Строки диапазона упорядочиваются по столбцу col; пустые — в конце; формулы сдвигаются вместе со строкой
 export function sortRange(wb, si, rg, col, asc = true) {
-  const sheet = wb.sheets[si];
-  const rows = [];
-  for (let r = rg.r1; r <= rg.r2; r++) {
-    const cells = [];
-    for (let c = rg.c1; c <= rg.c2; c++) cells.push(sheet.cells.get(key(r, c)) || null);
-    rows.push({ r, cells, k: (sheet.cells.get(key(r, col)) || {}).v ?? null });
-  }
-  const rank = (v) => (v == null || v === '' ? 3 : typeof v === 'number' ? 0 : typeof v === 'string' ? 1 : 2);
-  rows.sort((a, b) => {
-    const ra = rank(a.k); const rb = rank(b.k);
-    if (ra === 3 || rb === 3) return ra - rb;
-    if (ra !== rb) return asc ? ra - rb : rb - ra;
-    const x = typeof a.k === 'string' ? a.k.toLowerCase() : +a.k;
-    const y = typeof b.k === 'string' ? b.k.toLowerCase() : +b.k;
-    const d = typeof x === 'string' ? x.localeCompare(y, 'ru') : x - y;
-    return asc ? d : -d;
-  });
-  const cells = new Map(sheet.cells);
-  rows.forEach((row, i) => {
-    const r = rg.r1 + i;
-    row.cells.forEach((cell, j) => {
-      const k = key(r, rg.c1 + j);
-      if (!cell) { cells.delete(k); return; }
-      cells.set(k, cell.f != null ? { ...cell, f: offsetFormula(cell.f, r - row.r, 0) } : cell);
-    });
-  });
-  return recalc(withSheet(wb, si, { ...sheet, cells }));
+  return sortRows(wb, si, rg, [{ col, desc: !asc }]);
 }
 
 // ---------- Буфер обмена ----------
@@ -1101,6 +1100,93 @@ export function fillSeries(wb, si, src, dst, opts = {}) {
   return recalc(withSheet(wb, si, { ...sheet, cells }));
 }
 const cleanFormula = (cell) => { for (const n of ['arr', 'ax', 'legacy', 'cse']) delete cell[n]; return cell; };
+
+// ---------- Автофильтр и сортировка ----------
+// «Текущая область» вокруг ячейки (как Ctrl+A / Ctrl+Shift+L в Excel): расширяется, пока по краям есть данные
+export function currentRegion(sheet, r, c) {
+  const has = (rr, cc) => { if (rr < 0 || cc < 0) return false; const x = sheet.cells.get(key(rr, cc)); return !!(x && x.v != null && x.v !== ''); };
+  let rg = { r1: r, c1: c, r2: r, c2: c };
+  for (let grew = true; grew;) {
+    grew = false;
+    const rowHas = (rr) => { for (let cc = rg.c1 - 1; cc <= rg.c2 + 1; cc++) if (has(rr, cc)) return true; return false; };
+    const colHas = (cc) => { for (let rr = rg.r1 - 1; rr <= rg.r2 + 1; rr++) if (has(rr, cc)) return true; return false; };
+    if (rg.r1 > 0 && rowHas(rg.r1 - 1)) { rg = { ...rg, r1: rg.r1 - 1 }; grew = true; }
+    if (rowHas(rg.r2 + 1)) { rg = { ...rg, r2: rg.r2 + 1 }; grew = true; }
+    if (rg.c1 > 0 && colHas(rg.c1 - 1)) { rg = { ...rg, c1: rg.c1 - 1 }; grew = true; }
+    if (colHas(rg.c2 + 1)) { rg = { ...rg, c2: rg.c2 + 1 }; grew = true; }
+  }
+  return rg;
+}
+// Включить автофильтр на диапазоне (одна ячейка — её текущая область) или снять (rg = null: строки, скрытые
+// фильтром, показываются)
+export function setAutoFilter(wb, si, rg) {
+  const sheet = wb.sheets[si];
+  if (!rg) {
+    if (!sheet.autoFilter) return wb;
+    const rowInfo = { ...(sheet.rowInfo || {}) };
+    for (const [r, info] of Object.entries(rowInfo)) if (info.filtered) { const n = { ...info }; delete n.hidden; delete n.filtered; if (Object.keys(n).length) rowInfo[r] = n; else delete rowInfo[r]; }
+    const next = { ...sheet, rowInfo };
+    delete next.autoFilter;
+    return recalc(withSheet(wb, si, next));
+  }
+  const ref = rg.r1 === rg.r2 && rg.c1 === rg.c2 ? currentRegion(sheet, rg.r1, rg.c1) : rg;
+  return withSheet(wb, si, { ...sheet, autoFilter: { ref, cols: {} } });
+}
+// Условие столбца j (от левого края фильтра); null — снять условие. Строки скрываются/показываются заново
+export function setColumnFilter(wb, si, j, crit) {
+  const sheet = wb.sheets[si];
+  if (!sheet.autoFilter) return wb;
+  const cols = { ...sheet.autoFilter.cols };
+  if (crit) cols[j] = crit; else delete cols[j];
+  const raw = { ...(sheet.autoFilter.raw || {}) }; delete raw[j];
+  return reapplyFilter(withSheet(wb, si, { ...sheet, autoFilter: { ...sheet.autoFilter, cols, raw } }), si);
+}
+// «Повторить» (Excel: Данные → Применить повторно) — после правок данных; захватывает дописанные снизу строки
+export function reapplyFilter(wb, si) {
+  const sheet = wb.sheets[si];
+  if (!sheet.autoFilter) return wb;
+  const { rowInfo, ref } = applyFilter(sheet, sheet.autoFilter);
+  return recalc(withSheet(wb, si, { ...sheet, rowInfo, autoFilter: { ...sheet.autoFilter, ref } }));
+}
+// Сортировка строк диапазона по нескольким ключам: keys = [{ col (номер столбца листа), desc }]; header — первая
+// строка — заголовки (не сортируется). Порядок как в Excel: числа < текст < логические < ошибки, пустые — в конце
+// при любом направлении; равные — в прежнем порядке
+export function sortRows(wb, si, rg, keys, { header = false } = {}) {
+  const sheet = wb.sheets[si];
+  const top = header ? rg.r1 + 1 : rg.r1;
+  if (top >= rg.r2) return wb;
+  const rows = [];
+  for (let r = top; r <= rg.r2; r++) {
+    const cells = [];
+    for (let c = rg.c1; c <= rg.c2; c++) cells.push(sheet.cells.get(key(r, c)) || null);
+    rows.push({ r, cells, k: keys.map((kk) => (sheet.cells.get(key(r, kk.col)) || {}).v ?? null) });
+  }
+  const rank = (v) => (v == null || v === '' ? 4 : typeof v === 'number' ? 0 : typeof v === 'string' ? 1 : typeof v === 'boolean' ? 2 : 3);
+  const cmp = (a, b, desc) => {
+    const ra = rank(a); const rb = rank(b);
+    if (ra === 4 || rb === 4) return ra - rb; // пустые всегда внизу
+    if (ra !== rb) return desc ? rb - ra : ra - rb;
+    let d = 0;
+    if (ra === 0) d = a - b;
+    else if (ra === 1) d = a.localeCompare(b, 'ru', { sensitivity: 'base', numeric: false });
+    else if (ra === 2) d = (a ? 1 : 0) - (b ? 1 : 0);
+    return desc ? -d : d;
+  };
+  const order = rows.map((x, i) => i);
+  order.sort((i, j) => { for (let t = 0; t < keys.length; t++) { const d = cmp(rows[i].k[t], rows[j].k[t], keys[t].desc); if (d) return d; } return i - j; });
+  const cells = new Map(sheet.cells);
+  order.forEach((from, i) => {
+    const row = rows[from]; const r = top + i;
+    row.cells.forEach((cell, j) => {
+      const k = key(r, rg.c1 + j);
+      if (!cell) { cells.delete(k); return; }
+      cells.set(k, cell.f != null ? { ...cell, f: offsetFormula(cell.f, r - row.r, 0) } : cell);
+    });
+  });
+  let next = { ...sheet, cells };
+  if (next.autoFilter) next = { ...next, rowInfo: applyFilter(next, next.autoFilter).rowInfo };
+  return recalc(withSheet(wb, si, next));
+}
 
 // Автосумма для ячейки (r, c): ближайший непрерывный блок чисел сверху (иначе слева)
 export function autoSumFormula(sheet, r, c) {

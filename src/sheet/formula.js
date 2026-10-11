@@ -381,7 +381,7 @@ function compare(a, b) {
 const eq15 = (x, y) => x === y || (Number.isFinite(x) && Number.isFinite(y) && x.toPrecision(15) === y.toPrecision(15));
 
 // Подстановочные знаки Excel (* ? и ~ для экранирования) → RegExp; null — их нет
-function wildcard(text) {
+export function wildcard(text) {
   if (!/[*?]/.test(text)) return null;
   let re = '';
   for (let i = 0; i < text.length; i++) {

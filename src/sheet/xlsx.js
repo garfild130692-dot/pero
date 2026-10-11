@@ -1,11 +1,12 @@
 // Импорт/экспорт .xlsx — собственный код (JSZip + xmldom), как и для .docx.
 import JSZip from 'jszip';
-import { DOMParser } from '@xmldom/xmldom';
+import { DOMParser, XMLSerializer } from '@xmldom/xmldom';
 import { addr, colIndex, key, MAX_COLS, parseRange, rangeName, unkey } from './address.js';
 import { canonical, fileFormula, isErr, offsetFormula, shiftFormula } from './formula.js';
 import { BUILTIN_FMT } from './format.js';
 import { maxLevel, newSheet, recalc, DEFAULT_COL_W, DEFAULT_ROW_H } from './model.js';
 import { parsePrintArea, parsePrintTitles, printAreaText, printTitlesText } from './pageSetup.js';
+import { filterColumnXml, readFilterColumn } from './filter.js';
 
 const NS = 'http://schemas.openxmlformats.org/spreadsheetml/2006/main';
 const R = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships';
@@ -285,6 +286,28 @@ function readProtection(root) {
   for (let i = 0; i < el.attributes.length; i++) attrs[el.attributes[i].name] = el.attributes[i].value;
   return { attrs };
 }
+// Автофильтр: { ref, cols, raw } (filter.js); непонятные условия столбцов (top10, по цвету…) — исходным XML
+function readAutoFilter(root) {
+  const el = kid(root, 'autoFilter');
+  const ref = el && parseRange(el.getAttribute('ref') || '');
+  if (!ref) return null;
+  const af = { ref, cols: {} };
+  for (const fc of [...el.childNodes].filter((n) => n.nodeType === 1 && (n.localName || n.nodeName) === 'filterColumn')) {
+    const j = +fc.getAttribute('colId');
+    const crit = readFilterColumn(fc);
+    if (crit) af.cols[j] = crit;
+    else (af.raw = af.raw || {})[j] = new XMLSerializer().serializeToString(fc).replace(/\sxmlns(:\w+)?="[^"]*"/g, '');
+  }
+  return af;
+}
+function autoFilterXml(af) {
+  if (!af) return '';
+  const cols = new Map();
+  for (const [j, crit] of Object.entries(af.cols || {})) cols.set(+j, filterColumnXml(+j, crit));
+  for (const [j, xml] of Object.entries(af.raw || {})) if (!cols.has(+j)) cols.set(+j, xml);
+  const body = [...cols.keys()].sort((a, b) => a - b).map((j) => cols.get(j)).join('');
+  return `<autoFilter ref="${rangeName(af.ref)}"${body ? `>${body}</autoFilter>` : '/>'}`;
+}
 const protectionXml = (p) => (p ? `<sheetProtection${Object.entries(p.attrs).map(([k, v]) => ` ${k}="${esc(v)}"`).join('')}/>` : '');
 
 // Именованные диапазоны и константы книги (кроме служебных _xlnm.*): { name, text (хранимый вид), sheet (локальное — имя листа) }
@@ -439,7 +462,13 @@ export async function importXlsx(data, { recalc: doRecalc = true } = {}) {
     if (kid(root, 'drawing')) keep('рисунки и диаграммы');
     if (kid(root, 'tableParts')) keep('«умные» таблицы');
     if (kid(root, 'legacyDrawing')) keep('примечания к ячейкам');
-    if (kid(root, 'autoFilter')) keep('фильтры');
+    const af = readAutoFilter(root);
+    if (af) {
+      sheet.autoFilter = af;
+      // скрытые строки под заголовком фильтра — скрыты фильтром (так их понимает Excel)
+      for (const [r, info] of Object.entries(sheet.rowInfo || {})) if (info.hidden && +r > af.ref.r1 && +r <= af.ref.r2) sheet.rowInfo[r] = { ...info, filtered: true };
+      if (af.raw) keep('условия фильтра по цвету, первым N и т. п.');
+    }
     if (kid(root, 'hyperlinks')) keep('гиперссылки');
     sheets.push(sheet);
   }
@@ -702,7 +731,7 @@ function newSheetXml(sheet, active, xfOf, str, cm = '1') {
   const cols = colsXml(sheet, false);
   const xml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<worksheet xmlns="${NS}" xmlns:r="${R}">` +
     `${dimensionXml(sheet)}<sheetViews><sheetView workbookViewId="0"${active ? ' tabSelected="1"' : ''}${sheet.freeze ? `>${paneXml(sheet.freeze)}</sheetView>` : '/>'}</sheetViews>` +
-    `${formatPrXml('<sheetFormatPr defaultRowHeight="15"/>', sheet)}${cols}${sheetDataXml(sheet, (r, c, cell) => cellXml(cell, addr(r, c), xfOf, str, formulaFx(sheet, key(r, c), cell, cm)), false, xfOf, str)}${protectionXml(sheet.protection)}${mergesXml(sheet)}` +
+    `${formatPrXml('<sheetFormatPr defaultRowHeight="15"/>', sheet)}${cols}${sheetDataXml(sheet, (r, c, cell) => cellXml(cell, addr(r, c), xfOf, str, formulaFx(sheet, key(r, c), cell, cm)), false, xfOf, str)}${protectionXml(sheet.protection)}${autoFilterXml(sheet.autoFilter)}${mergesXml(sheet)}` +
     `${marginsXml((sheet.page && sheet.page.margins) || {})}</worksheet>`;
   return sheet.page ? setPageXml(xml, sheet.page) : xml;
 }
@@ -781,6 +810,7 @@ function patchSheetXml(xml, sheet, active, root, book, xfOf, str, cm) {
   if (JSON.stringify(readFreeze(root)) !== JSON.stringify(sheet.freeze || null)) out = setFreezeXml(out, sheet.freeze || null);
   if (JSON.stringify(readPage(root)) !== JSON.stringify(sheet.page || null)) out = setPageXml(out, sheet.page || {});
   if (JSON.stringify(readProtection(root)) !== JSON.stringify(sheet.protection || null)) out = setSheetEl(out, 'sheetProtection', protectionXml(sheet.protection));
+  const afChanged = JSON.stringify(readAutoFilter(root)) !== JSON.stringify(sheet.autoFilter || null);
   const fp = findEl(out, 'sheetFormatPr');
   if (fp) out = out.slice(0, fp.start) + formatPrXml(out.slice(fp.start, fp.end), sheet) + out.slice(fp.end);
   else if (maxLevel(sheet, 'row') || maxLevel(sheet, 'col')) out = setSheetEl(out, 'sheetFormatPr', formatPrXml('<sheetFormatPr defaultRowHeight="15"/>', sheet));
@@ -790,6 +820,8 @@ function patchSheetXml(xml, sheet, active, root, book, xfOf, str, cm) {
     out = out.replace(/<(conditionalFormatting|dataValidation|hyperlink|autoFilter)\b[^>]*>/g, (tag) => tag
       .replace(/\b(sqref|ref)="([^"]*)"/, (_, a, v) => `${a}="${shiftSqref(v, shifts)}"`));
   }
+  // автофильтр изменён в Пере (или сдвинут) — заново из модели (sortState Excel при этом не сохраняется)
+  if (afChanged || shifts.length) out = setSheetEl(out, 'autoFilter', autoFilterXml(sheet.autoFilter));
   return out;
 }
 
@@ -991,6 +1023,11 @@ async function exportWithSource(wb, source) {
     if (JSON.stringify(was.printArea) !== JSON.stringify(area) || orig < 0) {
       wbXml = wbXml.replace(new RegExp(`<definedName name="_xlnm\\.Print_Area" localSheetId="${i}"[^>]*>[\\s\\S]*?</definedName>`), '');
       if (area) printNames.push(`<definedName name="_xlnm.Print_Area" localSheetId="${i}">${xmlEsc(printAreaText(sheet.name, area))}</definedName>`);
+    }
+    // служебное имя диапазона фильтра (Excel создаёт его сам; пишем, чтобы файл был как у Excel)
+    {
+      wbXml = wbXml.replace(new RegExp(`<definedName name="_xlnm\\._FilterDatabase" localSheetId="${i}"[^>]*>[\\s\\S]*?</definedName>`), '');
+      if (sheet.autoFilter) printNames.push(`<definedName name="_xlnm._FilterDatabase" localSheetId="${i}" hidden="1">${xmlEsc(printAreaText(sheet.name, sheet.autoFilter.ref))}</definedName>`);
     }
     if (JSON.stringify(was.printTitles) !== JSON.stringify(titles) || orig < 0) {
       wbXml = wbXml.replace(new RegExp(`<definedName name="_xlnm\\.Print_Titles" localSheetId="${i}"[^>]*>[\\s\\S]*?</definedName>`), '');

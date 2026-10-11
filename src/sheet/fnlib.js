@@ -275,8 +275,9 @@ export function functions(h) {
     MAXIFS: ([target, ...pairs]) => { const p = pickIfs(target, pairs); if (isErr(p)) return p; const n = p.filter((v) => typeof v === 'number'); return n.length ? Math.max(...n) : 0; },
     MINIFS: ([target, ...pairs]) => { const p = pickIfs(target, pairs); if (isErr(p)) return p; const n = p.filter((v) => typeof v === 'number'); return n.length ? Math.min(...n) : 0; },
   };
-  // ПРОМЕЖУТОЧНЫЕ.ИТОГИ и АГРЕГАТ: значения диапазонов без вложенных итогов (и скрытых строк, если надо)
-  function rangeValues(arg, node, ctx, { skipHidden, skipNested = true }) {
+  // ПРОМЕЖУТОЧНЫЕ.ИТОГИ и АГРЕГАТ: значения диапазонов без вложенных итогов (и скрытых строк, если надо;
+  // строки, скрытые фильтром, ПРОМЕЖУТОЧНЫЕ.ИТОГИ пропускает при любом номере функции — как Excel)
+  function rangeValues(arg, node, ctx, { skipHidden, skipFiltered = false, skipNested = true }) {
     if (!node || (node.t !== 'range' && node.t !== 'ref')) return flat(arg);
     const sh = node.sheet || ctx.sheet;
     const r1 = node.t === 'ref' ? node.r : node.r1; const r2 = node.t === 'ref' ? node.r : node.r2;
@@ -287,6 +288,7 @@ export function functions(h) {
       const r = r1 + i;
       if (r > r2) return;
       if (skipHidden && ctx.rowHidden && ctx.rowHidden(sh, r)) return;
+      if (skipFiltered && ctx.rowFiltered && ctx.rowFiltered(sh, r)) return;
       row.forEach((v, j) => {
         if (skipNested && ctx.formulaAt) { const f = ctx.formulaAt(sh, r, c1 + j); if (f && /^\s*(SUBTOTAL|AGGREGATE)\(/i.test(f)) return; }
         if (c1 + j <= c2) out.push(v);
@@ -304,7 +306,7 @@ export function functions(h) {
       if (isErr(k)) return k;
       const name = SUB[k > 100 ? k - 100 : k];
       if (!name || k % 100 > 11) return err(ERR.VALUE);
-      const vals = refs.flatMap((a, i) => rangeValues(a, nodes[i + 1], ctx, { skipHidden: k > 100 }));
+      const vals = refs.flatMap((a, i) => rangeValues(a, nodes[i + 1], ctx, { skipHidden: k > 100, skipFiltered: true }));
       return h.FN[name]([[vals]]);
     },
     AGGREGATE: ([fn, opt, ...rest], ctx, nodes) => {
