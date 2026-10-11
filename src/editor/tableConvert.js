@@ -39,22 +39,19 @@ export function splitInline(para, sep) {
   return parts;
 }
 
-// Абзацы выделения верхнего уровня: { from, to, paras }
+// Абзацы выделения: { from, to, paras } — блоки верхнего уровня или раздела с колонками (контейнер columns)
 function selectedParas(state) {
   const { $from, $to } = state.selection;
   if ($from.depth < 1 || $to.depth < 1) return null;
-  const a = $from.index(0); const b = $to.index(0);
+  const range = $from.blockRange($to, (n) => n.type.name === 'doc' || n.type.name === 'columns');
+  if (!range) return null;
   const paras = [];
-  let from = 0;
-  state.doc.forEach((n, pos, i) => { if (i === a) from = pos; });
-  let to = from;
-  for (let i = a; i <= b; i++) {
-    const n = state.doc.child(i);
+  for (let i = range.startIndex; i < range.endIndex; i++) {
+    const n = range.parent.child(i);
     if (n.type.name !== 'paragraph') return null; // только простые абзацы (как и в Word — без таблиц внутри)
     paras.push(n);
-    to += n.nodeSize;
   }
-  return { from, to, paras };
+  return { from: range.start, to: range.end, paras };
 }
 
 // Определить разделитель по тексту выделения (как предлагает Word): табуляция → «;» → абзацы
