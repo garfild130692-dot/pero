@@ -3,6 +3,7 @@
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { colName, key } from './address.js';
 import { formatValue } from './format.js';
+import { formatCode } from './numfmt.js';
 import { isErr } from './formula.js';
 import { DEFAULT_COL_W, DEFAULT_ROW_H, inputOf, isHidden, maxLevel, mergeAt, outlineRuns, spillAnchorAt } from './model.js';
 import { cycleRef } from './formula.js';
@@ -73,7 +74,8 @@ function cellStyle(cell) {
     fontWeight: s.bold ? 'bold' : undefined,
     fontStyle: s.italic ? 'italic' : undefined,
     textDecoration: [s.underline && 'underline', s.strike && 'line-through'].filter(Boolean).join(' ') || undefined,
-    color: s.color || undefined,
+    // цвет из числового формата ([Красный] у отрицательных и т. п.) важнее цвета шрифта, как в Excel
+    color: (s.numFmt && typeof v === 'number' && formatCode(v, s.numFmt).color) || s.color || undefined,
     background: s.fill || undefined,
     fontSize: s.fontSize ? `${s.fontSize}pt` : undefined,
     fontFamily: s.fontFamily ? cssFontStack(s.fontFamily) : undefined,
