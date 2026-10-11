@@ -185,9 +185,30 @@ export function fieldValue(instr, pos, ctx) {
   switch (name) {
     case 'PAGE': return numFormat(pageAt(ctx.state, pos), instr);
     case 'NUMPAGES': return numFormat(p ? p.total : 1, instr);
-    case 'DATE': case 'TIME': case 'CREATEDATE': case 'SAVEDATE': case 'PRINTDATE':
-      if (name !== 'DATE' && name !== 'TIME') return null; // даты документа — из свойств файла, не трогаем
+    case 'DATE': case 'TIME':
       return formatDate(ctx.now, switchArg(instr, '@') || (name === 'TIME' ? 'H:mm' : 'dd.MM.yyyy'));
+    case 'CREATEDATE': case 'SAVEDATE': {
+      // даты из свойств документа (docProps/core.xml); нет — не трогаем
+      const v = (ctx.state.doc.attrs.props || {})[name === 'CREATEDATE' ? 'created' : 'modified'];
+      const d = v ? new Date(v) : null;
+      return d && !Number.isNaN(+d) ? formatDate(d, switchArg(instr, '@') || 'dd.MM.yyyy H:mm') : null;
+    }
+    case 'PRINTDATE': return null;
+    case 'AUTHOR': case 'TITLE': case 'SUBJECT': case 'KEYWORDS': case 'COMMENTS': case 'LASTSAVEDBY': {
+      const k = { AUTHOR: 'author', TITLE: 'title', SUBJECT: 'subject', KEYWORDS: 'keywords', COMMENTS: 'comments', LASTSAVEDBY: 'lastModifiedBy' }[name];
+      return (ctx.state.doc.attrs.props || {})[k] || '';
+    }
+    case 'DOCPROPERTY': {
+      const k = { title: 'title', subject: 'subject', author: 'author', keywords: 'keywords', comments: 'comments' }[String(fieldArg(instr) || '').toLowerCase()];
+      return k ? (ctx.state.doc.attrs.props || {})[k] || '' : null;
+    }
+    case 'FILENAME': {
+      const f = ctx.file || {};
+      if (!f.name) return null;
+      return /\\p\b/.test(instr) && f.path ? f.path : f.name;
+    }
+    case 'NUMWORDS': return String((ctx.state.doc.textBetween(0, ctx.state.doc.content.size, ' ', ' ').match(/[\p{L}\p{N}][\p{L}\p{N}'’-]*/gu) || []).length);
+    case 'NUMCHARS': return String(ctx.state.doc.textBetween(0, ctx.state.doc.content.size, ' ', ' ').replace(/\s/g, '').length);
     case 'REF': case 'PAGEREF': {
       const b = ctx.marks.get(fieldArg(instr));
       if (!b) return REF_ERROR;
@@ -304,9 +325,9 @@ function rebuildToc(state, tr, f, cache) {
 }
 
 // Обновить поля в [from, to] (null — во всём документе). Возвращает tr или null
-export function updateFieldsTr(state, range = null, now = new Date()) {
+export function updateFieldsTr(state, range = null, now = new Date(), file = null) {
   const fields = scanFields(state.doc);
-  const ctx = { state, marks: bookmarks(state.doc), now };
+  const ctx = { state, marks: bookmarks(state.doc), now, file };
   const inRange = (f) => {
     if (!range) return true;
     const a = f.begin ?? f.pos; const b = f.end ?? f.pos;
@@ -468,12 +489,15 @@ export function insertDateTr(state, pic, asField, now = new Date()) {
 
 export const Fields = Extension.create({
   name: 'fields',
+  addStorage() {
+    return { file: null }; // { name, path } открытого файла — для поля FILENAME (задаёт App)
+  },
   addCommands() {
     return {
       // F9: поля в выделении (без выделения — поле под курсором; Ctrl+A, F9 — все)
       updateFields: (all = false) => ({ state, dispatch }) => {
         const { from, to } = state.selection;
-        const tr = updateFieldsTr(state, all ? null : [from, to]);
+        const tr = updateFieldsTr(state, all ? null : [from, to], new Date(), this.storage.file);
         if (!tr) return false;
         if (dispatch) dispatch(tr);
         return true;

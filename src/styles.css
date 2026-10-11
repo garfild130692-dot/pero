@@ -870,3 +870,13 @@ p[data-section-type="oddPage"]::after { content: 'Разрыв раздела (�
 p[data-section-type="nextPage"]::after { content: 'Разрыв раздела (со следующей страницы)'; }
 .conv-seps { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 14px; }
 .table-picker .menu-item { width: 100%; }
+
+/* «Поле», «Свойства документа» */
+.modal.field-dlg { width: 560px; }
+.field-body { display: grid; grid-template-columns: 190px 1fr; gap: 14px; }
+.field-body .bm-list { height: 220px; margin-top: 6px; }
+.field-side { display: flex; flex-direction: column; gap: 10px; }
+.field-desc { font-weight: 600; color: #333; }
+.field-code code { background: #f2f4f3; padding: 2px 6px; border-radius: 3px; }
+.props-body { display: flex; flex-direction: column; gap: 8px; min-width: 420px; }
+.props-body textarea { font: inherit; padding: 4px 5px; border: 1px solid #bbb; border-radius: 3px; resize: vertical; }

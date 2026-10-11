@@ -12,6 +12,8 @@ import ParagraphDialog from './ParagraphDialog.jsx';
 import FontDialog from './FontDialog.jsx';
 import GoToDialog from './GoToDialog.jsx';
 import SortParaDialog from './SortParaDialog.jsx';
+import { DocPropsDialog, FieldDialog } from './FieldDialogs.jsx';
+import { insertDocxFile } from './insertFile.js';
 import { InsertTableDialog, TableToTextDialog, TextToTableDialog } from './TableDialogs.jsx';
 import SymbolDialog from './SymbolDialog.jsx';
 import { BookmarkDialog, CrossRefDialog, DateDialog } from './RefDialogs.jsx';
@@ -270,6 +272,8 @@ export default function App({ initialFile, onOpenOther, onNewSheet, autosaveSec 
   }, [editor]);
 
   useEffect(() => { if (editor) editor.commands.setTrackAuthor(userName); }, [editor, userName]);
+  // имя файла — для поля FILENAME
+  useEffect(() => { if (editor) editor.storage.fields.file = { name: doc.name, path: doc.path }; }, [editor, doc.name, doc.path]);
 
   // режимы просмотра: черновик — без разбиения на листы; чтение — без правки, Esc — выход
   useEffect(() => {
@@ -478,6 +482,15 @@ export default function App({ initialFile, onOpenOther, onNewSheet, autosaveSec 
       )}
       {viewMode !== 'read' && <Ribbon editor={editor} file={{ newDoc, newSheet, open, openHere, save: () => save(), saveAs, print: doPrint, pdf: doPdf }} onLink={() => setModal('link')}
         onStylesPane={() => setStylesPane((v) => !v)}
+        docFile={{ name: doc.name, path: doc.path }}
+        onInsertFile={async () => {
+          const f = await fileApi.pickDocx();
+          if (!f) return;
+          try {
+            const dropped = await insertDocxFile(editor, f.data);
+            if (dropped) fileApi.showError('Текст из файла', `Вставлено. Не перенесено элементов: ${dropped} (фигуры, объекты, примечания — они ссылаются на части другого файла).`);
+          } catch (e) { fileApi.showError('Текст из файла', `Не удалось прочитать файл: ${e.message || e}`); }
+        }}
         view={{ mode: viewMode, setMode: setViewMode, ruler: viewPrefs.ruler, nav: viewPrefs.nav, toggleRuler: () => setPref('ruler'), toggleNav: () => setPref('nav'),
           setZoom, fit: fitTo, openZoom: () => setModal('zoom') }}
         onFind={(m, init) => setFindMode(m, init)}
@@ -541,6 +554,8 @@ export default function App({ initialFile, onOpenOther, onNewSheet, autosaveSec 
       {modal === 'listFormat' && <ListFormatDialog editor={editor} onClose={() => setModal(null)} />}
       {modal === 'numberValue' && <NumberValueDialog editor={editor} onClose={() => setModal(null)} />}
       {modal === 'bulletSymbol' && <SymbolDialog editor={editor} title="Определение нового маркера" onPick={(ch) => editor.chain().focus().setBullet(ch).run()} onClose={() => setModal(null)} />}
+      {modal === 'field' && <FieldDialog editor={editor} file={{ name: doc.name, path: doc.path }} onProps={() => setModal('docProps')} onClose={() => setModal(null)} />}
+      {modal === 'docProps' && <DocPropsDialog editor={editor} onClose={() => setModal(null)} />}
       {modal === 'insertTable' && <InsertTableDialog editor={editor} onClose={() => setModal(null)} />}
       {modal === 'textToTable' && <TextToTableDialog editor={editor} onClose={() => setModal(null)} />}
       {modal === 'tableToText' && <TableToTextDialog editor={editor} onClose={() => setModal(null)} />}

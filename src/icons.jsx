@@ -21,6 +21,8 @@ export const Icon = {
   newWindowDoc: (p) => <S {...p}><rect x="3" y="5" width="14" height="12" rx="1" /><path d="M7 3h14v12" /><path d="M10 9v4M8 11h4" /></S>,
   arrange: (p) => <S {...p}><rect x="3" y="4" width="8" height="16" rx="1" /><rect x="13" y="4" width="8" height="16" rx="1" /></S>,
   windows: (p) => <S {...p}><rect x="3" y="7" width="13" height="11" rx="1" /><path d="M7 7V4h14v11h-5" /></S>,
+  quickParts: (p) => <S {...p}><rect x="4" y="4" width="16" height="16" rx="1" /><path d="M8 9h3M8 13h8M8 16h6" /><path d="M14 7l2 2 3-4" /></S>,
+  props: (p) => <S {...p}><path d="M6 2h8l4 4v16H6z" /><path d="M9 11h6M9 14h6M9 17h4" /><circle cx="10" cy="7" r="1" /></S>,
   blankPage: (p) => <S {...p}><path d="M6 2h8l4 4v16H6z" /><path d="M14 2v4h4" /></S>,
   pageBreak: (p) => <S {...p}><path d="M6 3v6h12V3M6 21v-6h12v6" /><path d="M3 12h4M10 12h4M17 12h4" /></S>,
   sort: (p) => <S {...p}><path d="M4 10 6.5 4 9 10M4.8 8h3.4M4 14h5l-5 6h5" strokeWidth="1.5" /><path d="M17 4v16m-3-3 3 3 3-3" /></S>,

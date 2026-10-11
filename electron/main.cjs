@@ -437,6 +437,12 @@ ipcMain.handle('app:userName', () => {
 
 // Выбор картинки для «Вставка → Рисунок»
 const IMAGE_FILTER = [{ name: 'Изображения', extensions: ['png', 'jpg', 'jpeg', 'gif', 'bmp', 'webp', 'svg'] }];
+// «Текст из файла»: выбрать .docx и вернуть его данные (не открывая в окне)
+ipcMain.handle('file:pickDocx', async (e) => {
+  const r = await dialog.showOpenDialog(stateOf(e).win, { properties: ['openFile'], filters: DOCX_FILTER });
+  if (r.canceled || !r.filePaths[0]) return null;
+  return readFile(r.filePaths[0]);
+});
 ipcMain.handle('file:openImage', async (e) => {
   const r = await dialog.showOpenDialog(stateOf(e).win, { properties: ['openFile'], filters: IMAGE_FILTER });
   if (r.canceled || !r.filePaths[0]) return null;

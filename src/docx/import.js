@@ -11,6 +11,7 @@ import { readComments } from '../editor/comments.js';
 import { readFootnotes } from '../editor/footnotes.js';
 import { readBackground, readWatermark } from '../editor/design.js';
 import { DEFAULT_BULLETS, bulletFromLvl } from '../editor/numbering.js';
+import { readCoreProps } from '../editor/docProps.js';
 import { layoutAttrs, readLayoutProps } from '../editor/paraLayout.js';
 import { applyTabLayer, readTabs } from '../editor/tabs.js';
 
@@ -934,6 +935,9 @@ export async function importDocx(data) {
     const f = zip.file(rel.target.startsWith('/') ? rel.target.slice(1) : 'word/' + rel.target);
     if (f) watermark = readWatermark(await f.async('string'));
   }
+  // свойства документа (автор, название…) — docProps/core.xml
+  const coreFile = zip.file('docProps/core.xml');
+  const props = coreFile ? readCoreProps(await coreFile.async('string')) : {};
   // цвет страницы — w:background перед телом документа
   const rawDoc = await zip.file('word/document.xml').async('string');
   const pageColor = readBackground(rawDoc.slice(0, Math.max(0, rawDoc.indexOf('<w:body'))));
@@ -950,7 +954,7 @@ export async function importDocx(data) {
   return {
     doc: {
       type: 'doc',
-      attrs: { ...docDefaults, para: docPara, defaultTab, sectPr: imp.bodySectPr, hf, styles: Object.values(imp.usedStyles), charStyles: Object.values(imp.usedCharStyles), comments: commentList, footnotes: footnoteList, watermark, pageColor, ...(imp.headingNum ? { headingNumbering: imp.headingNum } : {}) },
+      attrs: { ...docDefaults, para: docPara, defaultTab, sectPr: imp.bodySectPr, hf, styles: Object.values(imp.usedStyles), charStyles: Object.values(imp.usedCharStyles), comments: commentList, footnotes: footnoteList, watermark, pageColor, props, ...(imp.headingNum ? { headingNumbering: imp.headingNum } : {}) },
       content,
     },
     warnings: imp.warnings,

@@ -7,6 +7,7 @@ import { CELL_SIDES, GRID_BORDERS, TABLE_SIDES, TWIPS_PER_PX, borderToOoxml } fr
 import { EMU_PER_PX, dataUrlToBytes, extOf } from '../editor/image.js';
 import { parseSectPr, setHfRefs, setTitlePg, writeHfPart } from '../editor/page.js';
 import { bulletToLvl } from '../editor/numbering.js';
+import { patchCoreProps } from '../editor/docProps.js';
 import { addWatermark, patchBackground, patchSettingsBackground, stripWatermark, watermarkBox, watermarkRunXml } from '../editor/design.js';
 import { commentsXml } from '../editor/comments.js';
 import { FOOTNOTES_TYPE, footnotesPartXml } from '../editor/footnotes.js';
@@ -471,15 +472,6 @@ function setEvenAndOdd(xml, on) {
   return out.replace(/(<w:settings\b[^>]*>)/, '$1<w:evenAndOddHeaders/>');
 }
 
-function coreXml() {
-  const now = new Date().toISOString().replace(/\.\d+Z$/, 'Z');
-  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dcterms="http://purl.org/dc/terms/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
-<dcterms:created xsi:type="dcterms:W3CDTF">${now}</dcterms:created>
-<dcterms:modified xsi:type="dcterms:W3CDTF">${now}</dcterms:modified>
-</cp:coreProperties>`;
-}
-
 const APP_XML = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties"><Application>Pero</Application></Properties>`;
 
@@ -825,7 +817,7 @@ ${notes.length ? `<Relationship Id="rIdPeroF" Type="${relType('footnotes')}" Tar
     for (const p of hfParts) zip.file('word/' + p.file, p.xml);
     for (const img of ex.images) zip.file('word/' + img.path, img.bytes);
     zip.file('_rels/.rels', ROOT_RELS);
-    zip.file('docProps/core.xml', coreXml());
+    zip.file('docProps/core.xml', patchCoreProps(null, da.props || {}));
     zip.file('docProps/app.xml', APP_XML);
     zip.file('word/document.xml', documentXml);
     zip.file('word/styles.xml', stylesXml(da.fontFamily || DEFAULT_FONT, parseSize(da.fontSize) || DEFAULT_SIZE, { ...NEW_DOC_PARA, ...(da.para || {}) })
@@ -1007,7 +999,8 @@ ${notes.length ? `<Relationship Id="rIdPeroF" Type="${relType('footnotes')}" Tar
   zip.file('[Content_Types].xml', ct);
   if (src.core) {
     const now = new Date().toISOString().replace(/\.\d+Z$/, 'Z');
-    zip.file('docProps/core.xml', src.core.replace(/(<dcterms:modified\b[^>]*>)[^<]*(<\/dcterms:modified>)/, `$1${now}$2`));
+    zip.file('docProps/core.xml', da.propsChanged ? patchCoreProps(src.core, da.props || {})
+      : src.core.replace(/(<dcterms:modified\b[^>]*>)[^<]*(<\/dcterms:modified>)/, `$1${now}$2`));
   }
   return zip.generateAsync({ type: 'uint8array', compression: 'DEFLATE' });
 }

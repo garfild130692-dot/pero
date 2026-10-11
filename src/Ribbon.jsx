@@ -19,6 +19,7 @@ import { UNDERLINES } from './editor/extensions.js';
 import { CASES, painterKey } from './editor/runFormat.js';
 import { marksKey } from './editor/marks.js';
 import { SymbolButton } from './SymbolDialog.jsx';
+import { QuickPartsButton } from './FieldDialogs.jsx';
 import { MultilevelButton } from './NumberingDialogs.jsx';
 import { BulletButton, NumberButton } from './ListButtons.jsx';
 import { sampleOf, styleEntries } from './StylesPane.jsx';
@@ -284,7 +285,7 @@ function TableStylesButton({ editor }) {
   );
 }
 
-export default function Ribbon({ editor, file, view, onStylesPane, onLink, onFont, onSymbol, onRefDialog, onParagraph, onMargins, onHf, onFind, onStyle, review }) {
+export default function Ribbon({ editor, file, docFile, onInsertFile, view, onStylesPane, onLink, onFont, onSymbol, onRefDialog, onParagraph, onMargins, onHf, onFind, onStyle, review }) {
   const [tab, setTab] = useState('home');
   const tablePicker = usePopover();
 
@@ -387,6 +388,7 @@ export default function Ribbon({ editor, file, view, onStylesPane, onLink, onFon
               <Btn big icon="report" label="Сообщить о проблеме" onClick={() => reportProblem()} title="Собрать сведения о проблеме для администратора" />
               <Btn big icon="open" label="Папка журналов" onClick={() => openLogs()} title="Открыть папку с журналом ошибок" />
               <Btn big icon="info" label="О программе" onClick={() => about()} title="Версия Перо" />
+              <Btn big icon="props" label="Свойства" onClick={() => onRefDialog('docProps')} title="Свойства документа: название, тема, автор, ключевые слова" />
             </Group>
           </>
         )}
@@ -528,6 +530,7 @@ export default function Ribbon({ editor, file, view, onStylesPane, onLink, onFon
             </Group>
             <Group title="Текст">
               <Btn big icon="lineBreak" label="Разрыв строки" title="Разрыв строки (Shift+Enter)" onClick={() => c().setHardBreak().run()} />
+              <QuickPartsButton editor={editor} Btn={Btn} file={docFile} onDialog={onRefDialog} onInsertFile={onInsertFile} />
               <Btn big icon="calendar" label="Дата и время" title="Вставить текущую дату и время" onClick={() => onRefDialog('date')} />
             </Group>
             <Group title="Примечания">

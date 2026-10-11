@@ -17,6 +17,18 @@ export async function openFile() {
   });
 }
 
+// Выбрать .docx для вставки (не открывая): { name, data } или null
+export async function pickDocx() {
+  if (native && native.pickDocx) return native.pickDocx();
+  return new Promise((resolve) => {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = '.docx';
+    input.onchange = async () => { const f = input.files[0]; resolve(f ? { name: f.name, data: await f.arrayBuffer() } : null); };
+    input.click();
+  });
+}
+
 // Выбрать картинку: { name, data } или null
 export async function openImage() {
   if (native && native.openImage) return native.openImage();

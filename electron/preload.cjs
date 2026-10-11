@@ -8,6 +8,7 @@ contextBridge.exposeInMainWorld('pero', {
   openFile: () => ipcRenderer.invoke('file:open'),
   openPath: (p) => ipcRenderer.invoke('file:openPath', p),
   openImage: () => ipcRenderer.invoke('file:openImage'),
+  pickDocx: () => ipcRenderer.invoke('file:pickDocx'),
   recentList: (check) => ipcRenderer.invoke('recent:list', !!check),
   recentPin: (p, v) => ipcRenderer.invoke('recent:pin', p, v),
   recentRemove: (p) => ipcRenderer.invoke('recent:remove', p),
