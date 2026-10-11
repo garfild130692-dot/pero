@@ -263,3 +263,23 @@ input.sheet-tab.editing { width: 120px; background: #fff; border: 1px solid var(
 .find-item:not(.head):hover { background: var(--accent-soft); }
 .find-item.on { background: var(--accent); color: #fff; }
 .find-count { padding: 3px 6px; color: #666; font-size: 12px; }
+
+/* проверка данных: стрелка списка у ячейки, подсказка ввода, список, диалоги */
+.gdvbtn { position: absolute; width: 17px; padding: 0; border: 1px solid #b9b9b9; background: #fbfbfb; font-size: 10px; color: #444; cursor: pointer; z-index: 4; pointer-events: auto; box-sizing: border-box; }
+.gdvbtn:hover { background: var(--accent-soft); border-color: var(--accent); }
+.gdvprompt { position: absolute; z-index: 4; max-width: 240px; background: #ffffe8; border: 1px solid #999; padding: 4px 7px; font-size: 12px; box-shadow: 1px 1px 3px rgba(0,0,0,.15); pointer-events: none; white-space: pre-wrap; }
+.gdvprompt b { display: block; margin-bottom: 2px; }
+.modal-backdrop.clear { background: transparent; display: block; }
+.dv-pop { position: fixed; min-width: 140px; max-height: 240px; overflow: auto; background: #fff; border: 1px solid #999; box-shadow: 0 4px 14px rgba(0,0,0,.2); z-index: 120; }
+.dv-pop-item { display: block; width: 100%; border: 0; background: transparent; text-align: left; padding: 3px 8px; font: inherit; cursor: pointer; white-space: nowrap; }
+.dv-pop-item:hover, .dv-pop-item:focus { background: var(--accent); color: #fff; }
+.modal.dv-dlg { width: 520px; }
+.dv-body { min-height: 230px; display: flex; flex-direction: column; gap: 6px; }
+.dv-wide { display: flex; flex-direction: column; align-items: stretch; gap: 3px; }
+.dv-wide input, .dv-text { width: 100%; box-sizing: border-box; }
+.dv-text { min-height: 70px; resize: vertical; font: inherit; }
+.modal.dv-err { width: 420px; }
+.dv-err-body { display: flex; gap: 12px; align-items: flex-start; }
+.dv-icon { flex: none; width: 30px; height: 30px; border-radius: 50%; display: grid; place-items: center; color: #fff; font-weight: 700; }
+.dv-icon.stop { background: #c42b1c; } .dv-icon.warning { background: #d89614; } .dv-icon.information { background: #1a5fb4; }
+.dv-ask { margin-top: 8px; }

@@ -381,6 +381,7 @@ export default function SheetRibbon({ api }) {
                 <Btn title="Сортировка по убыванию" onClick={() => change((w) => sortRange(w, si, rg, sel.c, false))}><T>Я→А</T></Btn>
               </div>
               <Btn big icon="sort" label="Сортировка" onClick={api.sortDialog} title="Сортировка по нескольким столбцам" />
+              <Btn big icon="validation" label="Проверка данных" onClick={api.validation} title="Проверка вводимых значений: выпадающий список, ограничения, сообщения" />
               <Btn big icon="filter" label="Фильтр" active={api.filterOn} onClick={api.toggleFilter} title="Автофильтр: кнопки в заголовках столбцов (Ctrl+Shift+L)" />
               <div className="rb-col">
                 <Btn title="Снять условия фильтра во всех столбцах" onClick={api.clearFilter} disabled={!api.filterOn}><T>✕</T> Очистить</Btn>

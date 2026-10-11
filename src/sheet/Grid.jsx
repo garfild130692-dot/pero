@@ -95,7 +95,7 @@ const OUT_STEP = 14; // ширина уровня в поле структуры
 // refMarks — ссылки редактируемой формулы (цветные рамки); showFormulas — формулы вместо значений (Ctrl+`);
 // arrows — стрелки влияющих/зависимых ячеек [{ from: диапазон, to: { r, c } }]; onErrorInfo — значок у ячейки с ошибкой
 export default function Grid({ sheet, sel, setSel, editing, setEditing, onCommit, onColWidth, onRowHeight, onRefInsert, onOutline, gridRef,
-  refMarks = [], showFormulas = false, arrows = [], onErrorInfo, names = [], onFill, onFilterMenu, cf = null }) {
+  refMarks = [], showFormulas = false, arrows = [], onErrorInfo, names = [], onFill, onFilterMenu, cf = null, dvList = false, dvPrompt = null, onDvList }) {
   const scrollRef = useRef(null);
   const [view, setView] = useState({ top: 0, left: 0, w: 800, h: 500 });
   // размеры области: использованная часть + запас (как «бесконечный» лист)
@@ -345,6 +345,16 @@ export default function Grid({ sheet, sel, setSel, editing, setEditing, onCommit
             onClick={(e) => { e.stopPropagation(); onFilterMenu(j, e.currentTarget.getBoundingClientRect()); }}>{on ? '⏷' : '▾'}</button>
         );
       })}
+      {dvList && (
+        <button type="button" className="gdvbtn" title="Выбрать из списка (Alt+↓)" style={{ left: colPos[active.c2 + 1] + 1, top: rowPos[active.r1], height: rowPos[active.r2 + 1] - rowPos[active.r1] }}
+          onMouseDown={(e) => { e.preventDefault(); e.stopPropagation(); }} onClick={(e) => { e.stopPropagation(); const b = e.currentTarget.getBoundingClientRect(); const w = colPos[active.c2 + 1] - colPos[active.c1]; onDvList({ left: b.left - w - 1, bottom: b.bottom, width: w }); }}>▾</button>
+      )}
+      {dvPrompt && (
+        <div className="gdvprompt" style={{ left: colPos[active.c1] + 24, top: rowPos[active.r2 + 1] + 6 }}>
+          {dvPrompt.promptTitle && <b>{dvPrompt.promptTitle}</b>}
+          {dvPrompt.prompt && <div>{dvPrompt.prompt}</div>}
+        </div>
+      )}
       {onFill && !editing && !sel.whole && (
         <div className="gfill" title="Протяните, чтобы заполнить (Ctrl — копировать/ряд); двойной щелчок — до конца данных"
           style={{ left: colPos[selC2 + 1] - 4, top: rowPos[selR2 + 1] - 4 }} onMouseDown={startFill} onDoubleClick={fillDown} />

@@ -16,7 +16,7 @@ const absRange = (rg) => {
 import { formatValue } from './format.js';
 import {
   DEFAULT_COL_W, DEFAULT_ROW_H, addSheet, autoSumFormula, blockToText, clearRange, collapseGroup, copyBlock, deleteSheet, expandGroup, fill, inputOf,
-  addCfRule, applyCellFormat, clearCf, currentRegion, fillSeries, isHidden, isValidName, mergeAt, nameTarget, newWorkbook, reapplyFilter, recalc, setAutoFilter, setCalcMode,
+  addCfRule, applyCellFormat, clearCf, setValidation, currentRegion, fillSeries, isHidden, isValidName, mergeAt, nameTarget, newWorkbook, reapplyFilter, recalc, setAutoFilter, setCalcMode,
   setColumnFilter, setNames, sortRows, spillAnchorAt, valueAt, viewContext, pasteBlock, pasteText, renameSheet, setColWidth, setInput, setRowHeight, showLevels, usedRange,
 } from './model.js';
 import { exportXlsx, importXlsx } from './xlsx.js';
@@ -29,6 +29,8 @@ import FilterMenu, { CustomFilterDialog } from './FilterMenu.jsx';
 import SortDialog from './SortDialog.jsx';
 import FormatCellsDialog from './FormatCellsDialog.jsx';
 import FindDialog from './FindDialog.jsx';
+import DvDialog, { DvErrorDialog } from './DvDialog.jsx';
+import { dvAt, listItems, validate } from './dv.js';
 import { CfDialog } from './CfMenu.jsx';
 import { cfView } from './cf.js';
 import { filterCount, shownText } from './filter.js';
@@ -66,6 +68,9 @@ export default function SheetApp({ initialFile, onOpenOther, onNewDoc, autosaveS
   const [cfDlg, setCfDlg] = useState(null); // вид правила условного форматирования
   const [fcDlg, setFcDlg] = useState(false); // «Формат ячеек»
   const [findDlg, setFindDlg] = useState(null); // 'find' | 'replace'
+  const [dvDlg, setDvDlg] = useState(false); // «Проверка данных»
+  const [dvErr, setDvErr] = useState(null); // { rule, ed, text, dir } — значение не прошло проверку
+  const [dvPop, setDvPop] = useState(null); // { r, c, items, x, y } — выпадающий список ячейки
   const [showFormulas, setShowFormulas] = useState(false); // Ctrl+` — формулы вместо значений
   const [arrows, setArrows] = useState([]); // стрелки влияющих/зависимых ячеек
   const [evalAt, setEvalAt] = useState(null); // { r, c } — «Вычислить формулу»
@@ -244,8 +249,23 @@ export default function SheetApp({ initialFile, onOpenOther, onNewDoc, autosaveS
     if (gridRef.current) gridRef.current.focus();
     setEditingState(null);
     if (!ed) return;
-    if (text !== inputOf(sheet.cells.get(key(ed.r, ed.c)))) change((w) => setInput(w, si, ed.r, ed.c, text));
+    if (text !== inputOf(sheet.cells.get(key(ed.r, ed.c)))) {
+      // проверка данных: значение (результат формулы — тоже) должно подходить под правило ячейки
+      const rule = dvAt(sheet, ed.r, ed.c);
+      if (rule && rule.showError && rule.type !== 'any') {
+        const next = setInput(wb, si, ed.r, ed.c, text);
+        if (!validate(next, si, ed.r, ed.c, valueAt(next.sheets[si], ed.r, ed.c))) { setDvErr({ rule, ed, text, dir }); return; }
+      }
+      change((w) => setInput(w, si, ed.r, ed.c, text));
+    }
     if (dir) setSelState(nav(ed, dir));
+  };
+  // выпадающий список проверки данных у ячейки (стрелка справа или Alt+↓)
+  const openDvList = (r, c, rect) => {
+    const rule = dvAt(sheet, r, c);
+    if (!rule || rule.type !== 'list' || rule.inCellDropdown === false) return false;
+    setDvPop({ r, c, items: listItems(wb, si, rule, r, c), x: rect ? rect.left : 300, y: rect ? rect.bottom : 300, w: rect && rect.width ? rect.width + 18 : 140 });
+    return true;
   };
   // щелчок по ячейке при наборе формулы — вставить ссылку (replace — заменить последнюю вставленную при протягивании)
   const lastRef = useRef(null);
@@ -336,6 +356,7 @@ export default function SheetApp({ initialFile, onOpenOther, onNewDoc, autosaveS
     // F9 — пересчитать всё (в том числе отложенное в режиме «вручную» и летучие функции); в отмену не попадает
     recalc: () => setWb((w) => recalc(w, { full: true })),
     formatCells: () => setFcDlg(true),
+    validation: () => setDvDlg(true),
     find: (mode) => setFindDlg(mode),
     // условное форматирование выделенного диапазона
     cfDialog: (kind) => setCfDlg(kind),
@@ -371,6 +392,7 @@ export default function SheetApp({ initialFile, onOpenOther, onNewDoc, autosaveS
     if (ctrl && e.code === 'Backquote') { e.preventDefault(); setShowFormulas((v) => !v); return; }
     if (e.shiftKey && e.key === 'F3') { e.preventDefault(); setFnDlg({}); return; }
     if (ctrl && e.code === 'KeyA') { e.preventDefault(); const u = usedRange(sheet); setSel({ r: 0, c: 0, r2: u ? u.r2 : 0, c2: u ? u.c2 : 0 }); return; }
+    if (e.altKey && k === 'ArrowDown') { const b = document.querySelector('.gdvbtn'); if (b) { e.preventDefault(); b.click(); return; } }
     if (ctrl && (e.code === 'KeyF' || e.code === 'KeyH') && !e.shiftKey) { e.preventDefault(); setFindDlg(e.code === 'KeyH' ? 'replace' : 'find'); return; }
     if (ctrl && (e.code === 'Digit1' || e.code === 'Numpad1') && !e.shiftKey) { e.preventDefault(); setFcDlg(true); return; }
     if (ctrl && e.shiftKey && e.code === 'KeyL') { e.preventDefault(); ribbonApi.toggleFilter(); return; }
@@ -482,6 +504,9 @@ export default function SheetApp({ initialFile, onOpenOther, onNewDoc, autosaveS
           refMarks={refMarks} showFormulas={showFormulas} arrows={arrows}
           onErrorInfo={(r, c, rect) => setErrPop({ r, c, x: rect.right + 4, y: rect.top })}
           cf={cfMap}
+          dvList={(() => { const rule = dvAt(sheet, sel.r, sel.c); return rule && rule.type === 'list' && rule.inCellDropdown !== false && !editing; })()}
+          dvPrompt={(() => { const rule = dvAt(sheet, sel.r, sel.c); return rule && rule.showPrompt && (rule.prompt || rule.promptTitle) && !editing ? rule : null; })()}
+          onDvList={(rect) => openDvList(sel.r, sel.c, rect)}
           onFilterMenu={(j, rect) => setFilterMenu({ j, x: rect.left, y: rect.bottom + 2 })}
           onFill={(src, dst, ctrl) => { change((w) => fillSeries(w, si, src, dst, { ctrl })); setSel({ r: dst.r1, c: dst.c1, r2: dst.r2, c2: dst.c2 }); }} />
       </div>
@@ -572,6 +597,27 @@ export default function SheetApp({ initialFile, onOpenOther, onNewDoc, autosaveS
           head={shownText(sheet.cells.get(key(sheet.autoFilter.ref.r1, sheet.autoFilter.ref.c1 + customFilter.j))) || `Столбец ${colName(sheet.autoFilter.ref.c1 + customFilter.j)}`}
           onClose={() => { setCustomFilter(null); gridRef.current && gridRef.current.focus(); }}
           onApply={(crit) => { const { j } = customFilter; setCustomFilter(null); change((w) => setColumnFilter(w, si, j, crit)); gridRef.current && gridRef.current.focus(); }} />
+      )}
+      {dvPop && (
+        <div className="modal-backdrop clear" onMouseDown={() => setDvPop(null)}>
+          <div className="dv-pop" style={{ left: dvPop.x, top: dvPop.y, minWidth: dvPop.w }} role="listbox" onMouseDown={(e) => e.stopPropagation()}>
+            {dvPop.items.map((it, i) => (
+              <button key={i} type="button" className="dv-pop-item" onClick={() => { const { r, c } = dvPop; setDvPop(null); change((w) => setInput(w, si, r, c, it)); gridRef.current && gridRef.current.focus(); }}>{it}</button>
+            ))}
+            {!dvPop.items.length && <div className="fm-empty">Список пуст</div>}
+          </div>
+        </div>
+      )}
+      {dvErr && (
+        <DvErrorDialog rule={dvErr.rule}
+          onCommit={() => { const { ed, text, dir } = dvErr; setDvErr(null); change((w) => setInput(w, si, ed.r, ed.c, text)); if (dir) setSelState(nav(ed, dir)); gridRef.current && gridRef.current.focus(); }}
+          onRetry={() => { const { ed, text } = dvErr; setDvErr(null); setSelState({ r: ed.r, c: ed.c, r2: ed.r, c2: ed.c }); setEditingState({ r: ed.r, c: ed.c, text }); }}
+          onCancel={() => { setDvErr(null); gridRef.current && gridRef.current.focus(); }} />
+      )}
+      {dvDlg && (
+        <DvDialog rule={dvAt(sheet, rg.r1, rg.c1)} onClose={() => { setDvDlg(false); gridRef.current && gridRef.current.focus(); }}
+          onClear={() => { setDvDlg(false); change((w) => setValidation(w, si, rg, null)); gridRef.current && gridRef.current.focus(); }}
+          onApply={(rule) => { setDvDlg(false); change((w) => setValidation(w, si, rg, rule)); gridRef.current && gridRef.current.focus(); }} />
       )}
       {findDlg && (
         <FindDialog key={findDlg} wb={wb} si={si} sel={sel} mode={findDlg} onClose={() => { setFindDlg(null); gridRef.current && gridRef.current.focus(); }}
