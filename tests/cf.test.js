@@ -67,3 +67,17 @@ describe('условное форматирование', () => {
     expect(e.rules[0].formulas).toEqual(['$A3>$C3*10']);
   });
 });
+
+describe('правила из меню', () => {
+  it('формулы как у Excel: текст содержит, даты; значения — число, текст, ссылка', async () => {
+    const { buildRule, CF_PRESETS } = await import('../src/sheet/cfRules.js');
+    const rg = { r1: 1, c1: 2, r2: 9, c2: 2 };
+    const d = CF_PRESETS[0][1];
+    expect(buildRule('containsText', ['ка'], d, rg, {})).toMatchObject({ type: 'containsText', text: 'ка', formulas: ['NOT(ISERROR(SEARCH("ка",C2)))'] });
+    expect(buildRule('timePeriod', [], d, rg, { period: 'today' })).toMatchObject({ timePeriod: 'today', formulas: ['FLOOR(C2,1)=TODAY()'] });
+    expect(buildRule('greaterThan', ['1,5'], d, rg, {}).formulas).toEqual(['1.5']);
+    expect(buildRule('equal', ['банк'], d, rg, {}).formulas).toEqual(['"банк"']);
+    expect(buildRule('between', ['=$B$1', '01.02.2026'], d, rg, {}).formulas).toEqual(['$B$1', '46054']);
+    expect(buildRule('topPercent', ['15'], d, rg, {})).toMatchObject({ type: 'top10', rank: 15, percent: true, bottom: false });
+  });
+});
