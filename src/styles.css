@@ -868,3 +868,5 @@ p[data-section-type="continuous"]::after { content: 'Разрыв раздела
 p[data-section-type="evenPage"]::after { content: 'Разрыв раздела (с чётной страницы)'; }
 p[data-section-type="oddPage"]::after { content: 'Разрыв раздела (с нечётной страницы)'; }
 p[data-section-type="nextPage"]::after { content: 'Разрыв раздела (со следующей страницы)'; }
+.conv-seps { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 14px; }
+.table-picker .menu-item { width: 100%; }

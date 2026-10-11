@@ -12,6 +12,7 @@ import ParagraphDialog from './ParagraphDialog.jsx';
 import FontDialog from './FontDialog.jsx';
 import GoToDialog from './GoToDialog.jsx';
 import SortParaDialog from './SortParaDialog.jsx';
+import { InsertTableDialog, TableToTextDialog, TextToTableDialog } from './TableDialogs.jsx';
 import SymbolDialog from './SymbolDialog.jsx';
 import { BookmarkDialog, CrossRefDialog, DateDialog } from './RefDialogs.jsx';
 import { NavPane, ZoomDialog, clampZoom, fitZoom, loadViewPrefs, saveViewPrefs } from './ViewControls.jsx';
@@ -540,6 +541,9 @@ export default function App({ initialFile, onOpenOther, onNewSheet, autosaveSec 
       {modal === 'listFormat' && <ListFormatDialog editor={editor} onClose={() => setModal(null)} />}
       {modal === 'numberValue' && <NumberValueDialog editor={editor} onClose={() => setModal(null)} />}
       {modal === 'bulletSymbol' && <SymbolDialog editor={editor} title="Определение нового маркера" onPick={(ch) => editor.chain().focus().setBullet(ch).run()} onClose={() => setModal(null)} />}
+      {modal === 'insertTable' && <InsertTableDialog editor={editor} onClose={() => setModal(null)} />}
+      {modal === 'textToTable' && <TextToTableDialog editor={editor} onClose={() => setModal(null)} />}
+      {modal === 'tableToText' && <TableToTextDialog editor={editor} onClose={() => setModal(null)} />}
       {modal === 'sortPara' && <SortParaDialog editor={editor} onClose={() => setModal(null)} />}
       {modal === 'goto' && <GoToDialog editor={editor} onClose={() => setModal(null)} />}
       {modal === 'pasteSpecial' && <PasteSpecialDialog editor={editor} nativePaste={() => fileApi.clipboard('paste')} onClose={() => setModal(null)} />}

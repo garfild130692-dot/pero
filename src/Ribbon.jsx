@@ -180,7 +180,7 @@ function LineSpacingButton({ editor, para, onMore }) {
 }
 
 
-function TablePicker({ onPick, style }) {
+function TablePicker({ onPick, style, items = [] }) {
   const [hover, setHover] = useState([0, 0]);
   const N = 8;
   return (
@@ -202,6 +202,10 @@ function TablePicker({ onPick, style }) {
           );
         })}
       </div>
+      {items.length > 0 && <div className="menu-sep" />}
+      {items.map(([label, fn, disabled]) => (
+        <button key={label} type="button" className="menu-item" disabled={disabled} onMouseDown={(e) => e.preventDefault()} onClick={fn}><span className="check" />{label}</button>
+      ))}
     </div>
   );
 }
@@ -497,6 +501,11 @@ export default function Ribbon({ editor, file, view, onStylesPane, onLink, onFon
                 {tablePicker.open && (
                   <TablePicker
                     style={tablePicker.style}
+                    items={[
+                      ['Вставить таблицу…', () => { tablePicker.setOpen(false); onRefDialog('insertTable'); }],
+                      ['Преобразовать в таблицу…', () => { tablePicker.setOpen(false); onRefDialog('textToTable'); }, s.inTable],
+                      ['Преобразовать в текст…', () => { tablePicker.setOpen(false); onRefDialog('tableToText'); }, !s.inTable],
+                    ]}
                     onPick={(rows, cols) => {
                       tablePicker.setOpen(false);
                       c().insertTable({ rows, cols, withHeaderRow: false }).run();
