@@ -782,3 +782,6 @@ p[data-section-break]::after {
 .vruler .vm:hover { background: rgba(31, 111, 92, .25); }
 .vruler-guide { position: absolute; left: 0; width: 100vw; border-top: 1px dashed #333; pointer-events: none; }
 @media print { .vruler { display: none !important; } }
+/* граница поля на горизонтальной линейке — перетаскивается (маркеры отступов лежат поверх) */
+.ruler .rmargin { position: absolute; top: 0; bottom: 0; width: 8px; transform: translateX(-50%); cursor: ew-resize; }
+.ruler .rmargin:hover { background: rgba(31, 111, 92, .25); }

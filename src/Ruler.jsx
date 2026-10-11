@@ -7,6 +7,7 @@ import { effectivePara } from './editor/paraFormat.js';
 import { PT_PER_CM, cmToPt, fmtNum, ptToCm } from './editor/paragraph.js';
 import { parseSectPr, sectionAt } from './editor/page.js';
 import { DEFAULT_TAB } from './editor/tabs.js';
+import { setPage } from './PageControls.jsx';
 
 const TAB_TYPES = [['left', 'По левому краю'], ['center', 'По центру'], ['right', 'По правому краю'], ['decimal', 'По разделителю'], ['bar', 'Вертикальная черта']];
 // Значок позиции табуляции (как на линейке Word)
@@ -71,8 +72,13 @@ function Ticks({ PAGE_W, MARGIN_L }) {
 
 export default function Ruler({ editor, zoom }) {
   const s = useEditorState({ editor, selector: ({ editor: e }) => rulerState(e) });
-  const { PAGE_W, MARGIN_L, MARGIN_R, TEXT_W } = geometry(s.sectPr);
-  const [drag, setDrag] = useState(null); // { kind, x } — x в pt от левого края текста
+  const [drag, setDrag] = useState(null); // { kind, x } — x в pt от левого края текста; поля — { kind: 'marginL'|'marginR', m }
+  const geo = geometry(s.sectPr);
+  // во время перетаскивания поля — линейка уже с новым полем (деления, маркеры и серая зона сдвигаются)
+  const MARGIN_L = drag && drag.kind === 'marginL' ? drag.m : geo.MARGIN_L;
+  const MARGIN_R = drag && drag.kind === 'marginR' ? drag.m : geo.MARGIN_R;
+  const { PAGE_W } = geo;
+  const TEXT_W = PAGE_W - MARGIN_L - MARGIN_R;
   const [tabType, setTabType] = useState('left');
   const boxRef = useRef(null);
   const scale = zoom / 100;
@@ -105,6 +111,34 @@ export default function Ruler({ editor, zoom }) {
       else if (kind === 'left') patch = { indentLeft: r(cur) };                                             // двигаются обе
       else patch = { indentRight: r(TEXT_W - cur) };
       editor.chain().focus().setParagraphFormat(patch).run();
+    };
+    window.addEventListener('mousemove', move);
+    window.addEventListener('mouseup', up);
+  };
+
+  // ---------- Поля страницы: граница серой и белой зоны (как в Word; маркеры отступов поверх неё — у них приоритет) ----------
+  const startMarginDrag = (kind) => (ev) => {
+    ev.preventDefault();
+    ev.stopPropagation();
+    const rect = boxRef.current.getBoundingClientRect();
+    const m0 = kind === 'marginL' ? geo.MARGIN_L : geo.MARGIN_R;
+    const other = kind === 'marginL' ? geo.MARGIN_R : geo.MARGIN_L;
+    let m = m0;
+    setDrag({ kind, m });
+    const move = (e) => {
+      const x = (e.clientX - rect.left) / (rect.width / PAGE_W); // pt от левого края листа
+      const raw = kind === 'marginL' ? x : PAGE_W - x;
+      const snapped = e.altKey ? raw : Math.round(raw / SNAP) * SNAP;
+      m = Math.min(Math.max(snapped, 0), PAGE_W - other - PT_PER_CM); // текста — не меньше 1 см
+      setDrag({ kind, m });
+    };
+    const up = () => {
+      window.removeEventListener('mousemove', move);
+      window.removeEventListener('mouseup', up);
+      setDrag(null);
+      if (Math.abs(m - m0) < 0.01) { editor.commands.focus(); return; }
+      const twips = Math.round(m * 20);
+      setPage(editor, kind === 'marginL' ? { left: twips } : { right: twips });
     };
     window.addEventListener('mousemove', move);
     window.addEventListener('mouseup', up);
@@ -155,7 +189,7 @@ export default function Ruler({ editor, zoom }) {
 
   // Позиции маркеров (во время перетаскивания — предварительные)
   let { left, right, first } = s;
-  if (drag) {
+  if (drag && !drag.kind.startsWith('margin')) {
     if (drag.kind === 'first') first = drag.x - left;
     else if (drag.kind === 'hanging') { first = left + first - drag.x; left = drag.x; }
     else if (drag.kind === 'left') left = drag.x;
@@ -178,6 +212,8 @@ export default function Ruler({ editor, zoom }) {
           <rect x={PAGE_W - MARGIN_R} y={2} width={MARGIN_R} height={12} className="ruler-margin" />
           <Ticks PAGE_W={PAGE_W} MARGIN_L={MARGIN_L} />
         </svg>
+        <div className="rmargin" style={{ left: `${(MARGIN_L / PAGE_W) * 100}%` }} title={`Левое поле: ${fmtNum(ptToCm(MARGIN_L), 2)} см (перетащите, чтобы изменить)`} onMouseDown={startMarginDrag('marginL')} />
+        <div className="rmargin" style={{ left: `${((PAGE_W - MARGIN_R) / PAGE_W) * 100}%` }} title={`Правое поле: ${fmtNum(ptToCm(MARGIN_R), 2)} см (перетащите, чтобы изменить)`} onMouseDown={startMarginDrag('marginR')} />
         {s.active && (
           <>
             <div className="rm rm-first" style={at(left + first)} title={tip('Отступ первой строки', first)} onMouseDown={startDrag('first')} />
@@ -194,7 +230,8 @@ export default function Ruler({ editor, zoom }) {
           </>
         )}
         {drag && drag.kind === 'tab' && !drag.off && <div className={`rt rt-${drag.align}`} style={at(drag.x)}><TabMark align={drag.align} /></div>}
-        {drag && <div className={`ruler-guide${drag.off ? ' off' : ''}`} style={at(drag.x)} />}
+        {drag && !drag.kind.startsWith('margin') && <div className={`ruler-guide${drag.off ? ' off' : ''}`} style={at(drag.x)} />}
+        {drag && drag.kind.startsWith('margin') && <div className="ruler-guide" style={{ left: `${((drag.kind === 'marginL' ? drag.m : PAGE_W - drag.m) / PAGE_W) * 100}%` }} />}
       </div>
     </div>
   );
