@@ -8,6 +8,7 @@ import { maxLevel, newSheet, recalc, DEFAULT_COL_W, DEFAULT_ROW_H } from './mode
 import { parsePrintArea, parsePrintTitles, printAreaText, printTitlesText } from './pageSetup.js';
 import { filterColumnXml, readFilterColumn } from './filter.js';
 import { cfSignature, cfXml, dxfXml, readCf, readDxf } from './cf.js';
+import { dvSignature, dvXml, readDv } from './dv.js';
 
 const NS = 'http://schemas.openxmlformats.org/spreadsheetml/2006/main';
 const R = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships';
@@ -292,6 +293,7 @@ function readProtection(root) {
 }
 // Условное форматирование листа (cf.js)
 const serializeEl = (el) => new XMLSerializer().serializeToString(el).replace(/\sxmlns(:\w+)?="[^"]*"/g, '');
+const readSheetDv = (root) => readDv(root, { parseRange, serialize: serializeEl });
 const readSheetCf = (root, book) => readCf(root, { dxfs: book.dxfs, readColor: book.colorOf, parseRange, serialize: serializeEl });
 // Автофильтр: { ref, cols, raw } (filter.js); непонятные условия столбцов (top10, по цвету…) — исходным XML
 function readAutoFilter(root) {
@@ -469,7 +471,8 @@ export async function importXlsx(data, { recalc: doRecalc = true } = {}) {
       sheet.cf = cf;
       if (cf.some((b) => b.rules.some((r) => r.unknown))) keep('наборы значков в условном форматировании');
     }
-    if (kid(root, 'dataValidations')) keep('проверка данных');
+    const dv = readSheetDv(root);
+    if (dv.length) sheet.dv = dv;
     if (kid(root, 'drawing')) keep('рисунки и диаграммы');
     if (kid(root, 'tableParts')) keep('«умные» таблицы');
     if (kid(root, 'legacyDrawing')) keep('примечания к ячейкам');
@@ -756,7 +759,7 @@ function newSheetXml(sheet, active, xfOf, str, cm = '1') {
   const cols = colsXml(sheet, false);
   const xml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<worksheet xmlns="${NS}" xmlns:r="${R}">` +
     `${dimensionXml(sheet)}<sheetViews><sheetView workbookViewId="0"${active ? ' tabSelected="1"' : ''}${sheet.freeze ? `>${paneXml(sheet.freeze)}</sheetView>` : '/>'}</sheetViews>` +
-    `${formatPrXml('<sheetFormatPr defaultRowHeight="15"/>', sheet)}${cols}${sheetDataXml(sheet, (r, c, cell) => cellXml(cell, addr(r, c), xfOf, str, formulaFx(sheet, key(r, c), cell, cm)), false, xfOf, str)}${protectionXml(sheet.protection)}${autoFilterXml(sheet.autoFilter)}${mergesXml(sheet)}${cfXml(sheet.cf, xfOf.dxf, rangeName)}` +
+    `${formatPrXml('<sheetFormatPr defaultRowHeight="15"/>', sheet)}${cols}${sheetDataXml(sheet, (r, c, cell) => cellXml(cell, addr(r, c), xfOf, str, formulaFx(sheet, key(r, c), cell, cm)), false, xfOf, str)}${protectionXml(sheet.protection)}${autoFilterXml(sheet.autoFilter)}${mergesXml(sheet)}${cfXml(sheet.cf, xfOf.dxf, rangeName)}${dvXml(sheet.dv, rangeName)}` +
     `${marginsXml((sheet.page && sheet.page.margins) || {})}</worksheet>`;
   return sheet.page ? setPageXml(xml, sheet.page) : xml;
 }
@@ -837,6 +840,7 @@ function patchSheetXml(xml, sheet, active, root, book, xfOf, str, cm) {
   if (JSON.stringify(readProtection(root)) !== JSON.stringify(sheet.protection || null)) out = setSheetEl(out, 'sheetProtection', protectionXml(sheet.protection));
   const afChanged = JSON.stringify(readAutoFilter(root)) !== JSON.stringify(sheet.autoFilter || null);
   const cfChanged = cfSignature(readSheetCf(root, book)) !== cfSignature(sheet.cf);
+  const dvChanged = dvSignature(readSheetDv(root)) !== dvSignature(sheet.dv);
   const fp = findEl(out, 'sheetFormatPr');
   if (fp) out = out.slice(0, fp.start) + formatPrXml(out.slice(fp.start, fp.end), sheet) + out.slice(fp.end);
   else if (maxLevel(sheet, 'row') || maxLevel(sheet, 'col')) out = setSheetEl(out, 'sheetFormatPr', formatPrXml('<sheetFormatPr defaultRowHeight="15"/>', sheet));
@@ -854,6 +858,8 @@ function patchSheetXml(xml, sheet, active, root, book, xfOf, str, cm) {
     out = out.replace(/<conditionalFormatting\b[\s\S]*?<\/conditionalFormatting>/g, '');
     out = setSheetEl(out, 'conditionalFormatting', cfXml(sheet.cf, xfOf.dxf, rangeName));
   }
+  // проверка данных изменена (или сдвинута) — заново из модели; неизменённые правила — исходной разметкой
+  if (dvChanged || shifts.length) out = setSheetEl(out, 'dataValidations', dvXml(sheet.dv, rangeName));
   return out;
 }
 

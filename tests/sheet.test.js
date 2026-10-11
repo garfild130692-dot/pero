@@ -222,9 +222,10 @@ print(v['Продажи']['D6'].value, v['Свод']['B1'].value)
     const src = readFileSync('tests/fixtures/preserve.xlsx');
     const { wb, warnings, kept } = await importXlsx(src);
     expect(warnings).toEqual({});
-    expect(Object.keys(kept)).toEqual(expect.arrayContaining(['проверка данных', 'рисунки и диаграммы',
+    expect(Object.keys(kept)).toEqual(expect.arrayContaining(['рисунки и диаграммы',
       'примечания к ячейкам', 'гиперссылки', '«умные» таблицы', 'сводные таблицы']));
-    // условное форматирование — в модели (cf.js)
+    // проверка данных и условное форматирование — в модели (dv.js, cf.js)
+    expect(wb.sheets[0].dv[0]).toMatchObject({ type: 'whole', operator: 'between', formula1: '0', formula2: '1000', allowBlank: true, showError: true });
     expect(wb.sheets[0].cf.map((b) => b.rules[0].type)).toEqual(['cellIs', 'colorScale']);
     expect(wb.sheets[0].cf[0].rules[0]).toMatchObject({ operator: 'lessThan', formulas: ['0'], dxf: { color: '#c00000' } });
     expect(wb.names).toEqual([{ name: 'План', text: 'Данные!$B$2:$B$13', sheet: null }, { name: 'Ставка', text: '1/5', sheet: null }]);

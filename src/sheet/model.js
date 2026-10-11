@@ -825,6 +825,17 @@ export function shiftCells(wb, si, axis, at, count) {
         }
         next.cf = cf;
       }
+      // проверка данных: диапазоны и формулы правил
+      if (sheet.dv) {
+        next.dv = sheet.dv.map((rule) => {
+          const ranges = rule.ranges.map((g) => { const sp = shiftSpan(g[k1], g[k2], at, count); return sp ? { ...g, [k1]: sp[0], [k2]: sp[1] } : null; }).filter(Boolean);
+          if (!ranges.length) return null;
+          const sh = (f) => (f == null || /^".*"$/s.test(f) ? f : shiftFormula(f, { sheet: name, current: sheet.name, axis, at, count }));
+          const f1 = sh(rule.formula1); const f2 = sh(rule.formula2);
+          return { ...rule, ranges, formula1: f1, formula2: f2, ...(f1 !== rule.formula1 || f2 !== rule.formula2 ? { edited: true } : {}) };
+        }).filter(Boolean);
+        if (!next.dv.length) delete next.dv;
+      }
       // автофильтр: диапазон и номера столбцов условий
       if (sheet.autoFilter) {
         const af = sheet.autoFilter;
@@ -1150,6 +1161,23 @@ export function fillSeries(wb, si, src, dst, opts = {}) {
   return recalc(withSheet(wb, si, { ...sheet, cells }));
 }
 const cleanFormula = (cell) => { for (const n of ['arr', 'ax', 'legacy', 'cse']) delete cell[n]; return cell; };
+
+// ---------- Проверка данных ----------
+// Задать правило для диапазона (rule = null — убрать проверку): у других правил этот диапазон вычитается
+export function setValidation(wb, si, rg, rule) {
+  const sheet = wb.sheets[si];
+  const dv = (sheet.dv || []).map((r) => {
+    const ranges = r.ranges.flatMap((g) => subtractRect(g, rg));
+    return ranges.length === r.ranges.length && ranges.every((g, i) => JSON.stringify(g) === JSON.stringify(r.ranges[i])) ? r : { ...r, ranges };
+  }).filter((r) => r.ranges.length);
+  // поля по умолчанию — как у правила, прочитанного из файла (dv.js readDv)
+  const DEF = { type: 'any', operator: 'between', formula1: null, formula2: null, allowBlank: false, inCellDropdown: true, errorStyle: 'stop',
+    showError: false, errorTitle: '', error: '', showPrompt: false, promptTitle: '', prompt: '' };
+  if (rule) dv.push({ ranges: [rg], ...DEF, ...rule, edited: true });
+  const next = { ...sheet, dv };
+  if (!dv.length) delete next.dv;
+  return withSheet(wb, si, next);
+}
 
 // ---------- Условное форматирование ----------
 // Новое правило — с наивысшим приоритетом (1), остальные сдвигаются, как в Excel. ranges — куда применить
