@@ -72,7 +72,7 @@ export function usePopover() {
 
 // ---------- Список шрифтов: установленные в системе (Local Font Access), иначе — распространённые ----------
 let systemFonts = null;
-async function loadSystemFonts() {
+export async function loadSystemFonts() {
   if (systemFonts) return systemFonts;
   try {
     if (typeof window.queryLocalFonts === 'function') {
@@ -212,7 +212,7 @@ const mix = (hex, to, k) => '#' + [1, 3, 5].map((i) => {
 }).join('');
 // Свой набор основных цветов: 10 оттенков × (основной, 3 светлее, 2 темнее)
 const BASE = ['#000000', '#ffffff', '#44546a', '#1f6f5c', '#2e75b6', '#c55a11', '#7f7f7f', '#bf9000', '#5b9bd5', '#70ad47'];
-const PALETTE = [
+export const PALETTE = [
   BASE,
   BASE.map((c, i) => (i === 0 ? '#7f7f7f' : i === 1 ? '#f2f2f2' : mix(c, '#ffffff', 0.8))),
   BASE.map((c, i) => (i === 0 ? '#595959' : i === 1 ? '#d9d9d9' : mix(c, '#ffffff', 0.6))),
@@ -220,7 +220,7 @@ const PALETTE = [
   BASE.map((c, i) => (i === 0 ? '#262626' : i === 1 ? '#a6a6a6' : mix(c, '#000000', 0.25))),
   BASE.map((c, i) => (i === 0 ? '#0d0d0d' : i === 1 ? '#808080' : mix(c, '#000000', 0.5))),
 ];
-const STANDARD = ['#c00000', '#ff0000', '#ffc000', '#ffff00', '#92d050', '#00b050', '#00b0f0', '#0070c0', '#002060', '#7030a0'];
+export const STANDARD = ['#c00000', '#ff0000', '#ffc000', '#ffff00', '#92d050', '#00b050', '#00b0f0', '#0070c0', '#002060', '#7030a0'];
 // Порядок цветов выделения — как привычно: сначала яркие, затем тёмные
 const HIGHLIGHT_ORDER = ['yellow', 'green', 'cyan', 'magenta', 'blue', 'red', 'darkBlue', 'darkCyan', 'darkGreen',
   'darkMagenta', 'darkRed', 'darkYellow', 'darkGray', 'lightGray', 'black'];

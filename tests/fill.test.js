@@ -69,3 +69,22 @@ describe('маркер заполнения', () => {
     expect([valueAt(w4.sheets[0], 0, 0), valueAt(w4.sheets[0], 1, 0), valueAt(w4.sheets[0], 2, 0)]).toEqual([1, null, null]);
   });
 });
+
+describe('«Формат ячеек»', () => {
+  it('стиль, границы (внешние/внутренние), объединение — одной операцией', async () => {
+    const m = await import('../src/sheet/model.js');
+    let wb = newWorkbook();
+    wb = m.applyCellFormat(wb, 0, { r1: 0, c1: 0, r2: 1, c2: 1 }, {
+      patch: { numFmt: '#,##0.00', bold: true, fill: '#ffff00' },
+      borders: { top: { style: 'thin', color: '#000000' }, bottom: { style: 'thin', color: '#000000' }, insideH: { style: 'dashed', color: '#ff0000' } },
+    });
+    const st = (r, c) => wb.sheets[0].cells.get(`${r},${c}`).s;
+    expect(st(0, 0)).toMatchObject({ numFmt: '#,##0.00', bold: true, fill: '#ffff00', border: { top: { style: 'thin' }, bottom: { style: 'dashed' } } });
+    expect(st(1, 1).border).toEqual({ top: { style: 'dashed', color: '#ff0000' }, bottom: { style: 'thin', color: '#000000' } });
+    wb = m.applyCellFormat(wb, 0, { r1: 0, c1: 0, r2: 1, c2: 1 }, { merge: true });
+    expect(wb.sheets[0].merges).toEqual([{ r1: 0, c1: 0, r2: 1, c2: 1 }]);
+    wb = m.applyCellFormat(wb, 0, { r1: 0, c1: 0, r2: 1, c2: 1 }, { patch: { bold: null }, borders: { top: null } });
+    expect(st(0, 0).bold).toBeUndefined();
+    expect(st(0, 0).border.top).toBeUndefined();
+  });
+});

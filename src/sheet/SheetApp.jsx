@@ -16,7 +16,7 @@ const absRange = (rg) => {
 import { formatValue } from './format.js';
 import {
   DEFAULT_COL_W, DEFAULT_ROW_H, addSheet, autoSumFormula, blockToText, clearRange, collapseGroup, copyBlock, deleteSheet, expandGroup, fill, inputOf,
-  addCfRule, clearCf, currentRegion, fillSeries, isHidden, isValidName, mergeAt, nameTarget, newWorkbook, reapplyFilter, recalc, setAutoFilter, setCalcMode,
+  addCfRule, applyCellFormat, clearCf, currentRegion, fillSeries, isHidden, isValidName, mergeAt, nameTarget, newWorkbook, reapplyFilter, recalc, setAutoFilter, setCalcMode,
   setColumnFilter, setNames, sortRows, spillAnchorAt, valueAt, viewContext, pasteBlock, pasteText, renameSheet, setColWidth, setInput, setRowHeight, showLevels, usedRange,
 } from './model.js';
 import { exportXlsx, importXlsx } from './xlsx.js';
@@ -27,6 +27,7 @@ import ProtectDialog from './ProtectDialog.jsx';
 import NamesDialog from './NamesDialog.jsx';
 import FilterMenu, { CustomFilterDialog } from './FilterMenu.jsx';
 import SortDialog from './SortDialog.jsx';
+import FormatCellsDialog from './FormatCellsDialog.jsx';
 import { CfDialog } from './CfMenu.jsx';
 import { cfView } from './cf.js';
 import { filterCount, shownText } from './filter.js';
@@ -62,6 +63,7 @@ export default function SheetApp({ initialFile, onOpenOther, onNewDoc, autosaveS
   const [customFilter, setCustomFilter] = useState(null); // { j, kind, preset }
   const [sortDlg, setSortDlg] = useState(null); // диапазон
   const [cfDlg, setCfDlg] = useState(null); // вид правила условного форматирования
+  const [fcDlg, setFcDlg] = useState(false); // «Формат ячеек»
   const [showFormulas, setShowFormulas] = useState(false); // Ctrl+` — формулы вместо значений
   const [arrows, setArrows] = useState([]); // стрелки влияющих/зависимых ячеек
   const [evalAt, setEvalAt] = useState(null); // { r, c } — «Вычислить формулу»
@@ -331,6 +333,7 @@ export default function SheetApp({ initialFile, onOpenOther, onNewDoc, autosaveS
     precedents, dependents, clearArrows: () => setArrows([]), evaluateFormula,
     // F9 — пересчитать всё (в том числе отложенное в режиме «вручную» и летучие функции); в отмену не попадает
     recalc: () => setWb((w) => recalc(w, { full: true })),
+    formatCells: () => setFcDlg(true),
     // условное форматирование выделенного диапазона
     cfDialog: (kind) => setCfDlg(kind),
     addCf: (rule) => change((w) => addCfRule(w, si, [rg], rule)),
@@ -365,6 +368,7 @@ export default function SheetApp({ initialFile, onOpenOther, onNewDoc, autosaveS
     if (ctrl && e.code === 'Backquote') { e.preventDefault(); setShowFormulas((v) => !v); return; }
     if (e.shiftKey && e.key === 'F3') { e.preventDefault(); setFnDlg({}); return; }
     if (ctrl && e.code === 'KeyA') { e.preventDefault(); const u = usedRange(sheet); setSel({ r: 0, c: 0, r2: u ? u.r2 : 0, c2: u ? u.c2 : 0 }); return; }
+    if (ctrl && (e.code === 'Digit1' || e.code === 'Numpad1') && !e.shiftKey) { e.preventDefault(); setFcDlg(true); return; }
     if (ctrl && e.shiftKey && e.code === 'KeyL') { e.preventDefault(); ribbonApi.toggleFilter(); return; }
     if (ctrl && e.code === 'KeyB') { e.preventDefault(); ribbonApi.toggle('bold'); return; }
     if (ctrl && e.code === 'KeyI') { e.preventDefault(); ribbonApi.toggle('italic'); return; }
@@ -564,6 +568,12 @@ export default function SheetApp({ initialFile, onOpenOther, onNewDoc, autosaveS
           head={shownText(sheet.cells.get(key(sheet.autoFilter.ref.r1, sheet.autoFilter.ref.c1 + customFilter.j))) || `Столбец ${colName(sheet.autoFilter.ref.c1 + customFilter.j)}`}
           onClose={() => { setCustomFilter(null); gridRef.current && gridRef.current.focus(); }}
           onApply={(crit) => { const { j } = customFilter; setCustomFilter(null); change((w) => setColumnFilter(w, si, j, crit)); gridRef.current && gridRef.current.focus(); }} />
+      )}
+      {fcDlg && (
+        <FormatCellsDialog cell={sheet.cells.get(key(rg.r1, rg.c1))} rg={rg} merged={!!mergeAt(sheet, rg.r1, rg.c1)}
+          sample={(() => { const v = valueAt(sheet, rg.r1, rg.c1); return v == null || v === '' ? undefined : v; })()}
+          onClose={() => { setFcDlg(false); gridRef.current && gridRef.current.focus(); }}
+          onApply={(res) => { setFcDlg(false); change((w) => applyCellFormat(w, si, rg, res)); gridRef.current && gridRef.current.focus(); }} />
       )}
       {cfDlg && (
         <CfDialog kind={cfDlg} rg={rg} onClose={() => { setCfDlg(null); gridRef.current && gridRef.current.focus(); }}

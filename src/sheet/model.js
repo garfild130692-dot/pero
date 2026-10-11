@@ -715,6 +715,29 @@ export function setStyle(wb, si, rg, patch) {
   return withSheet(wb, si, { ...sheet, cells });
 }
 
+// Диалог «Формат ячеек»: patch — свойства стиля (null — убрать), borders — заданные стороны { top, bottom, left, right,
+// insideH, insideV: { style, color } | null } (не названные — без изменений), merge — true/false/undefined
+export function applyCellFormat(wb, si, rg, { patch = {}, borders = null, merge } = {}) {
+  let out = Object.keys(patch).length ? setStyle(wb, si, rg, patch) : wb;
+  if (borders && Object.keys(borders).length) {
+    for (let r = rg.r1; r <= rg.r2; r++) {
+      for (let c = rg.c1; c <= rg.c2; c++) {
+        const cell = out.sheets[si].cells.get(key(r, c));
+        const b = { ...((cell && cell.s && cell.s.border) || {}) };
+        const put = (side, v) => { if (v === undefined) return; if (v) b[side] = v; else delete b[side]; };
+        put('top', r === rg.r1 ? borders.top : borders.insideH);
+        put('bottom', r === rg.r2 ? borders.bottom : borders.insideH);
+        put('left', c === rg.c1 ? borders.left : borders.insideV);
+        put('right', c === rg.c2 ? borders.right : borders.insideV);
+        out = setStyle(out, si, { r1: r, c1: c, r2: r, c2: c }, { border: Object.keys(b).length ? b : null });
+      }
+    }
+  }
+  if (merge === true && (rg.r2 > rg.r1 || rg.c2 > rg.c1)) out = mergeRange(out, si, rg);
+  if (merge === false) out = unmergeRange(out, si, rg);
+  return out;
+}
+
 // Очистить: what — 'all' | 'contents' | 'formats'
 export function clearRange(wb, si, rg, what = 'contents') {
   const sheet = wb.sheets[si];

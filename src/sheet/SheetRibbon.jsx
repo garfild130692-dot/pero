@@ -26,8 +26,19 @@ function Btn({ icon, label, title, onClick, active, disabled, big, children }) {
     </button>
   );
 }
-const Group = ({ title, children }) => (
-  <div className="rb-group"><div className="rb-group-body">{children}</div><div className="rb-group-title">{title}</div></div>
+// launcher — кнопка в углу заголовка группы: «Формат ячеек» (как в Excel)
+const Group = ({ title, children, launcher }) => (
+  <div className="rb-group">
+    <div className="rb-group-body">{children}</div>
+    <div className="rb-group-title">
+      {title}
+      {launcher && (
+        <button type="button" className="rb-launcher" title={launcher.title} onMouseDown={(e) => e.preventDefault()} onClick={launcher.onClick}>
+          <Icon.launcher size={11} />
+        </button>
+      )}
+    </div>
+  </div>
 );
 const T = ({ children, style }) => <span className="txt-icon" style={style}>{children}</span>;
 
@@ -175,7 +186,7 @@ export default function SheetRibbon({ api }) {
                 <Btn icon="copy" title="Копировать (Ctrl+C)" onClick={() => clipboard('copy')} />
               </div>
             </Group>
-            <Group title="Шрифт">
+            <Group title="Шрифт" launcher={{ title: 'Формат ячеек (Ctrl+1)', onClick: api.formatCells }}>
               <div className="rb-col">
                 <div className="rb-row">
                   <select className="rb-select" title="Шрифт" style={{ width: 130 }} value={s.fontFamily || 'Calibri'}
@@ -202,7 +213,7 @@ export default function SheetRibbon({ api }) {
                 </div>
               </div>
             </Group>
-            <Group title="Выравнивание">
+            <Group title="Выравнивание" launcher={{ title: 'Формат ячеек (Ctrl+1)', onClick: api.formatCells }}>
               <div className="rb-col">
                 <div className="rb-row">
                   <Btn title="По верхнему краю" active={s.valign === 'top'} onClick={() => style({ valign: s.valign === 'top' ? null : 'top' })}><T>⤒</T></Btn>
@@ -219,7 +230,7 @@ export default function SheetRibbon({ api }) {
                 </div>
               </div>
             </Group>
-            <Group title="Число">
+            <Group title="Число" launcher={{ title: 'Формат ячеек (Ctrl+1)', onClick: api.formatCells }}>
               <div className="rb-col">
                 <select className="rb-select" title="Числовой формат" style={{ width: 140 }}
                   value={FORMAT_PRESETS.some(([c]) => c === fmt) ? fmt : '*'}
@@ -258,6 +269,8 @@ export default function SheetRibbon({ api }) {
                 ['Отобразить столбцы', () => hide('col', false)],
                 '-',
                 ['Блокировать ячейку (действует при защите листа)', () => style({ unlocked: !s.unlocked }), !s.unlocked],
+                '-',
+                ['Формат ячеек… (Ctrl+1)', api.formatCells],
                 [prot ? 'Снять защиту листа…' : 'Защитить лист…', api.protect],
               ]} />
             </Group>
