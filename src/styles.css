@@ -797,9 +797,9 @@ p[data-section-break]::after {
 .print-decor { display: none; }
 @media print {
   .page-decor { display: none !important; }
-  .page { background: #fff !important; }
+  .page { background: transparent !important; }
   .print-decor { display: block; }
-  .print-decor .wm, .print-decor .pgb { position: fixed; z-index: -1; box-sizing: border-box; }
+  .print-decor .wm, .print-decor .pgb { position: fixed; z-index: 0; box-sizing: border-box; } /* текст (.page-content, z 1) — поверх */
 }
 .design-pop { min-width: 240px; }
 .modal.wm-dlg { width: 520px; }
