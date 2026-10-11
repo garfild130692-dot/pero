@@ -8,7 +8,6 @@ import RecentButton from './RecentButton.jsx';
 import { insertImageFiles } from './insertImage.js';
 import { PicturePanel } from './PictureControls.jsx';
 import { LayoutPanel } from './PageControls.jsx';
-import { cssFontStack } from './editor/font.js';
 import { TABLE_STYLES } from './editor/tableFormat.js';
 import { trackInfo } from './editor/track.js';
 import { sectionAt } from './editor/page.js';
@@ -22,6 +21,7 @@ import { marksKey } from './editor/marks.js';
 import { SymbolButton } from './SymbolDialog.jsx';
 import { MultilevelButton } from './NumberingDialogs.jsx';
 import { BulletButton, NumberButton } from './ListButtons.jsx';
+import { sampleOf, styleEntries } from './StylesPane.jsx';
 import { ViewPanel } from './ViewControls.jsx';
 import { DesignPanel } from './DesignControls.jsx';
 import { PasteButton } from './PasteControls.jsx';
@@ -179,12 +179,6 @@ function LineSpacingButton({ editor, para, onMore }) {
   );
 }
 
-const STYLES = [
-  { key: 'p', label: 'Обычный', cls: 'st-normal' },
-  { key: 1, label: 'Заголовок 1', cls: 'st-h1' },
-  { key: 2, label: 'Заголовок 2', cls: 'st-h2' },
-  { key: 3, label: 'Заголовок 3', cls: 'st-h3' },
-];
 
 function TablePicker({ onPick, style }) {
   const [hover, setHover] = useState([0, 0]);
@@ -211,15 +205,6 @@ function TablePicker({ onPick, style }) {
     </div>
   );
 }
-
-// Образец стиля в галерее — тем же шрифтом/цветом/начертанием
-const sampleStyle = (st) => {
-  const r = st.run || {};
-  return {
-    fontFamily: r.fontFamily ? cssFontStack(r.fontFamily) : undefined, color: r.color || undefined,
-    fontWeight: r.bold ? 'bold' : undefined, fontStyle: r.italic ? 'italic' : undefined, textDecoration: r.underline ? 'underline' : undefined,
-  };
-};
 
 // Меню «Стили ▾»: создать, изменить, удалить
 function StylesMenu({ s, onStyle }) {
@@ -266,7 +251,7 @@ function TableStylesButton({ editor }) {
   );
 }
 
-export default function Ribbon({ editor, file, view, onLink, onFont, onSymbol, onRefDialog, onParagraph, onMargins, onHf, onFind, onStyle, review }) {
+export default function Ribbon({ editor, file, view, onStylesPane, onLink, onFont, onSymbol, onRefDialog, onParagraph, onMargins, onHf, onFind, onStyle, review }) {
   const [tab, setTab] = useState('home');
   const tablePicker = usePopover();
 
@@ -306,6 +291,8 @@ export default function Ribbon({ editor, file, view, onLink, onFont, onSymbol, o
       styles: e.state.doc.attrs.styles || [],
       track: trackInfo(e.state),
       styleId: e.state.selection.$from.parent.attrs.styleId || null,
+      charStyles: e.state.doc.attrs.charStyles || [],
+      charStyle: ((e.state.storedMarks || e.state.selection.$from.marks()).find((m) => m.type.name === 'charStyle') || { attrs: {} }).attrs.id || null,
     }),
     // в состоянии есть вложенный объект — сравниваем по значению, чтобы лента не перерисовывалась зря
     equalityFn: (a, b) => JSON.stringify(a) === JSON.stringify(b),
@@ -440,32 +427,18 @@ export default function Ribbon({ editor, file, view, onLink, onFont, onSymbol, o
               </div>
             </Group>
 
-            <Group title="Стили">
+            <Group title="Стили" launcher={{ title: 'Панель «Стили» (Ctrl+Alt+Shift+S)', onClick: onStylesPane }}>
               <div className="style-gallery">
-                {STYLES.map((st) => {
-                  const active = st.key === 'p' ? !s.heading && !s.styleId : s.heading === st.key;
-                  return (
-                    <button
-                      key={st.key}
-                      className={`style-card ${st.cls}${active ? ' active' : ''}`}
-                      onMouseDown={(e) => e.preventDefault()}
-                      onClick={() => (st.key === 'p' ? c().setParagraphStyle(null).run() : c().setHeading({ level: st.key }).run())}
-                    >
-                      <span className="style-sample">АаБбВв</span>
-                      <span className="style-name">{st.label}</span>
-                    </button>
-                  );
-                })}
-                {s.styles.map((st) => (
+                {styleEntries(s).map((st) => (
                   <button
-                    key={st.id}
-                    className={`style-card${s.styleId === st.id ? ' active' : ''}`}
-                    title={st.name}
+                    key={st.key}
+                    className={`style-card ${st.cls || ''}${st.active ? ' active' : ''}${st.kind === 'char' ? ' char' : ''}`}
+                    title={st.kind === 'char' ? `${st.label} — символьный стиль` : st.label}
                     onMouseDown={(e) => e.preventDefault()}
-                    onClick={() => c().setParagraphStyle(st.id).run()}
+                    onClick={() => st.apply(editor)}
                   >
-                    <span className="style-sample" style={sampleStyle(st)}>АаБбВв</span>
-                    <span className="style-name">{st.name}</span>
+                    <span className="style-sample" style={st.def ? sampleOf(st.def) : undefined}>АаБбВв</span>
+                    <span className="style-name">{st.label}</span>
                   </button>
                 ))}
               </div>

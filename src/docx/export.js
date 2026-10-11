@@ -29,9 +29,36 @@ function customStyleXml(st, normalId) {
   const jc = { center: 'center', right: 'right', justify: 'both' }[st.align];
   const pPr = tabsXml(st.tabs) + spacingXml(p) + indXml(p) + (jc ? `<w:jc w:val="${jc}"/>` : '');
   // встроенные имена Word (toc 1…9, TOC Heading) — без customStyle: Word узнаёт свой стиль
-  const builtin = /^(toc [1-9]|toc heading)$/i.test(st.name || '');
+  const builtin = !!st.builtin || /^(toc [1-9]|toc heading)$/i.test(st.name || '');
   return `<w:style w:type="paragraph"${builtin ? '' : ' w:customStyle="1"'} w:styleId="${esc(st.id)}"><w:name w:val="${esc(st.name || st.id)}"/>` +
     `${normalId ? `<w:basedOn w:val="${esc(normalId)}"/>` : ''}<w:qFormat/>${pPr ? `<w:pPr>${pPr}</w:pPr>` : ''}${rPr ? `<w:rPr>${rPr}</w:rPr>` : ''}</w:style>`;
+}
+
+// Определение символьного стиля (doc.attrs.charStyles); встроенные имена Word — без customStyle
+function charStyleXml(st) {
+  const r = st.run || {};
+  let rPr = '';
+  if (r.fontFamily) rPr += `<w:rFonts w:ascii="${esc(r.fontFamily)}" w:hAnsi="${esc(r.fontFamily)}" w:eastAsia="${esc(r.fontFamily)}" w:cs="${esc(r.fontFamily)}"/>`;
+  if (r.bold) rPr += '<w:b/><w:bCs/>';
+  if (r.italic) rPr += '<w:i/><w:iCs/>';
+  if (r.strike) rPr += '<w:strike/>';
+  if (r.color) rPr += `<w:color w:val="${r.color.slice(1).toUpperCase()}"/>`;
+  if (r.fontSize) rPr += `<w:sz w:val="${Math.round(r.fontSize * 2)}"/><w:szCs w:val="${Math.round(r.fontSize * 2)}"/>`;
+  if (r.underline) rPr += '<w:u w:val="single"/>';
+  return `<w:style w:type="character"${st.builtin ? '' : ' w:customStyle="1"'} w:styleId="${esc(st.id)}"><w:name w:val="${esc(st.name || st.id)}"/>` +
+    `<w:uiPriority w:val="20"/><w:qFormat/>${rPr ? `<w:rPr>${rPr}</w:rPr>` : ''}</w:style>`;
+}
+
+// Встроенные стили Пера (абзацные и символьные), которые в исходном файле уже есть под своим id (по внутреннему имени):
+// ссылаться на них, а не дописывать дубликат. Возвращает { remap: id Пера → id файла }
+function builtinRemap(stylesXml, defs) {
+  const remap = {};
+  for (const st of defs) {
+    if (!st.builtin) continue;
+    const id = styleIdByName(stylesXml, String(st.name).toLowerCase());
+    if (id && id !== st.id) remap[st.id] = id;
+  }
+  return remap;
 }
 
 // Разметка нового встроенного рисунка (как пишет Word для «Вставка → Рисунок»)
@@ -113,7 +140,8 @@ const DEFAULT_SECTPR = `<w:sectPr><w:pgSz w:w="${PAGE.w}" w:h="${PAGE.h}"/>` +
   '<w:cols w:space="708"/><w:docGrid w:linePitch="360"/></w:sectPr>';
 
 class Exporter {
-  constructor({ styleIds = OUR_STYLE_IDS, numBase = 1, relTargets = null, imgBase = 0, sect = (x) => x, customStyles = [], styleTabs = {}, fileStyleIds = null, headingNum = null } = {}) {
+  constructor({ styleIds = OUR_STYLE_IDS, numBase = 1, relTargets = null, imgBase = 0, sect = (x) => x, customStyles = [], styleTabs = {}, fileStyleIds = null, headingNum = null, styleRemap = {} } = {}) {
+    this.styleRemap = styleRemap; // id стиля Пера → id того же встроенного стиля в исходном файле
     this.headingNum = headingNum; // нумерация заголовков: { numId, viaStyle } | { off } | null (см. headingNumMode)
     this.fileStyleIds = fileStyleIds; // id стилей исходного пакета (исходный стиль заголовка — если он там есть)
     this.styleTabs = styleTabs; // id пользовательского стиля → его позиции табуляции (убранные в абзаце пишутся как clear)
@@ -158,7 +186,9 @@ class Exporter {
     // порядок элементов rPr задан схемой (CT_RPr): rStyle, rFonts, b, bCs, i, iCs, caps, smallCaps, strike, color,
     // spacing, sz, szCs, highlight, u, shd, vertAlign
     let rPr = '';
-    if (link && link.attrs.class !== 'plain') rPr += `<w:rStyle w:val="${this.styleIds.Hyperlink}"/>`;
+    const cs = marks.find((m) => m.type === 'charStyle');
+    if (cs && cs.attrs && cs.attrs.id) rPr += `<w:rStyle w:val="${esc(this.styleRemap[cs.attrs.id] || cs.attrs.id)}"/>`;
+    else if (link && link.attrs.class !== 'plain') rPr += `<w:rStyle w:val="${this.styleIds.Hyperlink}"/>`;
     if (font) rPr += `<w:rFonts w:ascii="${esc(font)}" w:hAnsi="${esc(font)}" w:eastAsia="${esc(font)}" w:cs="${esc(font)}"/>`;
     if (has('bold')) rPr += '<w:b/><w:bCs/>';
     if (has('italic')) rPr += '<w:i/><w:iCs/>';
@@ -237,7 +267,7 @@ class Exporter {
     const fs = node.type === 'heading' && attrs.fileStyle;
     const ownHeading = fs && fs.level === attrs.level && this.fileStyleIds && this.fileStyleIds.has(fs.id) ? fs.id : null;
     const pStyle = style || ownHeading || (node.type === 'heading' ? this.styleIds['Heading' + Math.min(Math.max(attrs.level || 1, 1), 6)]
-      : (attrs.styleId && this.customStyles.has(attrs.styleId) ? attrs.styleId : null));
+      : (attrs.styleId && this.customStyles.has(attrs.styleId) ? this.styleRemap[attrs.styleId] || attrs.styleId : null));
     if (pStyle) pPr += `<w:pStyle w:val="${pStyle}"/>`;
     // порядок в pPr по схеме: pStyle, keepNext, keepLines, pageBreakBefore, widowControl, numPr, pBdr, shd, tabs, spacing, ind, jc
     pPr += layoutXmlHead(attrs);
@@ -799,7 +829,7 @@ ${notes.length ? `<Relationship Id="rIdPeroF" Type="${relType('footnotes')}" Tar
     zip.file('docProps/app.xml', APP_XML);
     zip.file('word/document.xml', documentXml);
     zip.file('word/styles.xml', stylesXml(da.fontFamily || DEFAULT_FONT, parseSize(da.fontSize) || DEFAULT_SIZE, { ...NEW_DOC_PARA, ...(da.para || {}) })
-      .replace('</w:styles>', `${customs.map((s) => customStyleXml(s, 'Normal')).join('')}</w:styles>`));
+      .replace('</w:styles>', `${customs.map((s) => customStyleXml(s, 'Normal')).join('')}${(da.charStyles || []).map(charStyleXml).join('')}</w:styles>`));
     zip.file('word/numbering.xml', numberingXml(ex.orderedNums, hLevels));
     zip.file('word/settings.xml', patchSettingsBackground(settingsXml(da.defaultTab, !!hf.evenOdd), !!da.pageColor));
     zip.file('word/_rels/document.xml.rels', docRels);
@@ -815,13 +845,21 @@ ${notes.length ? `<Relationship Id="rIdPeroF" Type="${relType('footnotes')}" Tar
   const prefix = src.dir ? src.dir + '/' : '';
 
   let styleIds = OUR_STYLE_IDS;
+  let styleRemap = {};
   if (src.styles) {
     const merged = mergeStyles(src.styles, ourStyleDefs());
     styleIds = merged.styleIds;
     let xml = merged.xml;
     const normalId = merged.defaults.paragraph || null;
+    // встроенные стили Пера, уже имеющиеся в файле, — ссылками на них
+    styleRemap = builtinRemap(src.styles, [...customs, ...(da.charStyles || [])]);
+    for (const st of da.charStyles || []) {
+      if (styleRemap[st.id] || new RegExp(`w:styleId="${st.id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}"`).test(xml)) continue;
+      xml = xml.replace(/<\/w:styles>\s*$/, `${charStyleXml(st)}</w:styles>`);
+    }
     // пользовательские стили: изменённые в Пере — переписать определение, новые — дописать, прочие — как в файле
     for (const st of customs) {
+      if (styleRemap[st.id]) continue;
       const re = new RegExp(`<w:style\\b[^>]*w:styleId="${st.id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}"[^>]*>[\\s\\S]*?</w:style>`);
       if (re.test(xml)) { if (st.modified) xml = xml.replace(re, customStyleXml(st, normalId)); }
       else xml = xml.replace(/<\/w:styles>\s*$/, `${customStyleXml(st, normalId)}</w:styles>`);
@@ -852,7 +890,7 @@ ${notes.length ? `<Relationship Id="rIdPeroF" Type="${relType('footnotes')}" Tar
     ...[...src.rels.matchAll(/Id="rIdPeroImg(\d+)"/g)].map((m) => +m[1]));
   const fileStyleIds = new Set([...String(src.styles || '').matchAll(/w:styleId="([^"]+)"/g)].map((m) => m[1]));
   const hMode = headingNumMode(da.headingNumbering, true);
-  const ex = new Exporter({ styleIds, numBase, relTargets: src.relTargets, imgBase, sect, customStyles: customs.map((s) => s.id), styleTabs, fileStyleIds, headingNum: hMode });
+  const ex = new Exporter({ styleIds, numBase, relTargets: src.relTargets, imgBase, sect, customStyles: customs.map((s) => s.id), styleTabs, fileStyleIds, headingNum: hMode, styleRemap });
   let body = ex.blocks(doc.content || []);
   if (!body) body = '<w:p/>';
   const hLevels = hMode && hMode.ours ? da.headingNumbering : null;

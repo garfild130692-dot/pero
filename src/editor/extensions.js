@@ -32,6 +32,7 @@ import { Footnotes } from './footnotes.js';
 import { Numbering } from './numbering.js';
 import { Design } from './design.js';
 import { PasteOptions } from './paste.js';
+import { CharStyle } from './builtinStyles.js';
 
 // Как оформлены заголовки — font.js (совпадает со styles.css и стилями Heading1–6 в export.js)
 export { HEADING_FONT, HEADING_SIZES };
@@ -52,6 +53,7 @@ const PeroDocument = Document.extend({
       commentsEdited: { default: false }, // примечания менялись — при сохранении comments.xml пишется заново
       footnotes: { default: [] },      // тексты сносок: [{ id, text, changed }] (см. footnotes.js)
       headingNumbering: { default: null }, // нумерация заголовков (см. numbering.js)
+      charStyles: { default: [] },     // символьные стили: [{ id, name, run, origin }] (см. builtinStyles.js)
       watermark: { default: null },     // подложка (см. design.js)
       watermarkChanged: { default: false },
       pageColor: { default: null },     // цвет страницы '#rrggbb'
@@ -68,7 +70,7 @@ export function loadDocument(editor, json) {
   editor.commands.setContent(json, { emitUpdate: false });
   const attrs = {
     fontFamily: DEFAULT_FONT, fontSize: DEFAULT_SIZE, para: NEW_DOC_PARA, sectPr: null, hf: EMPTY_HF, styles: [], defaultsModified: false,
-    comments: [], commentsEdited: false, footnotes: [], footnotesEdited: false, headingNumbering: null, watermark: null, watermarkChanged: false, pageColor: null, pageColorChanged: false, defaultTab: DEFAULT_TAB,
+    comments: [], commentsEdited: false, footnotes: [], footnotesEdited: false, headingNumbering: null, charStyles: [], watermark: null, watermarkChanged: false, pageColor: null, pageColorChanged: false, defaultTab: DEFAULT_TAB,
     ...((json && json.attrs) || {}),
   };
   const { tr } = editor.state;
@@ -285,6 +287,7 @@ export const extensions = [
   Numbering,
   Design,
   PasteOptions,
+  CharStyle,
   PeroTable.configure({ resizable: true }),
   PeroTableRow,
   PeroTableCell,

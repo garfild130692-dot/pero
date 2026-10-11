@@ -390,8 +390,12 @@ function readRunMarks(rPr, theme = {}) {
 }
 
 // plainLink — гиперссылка без стиля «Гиперссылка» (как пункты оглавления Word): на экране и в файле — без синего подчёркивания
+// служебные символьные стили Word — не показываются как стили (их вид переносится в прямое форматирование)
+const SERVICE_CHAR_STYLES = /^(hyperlink|followedhyperlink|footnote reference|endnote reference|annotation reference|page number|line number|default paragraph font|placeholder text)$/;
+
 function marksToArray(m, link, plainLink = false) {
   const out = [];
+  if (m.charStyle) out.push({ type: 'charStyle', attrs: { id: m.charStyle } });
   if (link) out.push({ type: 'link', attrs: plainLink ? { href: link, class: 'plain' } : { href: link } });
   if (m.bold) out.push({ type: 'bold' });
   if (m.italic) out.push({ type: 'italic' });
@@ -423,6 +427,7 @@ class Importer {
     this.docLayout = ctx.docLayout;
     this.docTabs = ctx.docTabs;
     this.usedStyles = {};  // пользовательские стили абзацев, на которые ссылается документ
+    this.usedCharStyles = {}; // символьные стили, на которые ссылается документ
     this.rev = null;       // текущая правка (внутри w:ins / w:del)
     this.fontBase = null;  // шрифт/размер, от которых считается прямое форматирование в текущем абзаце
     this.styleCache = {};
@@ -488,11 +493,14 @@ class Importer {
 
   run(r, paraMarks, link, push, isHeading) {
     const rPr = child(r, 'rPr');
-    // символьный стиль (кроме «Гиперссылки» — её вид задаёт сама ссылка)
+    // символьный стиль: обычный («Выделение», «Строгий», свои) — метка charStyle со ссылкой на определение;
+    // служебные (гиперссылка, знак сноски…) и связанные со стилями абзацев («… Char») — в прямое форматирование, как раньше
     const rStyle = wAttr(child(rPr, 'rStyle'), 'val');
-    const charMarks = rStyle && this.styles[rStyle] && this.styles[rStyle].name !== 'hyperlink'
-      ? resolvedStyleMarks(this.styles, rStyle, this.styleCache) : {};
+    const rs = rStyle && this.styles[rStyle];
+    const asCharStyle = !!rs && rs.type === 'character' && !SERVICE_CHAR_STYLES.test(rs.name) && !/ char$/.test(rs.name);
+    const charMarks = rs && !asCharStyle && rs.name !== 'hyperlink' ? resolvedStyleMarks(this.styles, rStyle, this.styleCache) : {};
     const m = { ...paraMarks, ...charMarks, ...readRunMarks(rPr, this.theme) };
+    if (asCharStyle) { m.charStyle = rStyle; this.charStyleDef(rStyle); }
     // совпадающее с умолчаниями (документа или стиля абзаца) — не прямое форматирование;
     // у заголовков умолчания свои (шрифт, размер, цвет нашего вида заголовка) — isHeading = уровень заголовка
     if (!isHeading) {
@@ -572,6 +580,18 @@ class Importer {
         default: this.opaque(push, 'other', runXml(n)); // неизвестное — сохраняем как есть
       }
     }
+  }
+
+  // Определение символьного стиля для doc.attrs.charStyles (свойства — с учётом basedOn)
+  charStyleDef(id) {
+    if (this.usedCharStyles[id]) return this.usedCharStyles[id];
+    const marks = resolvedStyleMarks(this.styles, id, this.styleCache);
+    const run = {};
+    if (marks.fontFamily && marks.fontFamily !== this.docDefaults.fontFamily) run.fontFamily = marks.fontFamily;
+    if (marks.fontSize && marks.fontSize !== this.docDefaults.fontSize) run.fontSize = marks.fontSize;
+    if (marks.color) run.color = marks.color;
+    for (const k of ['bold', 'italic', 'underline', 'strike']) if (marks[k]) run[k] = true;
+    return (this.usedCharStyles[id] = { id, name: this.styles[id].displayName, run, origin: 'file' });
   }
 
   // Определение пользовательского стиля абзаца для doc.attrs.styles (свойства — с учётом basedOn, отличия от «Обычного»)
@@ -930,7 +950,7 @@ export async function importDocx(data) {
   return {
     doc: {
       type: 'doc',
-      attrs: { ...docDefaults, para: docPara, defaultTab, sectPr: imp.bodySectPr, hf, styles: Object.values(imp.usedStyles), comments: commentList, footnotes: footnoteList, watermark, pageColor, ...(imp.headingNum ? { headingNumbering: imp.headingNum } : {}) },
+      attrs: { ...docDefaults, para: docPara, defaultTab, sectPr: imp.bodySectPr, hf, styles: Object.values(imp.usedStyles), charStyles: Object.values(imp.usedCharStyles), comments: commentList, footnotes: footnoteList, watermark, pageColor, ...(imp.headingNum ? { headingNumbering: imp.headingNum } : {}) },
       content,
     },
     warnings: imp.warnings,

@@ -75,7 +75,7 @@ body { background: var(--workspace); overflow: hidden; }
 .glyph { font-size: 15px; font-family: Georgia, 'Times New Roman', serif; min-width: 12px; }
 .glyph.serif { font-style: italic; }
 
-.style-gallery { max-width: clamp(170px, calc(100vw - 880px), 430px); /* узкое окно — галерея сжимается, лента не прокручивается */ overflow-x: auto; display: flex; gap: 3px; background: #fff; border: 1px solid var(--line); padding: 3px; border-radius: 3px; }
+.style-gallery { max-width: clamp(170px, calc(100vw - 930px), 430px); /* узкое окно — галерея сжимается, лента не прокручивается */ overflow-x: auto; display: flex; gap: 3px; background: #fff; border: 1px solid var(--line); padding: 3px; border-radius: 3px; }
 .style-card {
   width: 76px; height: 58px; border: 1px solid transparent; background: #fff; cursor: pointer;
   display: flex; flex-direction: column; justify-content: center; align-items: flex-start; padding: 2px 6px; border-radius: 2px;
@@ -833,3 +833,16 @@ p[data-section-break]::after {
 .lib-cell b { font-weight: normal; min-width: 18px; text-align: right; }
 .lib-cell i { flex: 1; height: 2px; background: #c9d6d2; }
 .lib-cell.bullet b { min-width: 10px; text-align: center; }
+
+/* панель «Стили» и символьные стили в галерее */
+.style-card.char .style-name::after { content: ' a'; color: #999; font-size: 10px; }
+.styles-pane { display: flex; flex-direction: column; }
+.sp-list { flex: 1; overflow-y: auto; display: flex; flex-direction: column; background: #fff; border: 1px solid var(--line); margin: 6px 0; }
+.sp-item { display: flex; align-items: center; justify-content: space-between; gap: 8px; border: 0; background: transparent; text-align: left; font: inherit; font-size: 13px; padding: 5px 8px; cursor: pointer; border-left: 3px solid transparent; }
+.sp-item:hover { background: rgba(0,0,0,.05); }
+.sp-item.active { background: var(--accent-soft); border-left-color: var(--accent); }
+.sp-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sp-kind { color: #888; font-size: 12px; flex: none; }
+.sp-clear { border: 1px solid var(--line); background: #fff; }
+.sp-actions { display: flex; gap: 6px; }
+.sp-note { font-size: 12px; color: #666; margin-top: 6px; }

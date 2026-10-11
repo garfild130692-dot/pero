@@ -20,6 +20,8 @@ import { PageBordersDialog, PageDecor, PrintDecor, WatermarkDialog } from './Des
 import { PasteOptionsTag, PasteSpecialDialog } from './PasteControls.jsx';
 import { ListFormatDialog, MultilevelDialog } from './NumberingDialogs.jsx';
 import { NumberValueDialog } from './ListButtons.jsx';
+import StylesPane from './StylesPane.jsx';
+import { charStyleCss } from './editor/builtinStyles.js';
 import { cssFontStack } from './editor/font.js';
 import { NEW_DOC_PARA } from './editor/paragraph.js';
 import { lineCss } from './editor/paraFormat.js';
@@ -222,6 +224,7 @@ export default function App({ initialFile, onOpenOther, onNewSheet, autosaveSec 
   const [modal, setModal] = useState(null);
   const [findMode, setFindMode] = useState(null); // null | 'find' | 'replace'
   const [showComments, setShowComments] = useState(false);
+  const [stylesPane, setStylesPane] = useState(false); // панель «Стили»
   const [notesPanel, setNotesPanel] = useState(null); // панель «Сноски»: null — скрыта, { active } — открыта
   const [userName, setUserName] = useState('Пользователь');
   const revision = useRef(0); // счётчик правок — для автосохранения
@@ -406,6 +409,7 @@ export default function App({ initialFile, onOpenOther, onNewSheet, autosaveSec 
       if (e.altKey && k === 'KeyP') { e.preventDefault(); setViewMode('print'); return; }
       if (e.altKey && k === 'KeyN') { e.preventDefault(); setViewMode('draft'); return; }
       if (e.altKey && k === 'KeyV') { e.preventDefault(); setModal('pasteSpecial'); return; } // специальная вставка
+      if (e.altKey && e.shiftKey && k === 'KeyS') { e.preventDefault(); setStylesPane((v) => !v); return; } // панель «Стили»
       if (k === 'KeyK') { e.preventDefault(); setModal('link'); return; }
       if (k === 'KeyD' && !e.shiftKey) { e.preventDefault(); setModal('font'); return; } // Ctrl+Shift+D — двойное подчёркивание
       if (k === 'KeyF') { e.preventDefault(); setFindMode('find'); return; }
@@ -436,7 +440,7 @@ export default function App({ initialFile, onOpenOther, onNewSheet, autosaveSec 
     editor,
     selector: ({ editor: e }) => (e ? {
       family: e.state.doc.attrs.fontFamily, size: e.state.doc.attrs.fontSize, para: e.state.doc.attrs.para,
-      sectPr: e.state.doc.attrs.sectPr, hf: e.state.doc.attrs.hf, total: pageInfo(e.state).total, styles: e.state.doc.attrs.styles, headingNumbering: e.state.doc.attrs.headingNumbering, pageColor: e.state.doc.attrs.pageColor, chrome: pageChrome(e.state), firstSect: sectionList(e.state.doc)[0], sects: sectionList(e.state.doc), sectCss: sectionPrintCss(e.state.doc),
+      sectPr: e.state.doc.attrs.sectPr, hf: e.state.doc.attrs.hf, total: pageInfo(e.state).total, styles: e.state.doc.attrs.styles, headingNumbering: e.state.doc.attrs.headingNumbering, charStyles: e.state.doc.attrs.charStyles, pageColor: e.state.doc.attrs.pageColor, chrome: pageChrome(e.state), firstSect: sectionList(e.state.doc)[0], sects: sectionList(e.state.doc), sectCss: sectionPrintCss(e.state.doc),
     } : null),
   });
 
@@ -467,6 +471,7 @@ export default function App({ initialFile, onOpenOther, onNewSheet, autosaveSec 
         </div>
       )}
       {viewMode !== 'read' && <Ribbon editor={editor} file={{ newDoc, newSheet, open, openHere, save: () => save(), saveAs, print: doPrint, pdf: doPdf }} onLink={() => setModal('link')}
+        onStylesPane={() => setStylesPane((v) => !v)}
         view={{ mode: viewMode, setMode: setViewMode, ruler: viewPrefs.ruler, nav: viewPrefs.nav, toggleRuler: () => setPref('ruler'), toggleNav: () => setPref('nav'),
           setZoom, fit: fitTo, openZoom: () => setModal('zoom') }}
         onFind={(m) => setFindMode(m)}
@@ -512,6 +517,8 @@ export default function App({ initialFile, onOpenOther, onNewSheet, autosaveSec 
           </div>
         </PageScaler>
       </div>
+      {stylesPane && viewMode !== 'read' && <StylesPane editor={editor} onClose={() => setStylesPane(false)}
+        onStyle={(m) => setModal({ style: m })} />}
       {showComments && <CommentsPanel editor={editor} onClose={() => setShowComments(false)} />}
       {notesPanel && <FootnotesPanel editor={editor} active={notesPanel.active} onActivate={(id) => setNotesPanel({ active: id })} onClose={() => setNotesPanel(null)} />}
       </div>
@@ -538,6 +545,7 @@ export default function App({ initialFile, onOpenOther, onNewSheet, autosaveSec 
       {modal && modal.style && <StyleDialog editor={editor} mode={modal.style} onClose={() => setModal(null)} />}
       {/* пользовательские стили абзацев — правила по data-pstyle */}
       <style>{styleCss(docFont && docFont.styles)}</style>
+      <style>{charStyleCss(docFont && docFont.charStyles)}</style>
       <style>{`${COUNTER_STYLES_CSS}
 ${headingNumberCss(docFont && docFont.headingNumbering)}`}</style>
       {/* печать/PDF: размер листа, поля и колонтитулы — правилами @page */}

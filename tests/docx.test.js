@@ -88,7 +88,9 @@ describe('шрифт', () => {
     expect(marksOf(doc, 'print("Перо")')).toEqual({});
     expect(doc.content.find((n) => n.content && n.content[0].text === 'print("Перо")').attrs.styleId).toBe('Код');
     expect(doc.attrs.styles).toEqual([{ id: 'Код', name: 'Код', para: {}, run: { fontFamily: 'Courier New', fontSize: 10 }, align: null, origin: 'file', modified: false }]);
-    expect(marksOf(doc, 'акцент')).toEqual({ bold: true, textStyle: ts({ color: '#1f6f5c' }) }); // символьный стиль
+    // символьный стиль: текст ссылается на стиль (метка charStyle), оформление — в определении
+    expect(marksOf(doc, 'акцент')).toEqual({ charStyle: { id: 'Акцент' } });
+    expect(doc.attrs.charStyles).toEqual([{ id: 'Акцент', name: 'Акцент', run: { bold: true, color: '#1f6f5c' }, origin: 'file' }]);
     // подчёркивание разных видов, прописные, интервал
     expect(marksOf(doc, 'двойное')).toEqual({ underline: { kind: 'double', color: '#c00000' } });
     expect(marksOf(doc, 'волна')).toEqual({ underline: { kind: 'wave', color: null } });
