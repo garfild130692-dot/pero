@@ -93,7 +93,7 @@ const OUT_STEP = 14; // ширина уровня в поле структуры
 // refMarks — ссылки редактируемой формулы (цветные рамки); showFormulas — формулы вместо значений (Ctrl+`);
 // arrows — стрелки влияющих/зависимых ячеек [{ from: диапазон, to: { r, c } }]; onErrorInfo — значок у ячейки с ошибкой
 export default function Grid({ sheet, sel, setSel, editing, setEditing, onCommit, onColWidth, onRowHeight, onRefInsert, onOutline, gridRef,
-  refMarks = [], showFormulas = false, arrows = [], onErrorInfo, names = [], onFill, onFilterMenu }) {
+  refMarks = [], showFormulas = false, arrows = [], onErrorInfo, names = [], onFill, onFilterMenu, cf = null }) {
   const scrollRef = useRef(null);
   const [view, setView] = useState({ top: 0, left: 0, w: 800, h: 500 });
   // размеры области: использованная часть + запас (как «бесконечный» лист)
@@ -280,10 +280,12 @@ export default function Grid({ sheet, sel, setSel, editing, setEditing, onCommit
           drawnMerges.add(mk);
           rr = m.r1; cc = m.c1; r2 = m.r2; c2 = m.c2;
         }
-        const cell = cellAtKey(rr, cc);
+        const own0 = cellAtKey(rr, cc);
+        const cfv = cf && cf.get(key(rr, cc));
+        const cell = cfv ? { ...(own0 || {}), s: { ...((own0 && own0.s) || {}), ...cfv.style, border: cfv.style.border ? { ...((own0 && own0.s && own0.s.border) || {}), ...cfv.style.border } : own0 && own0.s && own0.s.border } } : own0;
         if (!cell && !m) continue;
         let text = showFormulas && cell && cell.f != null ? inputOf(cell) : cellText(cell);
-        if (!text && !(cell && cell.s && (cell.s.fill || cell.s.border)) && !m) continue;
+        if (!text && !(cell && cell.s && (cell.s.fill || cell.s.border)) && !m && !(cfv && cfv.bar)) continue;
         const own = colPos[c2 + 1] - colPos[cc];
         if (own <= 0 && !m) continue; // скрытый столбец
         const st = cellStyle(cell);
@@ -299,6 +301,8 @@ export default function Grid({ sheet, sel, setSel, editing, setEditing, onCommit
           while (spill < need && cn < cols && isEmpty(rr, cn) && !(sheet.merges.length && mergeAt(sheet, rr, cn))) { spill += colPos[cn + 1] - colPos[cn]; cn++; }
         }
         if (c < ca && spill === own) continue;
+        // гистограмма условного форматирования — полоса под текстом
+        if (cfv && cfv.bar) out.push(<div key={`b${rr},${cc}`} className="gbar" style={{ left: box.left + 1, top: box.top + 2, width: Math.max(0, (own - 3) * cfv.bar.pct), height: Math.max(0, box.height - 4), background: `linear-gradient(90deg, ${cfv.bar.color}, ${cfv.bar.color}33)` }} />);
         if (spill > own) {
           // фон и границы — только своей ячейки, текст — поверх соседних
           out.push(<div key={`f${rr},${cc}`} className="gcell" style={{ ...box, ...st, color: undefined }} />);

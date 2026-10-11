@@ -16,7 +16,7 @@ const absRange = (rg) => {
 import { formatValue } from './format.js';
 import {
   DEFAULT_COL_W, DEFAULT_ROW_H, addSheet, autoSumFormula, blockToText, clearRange, collapseGroup, copyBlock, deleteSheet, expandGroup, fill, inputOf,
-  currentRegion, fillSeries, isHidden, isValidName, mergeAt, nameTarget, newWorkbook, reapplyFilter, recalc, setAutoFilter, setCalcMode,
+  addCfRule, clearCf, currentRegion, fillSeries, isHidden, isValidName, mergeAt, nameTarget, newWorkbook, reapplyFilter, recalc, setAutoFilter, setCalcMode,
   setColumnFilter, setNames, sortRows, spillAnchorAt, valueAt, viewContext, pasteBlock, pasteText, renameSheet, setColWidth, setInput, setRowHeight, showLevels, usedRange,
 } from './model.js';
 import { exportXlsx, importXlsx } from './xlsx.js';
@@ -27,6 +27,8 @@ import ProtectDialog from './ProtectDialog.jsx';
 import NamesDialog from './NamesDialog.jsx';
 import FilterMenu, { CustomFilterDialog } from './FilterMenu.jsx';
 import SortDialog from './SortDialog.jsx';
+import { CfDialog } from './CfMenu.jsx';
+import { cfView } from './cf.js';
 import { filterCount, shownText } from './filter.js';
 import EvalDialog from './EvalDialog.jsx';
 import InsertFunctionDialog from './InsertFunctionDialog.jsx';
@@ -59,6 +61,7 @@ export default function SheetApp({ initialFile, onOpenOther, onNewDoc, autosaveS
   const [filterMenu, setFilterMenu] = useState(null); // { j, x, y } — меню фильтра столбца
   const [customFilter, setCustomFilter] = useState(null); // { j, kind, preset }
   const [sortDlg, setSortDlg] = useState(null); // диапазон
+  const [cfDlg, setCfDlg] = useState(null); // вид правила условного форматирования
   const [showFormulas, setShowFormulas] = useState(false); // Ctrl+` — формулы вместо значений
   const [arrows, setArrows] = useState([]); // стрелки влияющих/зависимых ячеек
   const [evalAt, setEvalAt] = useState(null); // { r, c } — «Вычислить формулу»
@@ -74,6 +77,7 @@ export default function SheetApp({ initialFile, onOpenOther, onNewDoc, autosaveS
   const clip = useRef(null); // { block, text } — последний скопированный блок (с формулами и стилями)
   const si = wb.active;
   const sheet = wb.sheets[si];
+  const cfMap = useMemo(() => cfView(wb, si), [wb, si]); // условное форматирование: что показать поверх стилей
 
   // изменение книги с записью в историю отмены
   const change = useCallback((fn) => {
@@ -327,6 +331,10 @@ export default function SheetApp({ initialFile, onOpenOther, onNewDoc, autosaveS
     precedents, dependents, clearArrows: () => setArrows([]), evaluateFormula,
     // F9 — пересчитать всё (в том числе отложенное в режиме «вручную» и летучие функции); в отмену не попадает
     recalc: () => setWb((w) => recalc(w, { full: true })),
+    // условное форматирование выделенного диапазона
+    cfDialog: (kind) => setCfDlg(kind),
+    addCf: (rule) => change((w) => addCfRule(w, si, [rg], rule)),
+    clearCf: (all) => change((w) => clearCf(w, si, all ? null : rg)),
     // автофильтр: включить на текущей области/выделении или снять; очистить условия; применить повторно
     filterOn: !!sheet.autoFilter,
     toggleFilter: () => change((w) => (w.sheets[si].autoFilter ? setAutoFilter(w, si, null) : setAutoFilter(w, si, rg))),
@@ -465,6 +473,7 @@ export default function SheetApp({ initialFile, onOpenOther, onNewDoc, autosaveS
           onRefInsert={insertRef} gridRef={gridRef} onOutline={outlineAction} names={wb.names || []}
           refMarks={refMarks} showFormulas={showFormulas} arrows={arrows}
           onErrorInfo={(r, c, rect) => setErrPop({ r, c, x: rect.right + 4, y: rect.top })}
+          cf={cfMap}
           onFilterMenu={(j, rect) => setFilterMenu({ j, x: rect.left, y: rect.bottom + 2 })}
           onFill={(src, dst, ctrl) => { change((w) => fillSeries(w, si, src, dst, { ctrl })); setSel({ r: dst.r1, c: dst.c1, r2: dst.r2, c2: dst.c2 }); }} />
       </div>
@@ -555,6 +564,10 @@ export default function SheetApp({ initialFile, onOpenOther, onNewDoc, autosaveS
           head={shownText(sheet.cells.get(key(sheet.autoFilter.ref.r1, sheet.autoFilter.ref.c1 + customFilter.j))) || `Столбец ${colName(sheet.autoFilter.ref.c1 + customFilter.j)}`}
           onClose={() => { setCustomFilter(null); gridRef.current && gridRef.current.focus(); }}
           onApply={(crit) => { const { j } = customFilter; setCustomFilter(null); change((w) => setColumnFilter(w, si, j, crit)); gridRef.current && gridRef.current.focus(); }} />
+      )}
+      {cfDlg && (
+        <CfDialog kind={cfDlg} rg={rg} onClose={() => { setCfDlg(null); gridRef.current && gridRef.current.focus(); }}
+          onApply={(rule) => { setCfDlg(null); change((w) => addCfRule(w, si, [rg], rule)); gridRef.current && gridRef.current.focus(); }} />
       )}
       {sortDlg && (
         <SortDialog sheet={sheet} rg={sortDlg} onClose={() => { setSortDlg(null); gridRef.current && gridRef.current.focus(); }}

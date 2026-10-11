@@ -187,3 +187,13 @@ input.sheet-tab.editing { width: 120px; background: #fff; border: 1px solid var(
 .sort-dlg .spacer { flex: 1; }
 .ghead.row.filtered { color: #1a5fb4; }
 .sort-dlg .btn { white-space: nowrap; }
+
+/* условное форматирование */
+.gbar { position: absolute; pointer-events: none; border-radius: 1px; }
+.cf-menu { width: 300px; }
+.cf-subpop { width: 270px; }
+.cf-swatch { display: inline-block; width: 34px; height: 12px; border: 1px solid #ccc; margin-right: 4px; vertical-align: middle; }
+.modal.cf-rule-dlg { width: 600px; }
+.cf-rule-dlg .cf-row { align-items: center; }
+.cf-and, .cf-with { color: #555; }
+.cf-rule-dlg .cf-row select:last-child { flex: 1; width: auto; }

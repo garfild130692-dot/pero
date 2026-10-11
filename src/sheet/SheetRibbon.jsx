@@ -1,5 +1,6 @@
 // Лента табличного редактора: Файл / Главная (буфер, шрифт, выравнивание, число, ячейки, редактирование) /
 // Разметка страницы (параметры печати) / Формулы (имена) / Данные (структура) / Рецензирование (защита листа) / Вид (закрепление областей).
+import CfMenu from './CfMenu.jsx';
 import React, { useState } from 'react';
 import { Icon } from '../icons.jsx';
 import { about, clipboard, openLogs, reportProblem } from '../fileApi.js';
@@ -235,7 +236,11 @@ export default function SheetRibbon({ api }) {
                 </div>
               </div>
             </Group>
+            <Group title="Стили">
+              <CfMenu onDialog={api.cfDialog} onRule={api.addCf} onClear={api.clearCf} />
+            </Group>
             <Group title="Ячейки">
+              <div className="rb-col">
               <MenuButton icon="rowAbove" title="Вставить" label="Вставить" items={[
                 ['Вставить строки на лист', () => change((w) => shiftCells(w, si, 'row', rg.r1, rg.r2 - rg.r1 + 1))],
                 ['Вставить столбцы на лист', () => change((w) => shiftCells(w, si, 'col', rg.c1, rg.c2 - rg.c1 + 1))],
@@ -244,6 +249,7 @@ export default function SheetRibbon({ api }) {
                 ['Удалить строки с листа', () => change((w) => shiftCells(w, si, 'row', rg.r1, -(rg.r2 - rg.r1 + 1)))],
                 ['Удалить столбцы с листа', () => change((w) => shiftCells(w, si, 'col', rg.c1, -(rg.c2 - rg.c1 + 1)))],
               ]} />
+              </div>
               <MenuButton title="Формат: скрыть или отобразить" label="Формат" items={[
                 ['Скрыть строки', () => hide('row', true)],
                 ['Скрыть столбцы', () => hide('col', true)],
