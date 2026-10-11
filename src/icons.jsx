@@ -55,6 +55,8 @@ export const Icon = {
   split: (p) => <S {...p}><rect x="3" y="5" width="18" height="14" rx="1" /><path d="M12 5v14" /></S>,
   fx: (p) => <S {...p}><path d="M14 4c-2 0-3 1-3.4 3L8.5 19c-.4 2-1.4 3-3.5 3" /><path d="M7 10h7" /><path d="m15 13 5 6M20 13l-5 6" /></S>,
   evaluate: (p) => <S {...p}><rect x="3" y="4" width="18" height="16" rx="1.5" /><path d="M7 10h4M9 8v4M14 10h3M7 15h3M14 14l3 3M17 14l-3 3" /></S>,
+  sort: (p) => <S {...p}><path d="M7 4v16M3.5 16.5 7 20l3.5-3.5" /><path d="M13 6h8M13 11h6M13 16h4" /></S>,
+  filter: (p) => <S {...p}><path d="M3.5 5h17l-6.5 7.5V19l-4 2v-8.5z" /></S>,
   recalc: (p) => <S {...p}><path d="M20 12a8 8 0 1 1-2.3-5.7" /><path d="M20 4v5h-5" /><path d="M9 12h6M12 9v6" /></S>,
   info: (p) => <S {...p}><circle cx="12" cy="12" r="9" /><path d="M12 11v6M12 7.5v.5" /></S>,
   names: (p) => <S {...p}><rect x="3" y="5" width="18" height="14" rx="1.5" /><path d="M7 10h4M7 14h7" /><path d="M15 10h2" /></S>,

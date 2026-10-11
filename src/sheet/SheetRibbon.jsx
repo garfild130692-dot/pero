@@ -260,6 +260,9 @@ export default function SheetRibbon({ api }) {
               <MenuButton title="Сортировка" label="Сортировка" items={[
                 ['Сортировка от А до Я / по возрастанию', () => change((w) => sortRange(w, si, rg, sel.c, true))],
                 ['Сортировка от Я до А / по убыванию', () => change((w) => sortRange(w, si, rg, sel.c, false))],
+                ['Настраиваемая сортировка…', api.sortDialog],
+                '-',
+                ['Фильтр', api.toggleFilter, api.filterOn],
               ]} />
               <MenuButton icon="clear" title="Очистить" label="" items={[
                 ['Очистить всё', () => change((w) => clearRange(w, si, rg, 'all'))],
@@ -345,9 +348,17 @@ export default function SheetRibbon({ api }) {
         )}
         {tab === 'data' && (
           <>
-            <Group title="Сортировка">
-              <Btn title="Сортировка по возрастанию" onClick={() => change((w) => sortRange(w, si, rg, sel.c, true))}><T>А→Я</T></Btn>
-              <Btn title="Сортировка по убыванию" onClick={() => change((w) => sortRange(w, si, rg, sel.c, false))}><T>Я→А</T></Btn>
+            <Group title="Сортировка и фильтр">
+              <div className="rb-col">
+                <Btn title="Сортировка по возрастанию" onClick={() => change((w) => sortRange(w, si, rg, sel.c, true))}><T>А→Я</T></Btn>
+                <Btn title="Сортировка по убыванию" onClick={() => change((w) => sortRange(w, si, rg, sel.c, false))}><T>Я→А</T></Btn>
+              </div>
+              <Btn big icon="sort" label="Сортировка" onClick={api.sortDialog} title="Сортировка по нескольким столбцам" />
+              <Btn big icon="filter" label="Фильтр" active={api.filterOn} onClick={api.toggleFilter} title="Автофильтр: кнопки в заголовках столбцов (Ctrl+Shift+L)" />
+              <div className="rb-col">
+                <Btn title="Снять условия фильтра во всех столбцах" onClick={api.clearFilter} disabled={!api.filterOn}><T>✕</T> Очистить</Btn>
+                <Btn title="Применить фильтр заново (после правок данных)" onClick={api.reapplyFilter} disabled={!api.filterOn}><T>↻</T> Повторить</Btn>
+              </div>
             </Group>
             <Group title="Структура">
               <MenuButton icon="group" title="Группировать выделенные строки или столбцы" label="Группировать" items={[

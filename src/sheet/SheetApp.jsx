@@ -16,7 +16,8 @@ const absRange = (rg) => {
 import { formatValue } from './format.js';
 import {
   DEFAULT_COL_W, DEFAULT_ROW_H, addSheet, autoSumFormula, blockToText, clearRange, collapseGroup, copyBlock, deleteSheet, expandGroup, fill, inputOf,
-  fillSeries, isHidden, isValidName, mergeAt, nameTarget, newWorkbook, recalc, setCalcMode, setNames, spillAnchorAt, valueAt, viewContext, pasteBlock, pasteText, renameSheet, setColWidth, setInput, setRowHeight, showLevels, usedRange,
+  currentRegion, fillSeries, isHidden, isValidName, mergeAt, nameTarget, newWorkbook, reapplyFilter, recalc, setAutoFilter, setCalcMode,
+  setColumnFilter, setNames, sortRows, spillAnchorAt, valueAt, viewContext, pasteBlock, pasteText, renameSheet, setColWidth, setInput, setRowHeight, showLevels, usedRange,
 } from './model.js';
 import { exportXlsx, importXlsx } from './xlsx.js';
 import { exportCsv, importCsv } from './csv.js';
@@ -24,6 +25,9 @@ import { pageOf, printGeometry, printScale } from './pageSetup.js';
 import { isLocked, isProtected, protectionViolation, setProtection } from './protect.js';
 import ProtectDialog from './ProtectDialog.jsx';
 import NamesDialog from './NamesDialog.jsx';
+import FilterMenu, { CustomFilterDialog } from './FilterMenu.jsx';
+import SortDialog from './SortDialog.jsx';
+import { filterCount, shownText } from './filter.js';
 import EvalDialog from './EvalDialog.jsx';
 import InsertFunctionDialog from './InsertFunctionDialog.jsx';
 import { AssistPopup, useFormulaAssist } from './FormulaAssist.jsx';
@@ -52,6 +56,9 @@ export default function SheetApp({ initialFile, onOpenOther, onNewDoc, autosaveS
   const [notice, setNotice] = useState(null); // временное сообщение в строке состояния
   const [protectDlg, setProtectDlg] = useState(null); // 'protect' | 'unprotect'
   const [namesDlg, setNamesDlg] = useState(false);
+  const [filterMenu, setFilterMenu] = useState(null); // { j, x, y } — меню фильтра столбца
+  const [customFilter, setCustomFilter] = useState(null); // { j, kind, preset }
+  const [sortDlg, setSortDlg] = useState(null); // диапазон
   const [showFormulas, setShowFormulas] = useState(false); // Ctrl+` — формулы вместо значений
   const [arrows, setArrows] = useState([]); // стрелки влияющих/зависимых ячеек
   const [evalAt, setEvalAt] = useState(null); // { r, c } — «Вычислить формулу»
@@ -212,6 +219,17 @@ export default function SheetApp({ initialFile, onOpenOther, onNewDoc, autosaveS
     return { r, c, r2: r, c2: c };
   };
   const move = (dir, extend = false) => setSel((s) => step(s, dir, extend));
+  // как Excel: ввод строки через Tab, затем Enter — в столбец, с которого начали, на строку ниже
+  const tabStart = useRef(null); // { r, c }
+  const nav = (from, dir) => {
+    if (dir === 'tab' || dir === 'tabBack') {
+      if (!tabStart.current || tabStart.current.r !== from.r) tabStart.current = { r: from.r, c: from.c };
+      return step({ r: from.r, c: from.c, r2: from.r, c2: from.c }, dir === 'tab' ? 'right' : 'left');
+    }
+    const t = tabStart.current; tabStart.current = null;
+    if (dir === 'down' && t && t.r === from.r) return { r: from.r + 1, c: t.c, r2: from.r + 1, c2: t.c };
+    return step({ r: from.r, c: from.c, r2: from.r, c2: from.c }, dir);
+  };
   // завершить ввод; фокус возвращается сетке сразу, чтобы следующие нажатия не потерялись
   const commit = (text, dir) => {
     const ed = editing;
@@ -219,7 +237,7 @@ export default function SheetApp({ initialFile, onOpenOther, onNewDoc, autosaveS
     setEditingState(null);
     if (!ed) return;
     if (text !== inputOf(sheet.cells.get(key(ed.r, ed.c)))) change((w) => setInput(w, si, ed.r, ed.c, text));
-    if (dir) setSelState(step({ r: ed.r, c: ed.c, r2: ed.r, c2: ed.c }, dir));
+    if (dir) setSelState(nav(ed, dir));
   };
   // щелчок по ячейке при наборе формулы — вставить ссылку (replace — заменить последнюю вставленную при протягивании)
   const lastRef = useRef(null);
@@ -309,6 +327,12 @@ export default function SheetApp({ initialFile, onOpenOther, onNewDoc, autosaveS
     precedents, dependents, clearArrows: () => setArrows([]), evaluateFormula,
     // F9 — пересчитать всё (в том числе отложенное в режиме «вручную» и летучие функции); в отмену не попадает
     recalc: () => setWb((w) => recalc(w, { full: true })),
+    // автофильтр: включить на текущей области/выделении или снять; очистить условия; применить повторно
+    filterOn: !!sheet.autoFilter,
+    toggleFilter: () => change((w) => (w.sheets[si].autoFilter ? setAutoFilter(w, si, null) : setAutoFilter(w, si, rg))),
+    clearFilter: () => change((w) => { let x = w; for (const j of Object.keys((w.sheets[si].autoFilter || {}).cols || {})) x = setColumnFilter(x, si, +j, null); return x; }),
+    reapplyFilter: () => change((w) => reapplyFilter(w, si)),
+    sortDialog: () => setSortDlg(rg.r1 === rg.r2 && rg.c1 === rg.c2 ? (sheet.autoFilter || currentRegion(sheet, rg.r1, rg.c1)) && (sheet.autoFilter ? { ...sheet.autoFilter.ref } : currentRegion(sheet, rg.r1, rg.c1)) : rg),
     calcMode: wb.calcMode === 'manual' ? 'manual' : 'auto',
     setCalcMode: (mode) => change((w) => setCalcMode(w, mode)),
     protect: () => setProtectDlg(isProtected(sheet) ? 'unprotect' : 'protect'),
@@ -333,6 +357,7 @@ export default function SheetApp({ initialFile, onOpenOther, onNewDoc, autosaveS
     if (ctrl && e.code === 'Backquote') { e.preventDefault(); setShowFormulas((v) => !v); return; }
     if (e.shiftKey && e.key === 'F3') { e.preventDefault(); setFnDlg({}); return; }
     if (ctrl && e.code === 'KeyA') { e.preventDefault(); const u = usedRange(sheet); setSel({ r: 0, c: 0, r2: u ? u.r2 : 0, c2: u ? u.c2 : 0 }); return; }
+    if (ctrl && e.shiftKey && e.code === 'KeyL') { e.preventDefault(); ribbonApi.toggleFilter(); return; }
     if (ctrl && e.code === 'KeyB') { e.preventDefault(); ribbonApi.toggle('bold'); return; }
     if (ctrl && e.code === 'KeyI') { e.preventDefault(); ribbonApi.toggle('italic'); return; }
     if (ctrl && e.code === 'KeyU') { e.preventDefault(); ribbonApi.toggle('underline'); return; }
@@ -346,8 +371,8 @@ export default function SheetApp({ initialFile, onOpenOther, onNewDoc, autosaveS
       if (ctrl) jump(dir); else move(dir, e.shiftKey);
       return;
     }
-    if (k === 'Tab') { e.preventDefault(); move(e.shiftKey ? 'left' : 'right'); return; }
-    if (k === 'Enter') { e.preventDefault(); move(e.shiftKey ? 'up' : 'down'); return; }
+    if (k === 'Tab') { e.preventDefault(); if (sel.r === sel.r2 && sel.c === sel.c2) setSel(nav(sel, e.shiftKey ? 'tabBack' : 'tab')); else move(e.shiftKey ? 'left' : 'right'); return; }
+    if (k === 'Enter') { e.preventDefault(); if (!e.shiftKey && sel.r === sel.r2 && sel.c === sel.c2) setSel(nav(sel, 'down')); else move(e.shiftKey ? 'up' : 'down'); return; }
     if (k === 'Home') { e.preventDefault(); const r = ctrl ? 0 : sel.r; setSel({ r, c: 0, r2: r, c2: 0 }); return; }
     if (k === 'PageDown' || k === 'PageUp') { e.preventDefault(); const r = Math.max(0, sel.r + (k === 'PageDown' ? 25 : -25)); setSel({ r, c: sel.c, r2: r, c2: sel.c }); return; }
     if (k === 'F2') { e.preventDefault(); setEditing({ r: sel.r, c: sel.c, text: null }); return; }
@@ -440,6 +465,7 @@ export default function SheetApp({ initialFile, onOpenOther, onNewDoc, autosaveS
           onRefInsert={insertRef} gridRef={gridRef} onOutline={outlineAction} names={wb.names || []}
           refMarks={refMarks} showFormulas={showFormulas} arrows={arrows}
           onErrorInfo={(r, c, rect) => setErrPop({ r, c, x: rect.right + 4, y: rect.top })}
+          onFilterMenu={(j, rect) => setFilterMenu({ j, x: rect.left, y: rect.bottom + 2 })}
           onFill={(src, dst, ctrl) => { change((w) => fillSeries(w, si, src, dst, { ctrl })); setSel({ r: dst.r1, c: dst.c1, r2: dst.r2, c2: dst.c2 }); }} />
       </div>
       <div className="sheet-tabs">
@@ -471,6 +497,7 @@ export default function SheetApp({ initialFile, onOpenOther, onNewDoc, autosaveS
           </span>
         )}
         {notice && <span className="warn" role="status">{notice}</span>}
+        {sheet.autoFilter && Object.keys(sheet.autoFilter.cols).length > 0 && (() => { const n = filterCount(sheet, sheet.autoFilter); return <span>Найдено записей: {n.shown} из {n.total}</span>; })()}
         {!notice && isProtected(sheet) && <span className="kept" title="Заблокированные ячейки этого листа нельзя изменить">Лист защищён</span>}
         {wb.calcPending && <button type="button" className="status-btn" title="Режим вычислений «вручную»: есть несосчитанные изменения. Пересчитать (F9)" onClick={ribbonApi.recalc}>Вычислить</button>}
         <span className="spacer" />
@@ -511,6 +538,27 @@ export default function SheetApp({ initialFile, onOpenOther, onNewDoc, autosaveS
         <NamesDialog wb={wb} refOfSelection={localize(`${sheetPrefix(sheet.name)}${absRange(rg)}`)}
           onClose={() => { setNamesDlg(false); gridRef.current && gridRef.current.focus(); }}
           onSave={(list) => { setNamesDlg(false); change((w) => setNames(w, list)); gridRef.current && gridRef.current.focus(); }} />
+      )}
+      {filterMenu && sheet.autoFilter && (
+        <FilterMenu sheet={sheet} j={filterMenu.j} x={filterMenu.x} y={filterMenu.y}
+          onClose={() => { setFilterMenu(null); gridRef.current && gridRef.current.focus(); }}
+          onApply={(crit) => { const { j } = filterMenu; setFilterMenu(null); change((w) => setColumnFilter(w, si, j, crit)); gridRef.current && gridRef.current.focus(); }}
+          onSort={(desc) => {
+            const { j } = filterMenu; setFilterMenu(null);
+            change((w) => { const af = w.sheets[si].autoFilter; return sortRows(w, si, af.ref, [{ col: af.ref.c1 + j, desc }], { header: true }); });
+            gridRef.current && gridRef.current.focus();
+          }}
+          onCustom={(kind, preset) => { const { j } = filterMenu; setFilterMenu(null); setCustomFilter({ j, kind, preset }); }} />
+      )}
+      {customFilter && sheet.autoFilter && (
+        <CustomFilterDialog kind={customFilter.kind} preset={customFilter.preset} initial={sheet.autoFilter.cols[customFilter.j]}
+          head={shownText(sheet.cells.get(key(sheet.autoFilter.ref.r1, sheet.autoFilter.ref.c1 + customFilter.j))) || `Столбец ${colName(sheet.autoFilter.ref.c1 + customFilter.j)}`}
+          onClose={() => { setCustomFilter(null); gridRef.current && gridRef.current.focus(); }}
+          onApply={(crit) => { const { j } = customFilter; setCustomFilter(null); change((w) => setColumnFilter(w, si, j, crit)); gridRef.current && gridRef.current.focus(); }} />
+      )}
+      {sortDlg && (
+        <SortDialog sheet={sheet} rg={sortDlg} onClose={() => { setSortDlg(null); gridRef.current && gridRef.current.focus(); }}
+          onApply={(levels, header) => { const r = sortDlg; setSortDlg(null); change((w) => sortRows(w, si, r, levels, { header })); gridRef.current && gridRef.current.focus(); }} />
       )}
       {protectDlg && (
         <ProtectDialog mode={protectDlg} protection={sheet.protection} onClose={() => { setProtectDlg(null); gridRef.current && gridRef.current.focus(); }}

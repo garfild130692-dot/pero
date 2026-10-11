@@ -93,7 +93,7 @@ const OUT_STEP = 14; // ширина уровня в поле структуры
 // refMarks — ссылки редактируемой формулы (цветные рамки); showFormulas — формулы вместо значений (Ctrl+`);
 // arrows — стрелки влияющих/зависимых ячеек [{ from: диапазон, to: { r, c } }]; onErrorInfo — значок у ячейки с ошибкой
 export default function Grid({ sheet, sel, setSel, editing, setEditing, onCommit, onColWidth, onRowHeight, onRefInsert, onOutline, gridRef,
-  refMarks = [], showFormulas = false, arrows = [], onErrorInfo, names = [], onFill }) {
+  refMarks = [], showFormulas = false, arrows = [], onErrorInfo, names = [], onFill, onFilterMenu }) {
   const scrollRef = useRef(null);
   const [view, setView] = useState({ top: 0, left: 0, w: 800, h: 500 });
   // размеры области: использованная часть + запас (как «бесконечный» лист)
@@ -327,6 +327,18 @@ export default function Grid({ sheet, sel, setSel, editing, setEditing, onCommit
       {refMarks.map((m, i) => (
         <div key={`rm${i}`} className="gref" style={{ left: colPos[m.c1], top: rowPos[m.r1], width: colPos[Math.min(m.c2, cols - 1) + 1] - colPos[m.c1], height: rowPos[Math.min(m.r2, rows - 1) + 1] - rowPos[m.r1], borderColor: m.color, background: `${m.color}14` }} />
       ))}
+      {sheet.autoFilter && onFilterMenu && Array.from({ length: sheet.autoFilter.ref.c2 - sheet.autoFilter.ref.c1 + 1 }, (_, j) => {
+        const af = sheet.autoFilter; const c = af.ref.c1 + j; const r = af.ref.r1;
+        const w = colPos[c + 1] - colPos[c]; const h = rowPos[r + 1] - rowPos[r];
+        if (!w || !h) return null;
+        const on = !!(af.cols[j] || (af.raw && af.raw[j]));
+        return (
+          <button key={`af${j}`} type="button" className={`gfbtn${on ? ' on' : ''}`} title={on ? 'Фильтр включён' : 'Фильтр и сортировка'}
+            style={{ left: colPos[c + 1] - 18, top: rowPos[r] + Math.max(0, h - 18) }}
+            onMouseDown={(e) => { e.preventDefault(); e.stopPropagation(); }}
+            onClick={(e) => { e.stopPropagation(); onFilterMenu(j, e.currentTarget.getBoundingClientRect()); }}>{on ? '⏷' : '▾'}</button>
+        );
+      })}
       {onFill && !editing && !sel.whole && (
         <div className="gfill" title="Протяните, чтобы заполнить (Ctrl — копировать/ряд); двойной щелчок — до конца данных"
           style={{ left: colPos[selC2 + 1] - 4, top: rowPos[selR2 + 1] - 4 }} onMouseDown={startFill} onDoubleClick={fillDown} />
@@ -382,13 +394,15 @@ export default function Grid({ sheet, sel, setSel, editing, setEditing, onCommit
       </div>
     );
   });
+  // номера строк под действующим фильтром — синие (как Excel)
+  const afRows = sheet.autoFilter && Object.keys(sheet.autoFilter.cols).length ? sheet.autoFilter.ref : null;
   const rowHeads = (ra, rb) => Array.from({ length: rb - ra + 1 }, (_, i) => {
     const r = ra + i;
     const h = rowPos[r + 1] - rowPos[r];
     if (!h) return null;
     const on = r >= selR1 && r <= selR2;
     return (
-      <div key={r} className={`ghead row${on ? ' on' : ''}`} style={{ top: rowPos[r], height: h }}
+      <div key={r} className={`ghead row${on ? ' on' : ''}${afRows && r > afRows.r1 && r <= afRows.r2 ? ' filtered' : ''}`} style={{ top: rowPos[r], height: h }}
         onMouseDown={(e) => { if (e.target.classList.contains('gresize')) return; setSel(e.shiftKey ? { ...sel, r2: r, c: 0, c2: cols - 1 } : { r, c: 0, r2: r, c2: cols - 1, whole: 'row' }); gridRef.current && gridRef.current.focus(); }}>
         {r + 1}
         <span className="gresize row" onMouseDown={(e) => startResize(e, 'row', r)} title="Высота строки" />
@@ -525,7 +539,7 @@ function CellEditor({ box, editing, setEditing, onCommit, style, names }) {
         if (e.key === 'F4') { e.preventDefault(); const r = cycleRef(editing.text, e.currentTarget.selectionStart); if (r) apply(r); e.stopPropagation(); return; }
         if (e.key === 'Enter' && !e.altKey) { e.preventDefault(); onCommit(editing.text, e.shiftKey ? 'up' : 'down'); }
         else if (e.key === 'Enter' && e.altKey) { e.preventDefault(); setEditing({ ...editing, text: `${editing.text}\n` }); }
-        else if (e.key === 'Tab') { e.preventDefault(); onCommit(editing.text, e.shiftKey ? 'left' : 'right'); }
+        else if (e.key === 'Tab') { e.preventDefault(); onCommit(editing.text, e.shiftKey ? 'tabBack' : 'tab'); }
         else if (e.key === 'Escape') { e.preventDefault(); setEditing(null); }
         e.stopPropagation();
       }}
