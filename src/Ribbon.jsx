@@ -16,9 +16,11 @@ import { FontFamilyBox, FontSizeBox, HighlightButton, TextColorButton, fontState
 import { effectivePara } from './editor/paraFormat.js';
 import { LINE_PRESETS, fmtNum } from './editor/paragraph.js';
 import { ParaBordersButton, ParaShadingButton } from './ParaLayoutControls.jsx';
+import { UNDERLINES } from './editor/extensions.js';
+import { CASES, painterKey } from './editor/runFormat.js';
 import { BordersButton, RowHeightField, ShadingButton, TableIcons, tableState } from './TableControls.jsx';
 
-function Btn({ icon, label, title, onClick, active, disabled, big, children }) {
+function Btn({ icon, label, title, onClick, onDoubleClick, active, disabled, big, children }) {
   const I = icon && Icon[icon];
   return (
     <button
@@ -28,6 +30,7 @@ function Btn({ icon, label, title, onClick, active, disabled, big, children }) {
       disabled={disabled}
       onMouseDown={(e) => e.preventDefault()} // не забираем фокус у текста
       onClick={onClick}
+      onDoubleClick={onDoubleClick}
     >
       {I && <I size={big ? 28 : 18} />}
       {children}
@@ -63,6 +66,54 @@ function paraState(e) {
 }
 
 // Кнопка «Интервал» с меню: множители, «Другие варианты…», интервалы перед/после
+// Подчёркнутый: кнопка + стрелка со списком видов (как в Word), «Другие подчёркивания…» — диалог «Шрифт»
+function UnderlineButton({ editor, kind }) {
+  const pop = usePopover();
+  const c = () => editor.chain().focus();
+  return (
+    <div className="split rb-popover-anchor" ref={pop.ref}>
+      <Btn title="Подчёркнутый (Ctrl+U)" active={!!kind} onClick={() => c().toggleUnderline().run()}><u className="glyph">Ч</u></Btn>
+      <button type="button" className="rb-btn split-arrow" title="Вид подчёркивания" onMouseDown={(e) => e.preventDefault()} onClick={() => pop.setOpen(!pop.open)}>▾</button>
+      {pop.open && (
+        <div className="menu-pop" style={pop.style} role="menu">
+          {UNDERLINES.filter(([k]) => k !== 'words').map(([k, label]) => (
+            <button key={k} type="button" className="menu-item" title={label} onMouseDown={(e) => e.preventDefault()} onClick={() => { pop.setOpen(false); c().setUnderlineKind(k).run(); }}>
+              <span className="check">{kind === k ? '✓' : ''}</span>
+              <span className="u-sample" data-u={k}>{label}</span>
+            </button>
+          ))}
+          <div className="menu-sep" />
+          <button type="button" className="menu-item" onMouseDown={(e) => e.preventDefault()} onClick={() => { pop.setOpen(false); c().setUnderlineKind('words').run(); }}>
+            <span className="check">{kind === 'words' ? '✓' : ''}</span>Только слова (Ctrl+Shift+W)
+          </button>
+          <button type="button" className="menu-item" onMouseDown={(e) => e.preventDefault()} onClick={() => { pop.setOpen(false); c().unsetMark('underline').run(); }}>
+            <span className="check" />Без подчёркивания
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// «Регистр» (Аа▾): как в предложениях, все строчные, ВСЕ ПРОПИСНЫЕ, Начинать С Прописных, иЗМЕНИТЬ РЕГИСТР; Shift+F3 — по кругу
+function CaseButton({ editor }) {
+  const pop = usePopover();
+  return (
+    <div className="rb-popover-anchor" ref={pop.ref}>
+      <Btn title="Регистр (Shift+F3 — по кругу)" active={pop.open} onClick={() => pop.setOpen(!pop.open)}><span className="glyph">Аа<small>▾</small></span></Btn>
+      {pop.open && (
+        <div className="menu-pop" style={pop.style} role="menu">
+          {CASES.map(([k, label]) => (
+            <button key={k} type="button" className="menu-item" onMouseDown={(e) => e.preventDefault()} onClick={() => { pop.setOpen(false); editor.chain().focus().changeCase(k).run(); }}>
+              <span className="check" />{label}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function LineSpacingButton({ editor, para, onMore }) {
   const pop = usePopover();
   const c = () => editor.chain().focus();
@@ -176,7 +227,7 @@ function TableStylesButton({ editor }) {
   );
 }
 
-export default function Ribbon({ editor, file, onLink, onParagraph, onMargins, onHf, onFind, onStyle, review }) {
+export default function Ribbon({ editor, file, onLink, onFont, onParagraph, onMargins, onHf, onFind, onStyle, review }) {
   const [tab, setTab] = useState('home');
   const tablePicker = usePopover();
 
@@ -186,6 +237,8 @@ export default function Ribbon({ editor, file, onLink, onParagraph, onMargins, o
       bold: e.isActive('bold'),
       italic: e.isActive('italic'),
       underline: e.isActive('underline'),
+      underlineKind: e.isActive('underline') ? e.getAttributes('underline').kind || 'single' : null,
+      painter: painterKey.getState(e.state).mode,
       strike: e.isActive('strike'),
       bullet: e.isActive('bulletList'),
       ordered: e.isActive('orderedList'),
@@ -275,22 +328,26 @@ export default function Ribbon({ editor, file, onLink, onParagraph, onMargins, o
               <div className="rb-col">
                 <Btn icon="cut" title="Вырезать (Ctrl+X)" onClick={() => { editor.commands.focus(); clipboard('cut'); }} />
                 <Btn icon="copy" title="Копировать (Ctrl+C)" onClick={() => { editor.commands.focus(); clipboard('copy'); }} />
+                <Btn icon="painter" active={!!s.painter}
+                  title="Формат по образцу: щелчок — один раз, двойной щелчок — несколько раз (Esc — закончить); Ctrl+Shift+C / Ctrl+Shift+V"
+                  onClick={() => c().setPainter(s.painter ? 0 : 1).run()} onDoubleClick={() => c().setPainter(2).run()} />
               </div>
             </Group>
 
-            <Group title="Шрифт">
+            <Group title="Шрифт" launcher={{ title: 'Шрифт… (Ctrl+D)', onClick: onFont }}>
               <div className="rb-rows">
                 <div className="rb-row">
                   <FontFamilyBox editor={editor} value={s.font.fontFamily} />
                   <FontSizeBox editor={editor} value={s.font.fontSize} />
                   <Btn title="Увеличить размер (Ctrl+Shift+>)" onClick={() => c().changeFontSize(1).run()}><span className="glyph-grow">A<small>▲</small></span></Btn>
                   <Btn title="Уменьшить размер (Ctrl+Shift+<)" onClick={() => c().changeFontSize(-1).run()}><span className="glyph-grow small">A<small>▼</small></span></Btn>
+                  <CaseButton editor={editor} />
                   <Btn icon="clear" title="Очистить форматирование (Ctrl+Пробел)" onClick={() => c().clearFormatting().run()} />
                 </div>
                 <div className="rb-row">
                   <Btn title="Полужирный (Ctrl+B)" active={s.bold} onClick={() => c().toggleBold().run()}><b className="glyph">Ж</b></Btn>
                   <Btn title="Курсив (Ctrl+I)" active={s.italic} onClick={() => c().toggleItalic().run()}><i className="glyph serif">К</i></Btn>
-                  <Btn title="Подчёркнутый (Ctrl+U)" active={s.underline} onClick={() => c().toggleUnderline().run()}><u className="glyph">Ч</u></Btn>
+                  <UnderlineButton editor={editor} kind={s.underlineKind} />
                   <Btn title="Зачёркнутый" active={s.strike} onClick={() => c().toggleStrike().run()}><s className="glyph">abc</s></Btn>
                   <Btn title="Подстрочный знак (Ctrl+=)" active={s.font.subscript} onClick={() => c().toggleSubscript().run()}><span className="glyph">x<sub>2</sub></span></Btn>
                   <Btn title="Надстрочный знак (Ctrl+Shift++)" active={s.font.superscript} onClick={() => c().toggleSuperscript().run()}><span className="glyph">x<sup>2</sup></span></Btn>

@@ -16,6 +16,8 @@ export const Icon = {
   saveAs: (p) => <S {...p}><path d="M5 3h11l3 3v7" /><path d="M5 3v18h8" /><path d="M8 3v6h8V3" /><path d="m15 19 5-5" /><path d="m18 14 2 0 0 2" /></S>,
   paste: (p) => <S {...p}><rect x="5" y="4" width="14" height="17" rx="1" /><path d="M9 4V2h6v2" /><path d="M9 11h6M9 15h4" /></S>,
   cut: (p) => <S {...p}><circle cx="6" cy="18" r="3" /><circle cx="18" cy="18" r="3" /><path d="M8 16 18 3M16 16 6 3" /></S>,
+  // кисть «Формат по образцу» — своя: валик на ручке
+  painter: (p) => <S {...p}><rect x="4" y="3" width="14" height="6" rx="1" /><path d="M18 6h2v5h-8v3" /><rect x="10.5" y="14" width="3" height="7" rx="1" /></S>,
   copy: (p) => <S {...p}><rect x="8" y="8" width="12" height="13" rx="1" /><path d="M16 8V4H4v13h4" /></S>,
   clear: (p) => <S {...p}><path d="M5 5h14M12 5l-3 14" /><path d="m15 15 6 6M21 15l-6 6" /></S>,
   bullets: (p) => <S {...p}><circle cx="4" cy="6" r="1.2" fill="currentColor" /><circle cx="4" cy="12" r="1.2" fill="currentColor" /><circle cx="4" cy="18" r="1.2" fill="currentColor" /><path d="M9 6h12M9 12h12M9 18h12" /></S>,

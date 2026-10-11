@@ -597,3 +597,27 @@ p[data-section-break]::after {
   .pero-sheets { display: none !important; }
   .page-content [data-section] { --sec-l: 0px !important; --sec-r: 0px !important; }
 }
+
+/* диалог «Шрифт» */
+.modal.font-dlg { width: 560px; }
+.fd-top { display: grid; grid-template-columns: 1.6fr 1fr 0.6fr; gap: 10px; margin-bottom: 10px; }
+.fd-col { display: flex; flex-direction: column; gap: 3px; font-size: 12.5px; min-width: 0; }
+.fd-col input, .fd-col select { font: inherit; padding: 4px 5px; border: 1px solid #bbb; border-radius: 3px; min-width: 0; }
+.fd-col input:focus, .fd-col select:focus { border-color: var(--accent); outline: none; }
+.fd-color { display: flex; gap: 6px; align-items: center; }
+.fd-color input[type=color] { width: 44px; height: 26px; padding: 1px; }
+.fd-color .btn.on { border-color: var(--accent); color: var(--accent); }
+.fd-checks { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 18px; padding: 4px 0; }
+.fd-preview { height: 64px; border: 1px solid var(--line); background: #fff; display: flex; align-items: center; justify-content: center; overflow: hidden; white-space: nowrap; }
+
+/* меню подчёркиваний: образцы линий */
+.u-sample { text-decoration-line: underline; text-decoration-style: solid; text-underline-offset: 3px; }
+.u-sample[data-u=double] { text-decoration-style: double; }
+.u-sample[data-u=thick] { text-decoration-thickness: 2px; }
+.u-sample[data-u=dotted] { text-decoration-style: dotted; }
+.u-sample[data-u=dottedHeavy] { text-decoration-style: dotted; text-decoration-thickness: 2px; }
+.u-sample[data-u=dash], .u-sample[data-u=dashLong], .u-sample[data-u=dotDash], .u-sample[data-u=dotDotDash] { text-decoration-style: dashed; }
+.u-sample[data-u=wave], .u-sample[data-u=wavyDouble] { text-decoration-style: wavy; }
+
+/* кисть «Формат по образцу» включена */
+.ProseMirror.pero-painter { cursor: copy; }
