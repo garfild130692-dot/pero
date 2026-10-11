@@ -3,7 +3,7 @@
 import CfMenu from './CfMenu.jsx';
 import React, { useState } from 'react';
 import { Icon } from '../icons.jsx';
-import { about, clipboard, openLogs, reportProblem } from '../fileApi.js';
+import { about, clipboard, newWindow, openLogs, reportProblem } from '../fileApi.js';
 import RecentButton from '../RecentButton.jsx';
 import { ColorPalette, SplitColor, usePopover } from '../FontControls.jsx';
 import { FORMAT_PRESETS, changeDecimals } from './format.js';
@@ -169,6 +169,7 @@ export default function SheetRibbon({ api }) {
             </Group>
             <Group title="Последние">
               <RecentButton onOpen={file.openHere} />
+              <Btn big icon="home" label="Начальный экран" onClick={() => newWindow('start')} title="Начальный экран в новом окне: создать, последние файлы, восстановление" />
             </Group>
             <Group title="Справка">
               <Btn big icon="report" label="Сообщить о проблеме" onClick={() => reportProblem()} title="Собрать сведения о проблеме для администратора" />

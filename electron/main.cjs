@@ -9,6 +9,8 @@ const os = require('os');
 const fs = require('fs/promises');
 const { createLog, stamp } = require('./log.cjs');
 const { RecentFiles, samePath } = require('./recent.cjs');
+const { Settings } = require('./settings.cjs');
+const { existsSync } = require('fs');
 const { createAutosave } = require('./autosave.cjs');
 
 const DOCX_FILTER = [{ name: 'Документ Word', extensions: ['docx'] }];
@@ -27,6 +29,9 @@ else if (!app.isPackaged) app.setPath('userData', `${app.getPath('userData')}-de
 const userData = app.getPath('userData');
 const log = createLog(path.join(userData, 'logs'));
 const recent = new RecentFiles(path.join(userData, 'recent.json'));
+const settings = new Settings(path.join(userData, 'settings.json'));
+// окно при запуске без файла: начальный экран или сразу новый документ (настройка)
+const startKind = () => (settings.get('startScreen') ? 'start' : 'doc');
 const autosave = createAutosave(path.join(userData, 'autosave'));
 
 // Состояние окон: webContents.id → { win, kind, path, dirty, forceClose, initial, key, crashes }
@@ -217,7 +222,8 @@ function fileShortcuts(e, input, s) {
   if (input.type !== 'keyDown' || !(input.control || input.meta) || input.alt) return;
   const k = input.code;
   let act = null;
-  if (k === 'KeyN' && !input.shift) act = () => createWindow({ kind: 'doc' });
+  // Ctrl+N на начальном экране — новый документ в этом же окне
+  if (k === 'KeyN' && !input.shift) act = () => (s.kind === 'start' && pristine(s) ? send(s, 'newHere', 'doc') : createWindow({ kind: 'doc' }));
   else if (k === 'KeyO' && !input.shift) act = () => send(s, 'open');
   else if (k === 'KeyS') act = () => send(s, input.shift ? 'saveAs' : 'save');
   else if (k === 'KeyP' && !input.shift) act = () => send(s, 'print');
@@ -353,7 +359,7 @@ const toArrayBuffer = (buf) => buf.buffer.slice(buf.byteOffset, buf.byteOffset +
 
 ipcMain.on('app:about', (e) => { const s = stateOf(e); about(s && s.win); });
 ipcMain.on('app:logs', () => { shell.openPath(log.dir); });
-ipcMain.on('app:newWindow', (_e, kind) => createWindow({ kind: kind === 'sheet' ? 'sheet' : 'doc' }));
+ipcMain.on('app:newWindow', (_e, kind) => createWindow({ kind: ['sheet', 'start'].includes(kind) ? kind : 'doc' }));
 
 // Открыть: диалог; файл вернётся окну, если оно пустое и нетронутое, иначе откроется в новом окне
 ipcMain.handle('file:open', async (e) => {
@@ -376,7 +382,13 @@ ipcMain.handle('file:openPath', async (e, p) => {
   return f;
 });
 
-ipcMain.handle('recent:list', () => recent.list());
+// для начального экрана — с признаком «файл есть» (отсутствующие показываются серыми)
+ipcMain.handle('recent:list', (_e, check) => recent.list().map((x) => (check ? { ...x, exists: existsSync(x.path) } : x)));
+ipcMain.handle('recent:pin', (_e, p, v) => { const ok = recent.pin(p, !!v); buildMenu(); return ok; });
+ipcMain.handle('recent:remove', (_e, p) => { recent.remove(p); buildMenu(); return true; });
+ipcMain.handle('recovery:list', () => autosave.scan());
+ipcMain.handle('settings:get', () => settings.get());
+ipcMain.handle('settings:set', (_e, k, v) => settings.set(k, v));
 ipcMain.handle('recent:clear', () => { recent.clear(); try { app.clearRecentDocuments(); } catch { /* */ } buildMenu(); return true; });
 
 // Печать: системный диалог; страницы режет Chromium по CSS @page (размер, поля, колонтитулы)
@@ -484,7 +496,7 @@ ipcMain.handle('recovery:discard', (_e, id) => { autosave.clear(id); log.info(`�
 
 ipcMain.on('edit', (e, cmd) => { if (['cut', 'copy', 'paste'].includes(cmd)) e.sender[cmd](); });
 ipcMain.on('state:dirty', (e, value) => { const s = stateOf(e); if (s) s.dirty = !!value; });
-ipcMain.on('state:doc', (e, meta) => { const s = stateOf(e); if (s && meta) { s.path = meta.path || null; s.kind = meta.kind === 'sheet' ? 'sheet' : 'doc'; } });
+ipcMain.on('state:doc', (e, meta) => { const s = stateOf(e); if (s && meta) { s.path = meta.path || null; s.kind = ['sheet', 'start'].includes(meta.kind) ? meta.kind : 'doc'; } });
 ipcMain.on('state:title', (e, title) => { const s = stateOf(e); if (s) s.win.setTitle(title); });
 ipcMain.on('app:closeNow', (e) => { const s = stateOf(e); if (s) { s.forceClose = true; s.win.close(); } });
 ipcMain.handle('dialog:error', (e, title, msg) => {
@@ -506,7 +518,7 @@ if (!NEW_INSTANCE && !app.requestSingleInstanceLock()) {
     const files = fileArgs(argv.slice(1), cwd);
     log.info(`Повторный запуск${files.length ? `: ${files.join(', ')}` : ''}`);
     if (files.length) files.forEach((f) => openPath(f));
-    else createWindow({ kind: 'doc' });
+    else createWindow({ kind: startKind() });
   });
   app.on('child-process-gone', (_e, d) => log.error(`Сбой служебного процесса ${d.type}: ${d.reason} (${d.exitCode})`));
 
@@ -517,7 +529,7 @@ if (!NEW_INSTANCE && !app.requestSingleInstanceLock()) {
     // файлы — каждый в своё окно; не открылся ни один — пустой документ
     (async () => {
       for (const f of files) await openPath(f);
-      if (!wins.size) createWindow({ kind: 'doc' });
+      if (!wins.size) createWindow({ kind: startKind() });
     })();
   });
   app.on('window-all-closed', () => { log.info('Завершение работы'); app.quit(); });

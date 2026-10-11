@@ -2,7 +2,7 @@
 import React, { useState } from 'react';
 import { useEditorState } from '@tiptap/react';
 import { Icon } from './icons.jsx';
-import { about, clipboard, openImage, openLogs, reportProblem } from './fileApi.js';
+import { about, clipboard, newWindow, openImage, openLogs, reportProblem } from './fileApi.js';
 import { QuickButton } from './TitleBar.jsx';
 import RecentButton from './RecentButton.jsx';
 import { insertImageFiles } from './insertImage.js';
@@ -355,6 +355,7 @@ export default function Ribbon({ editor, file, onLink, onFont, onSymbol, onRefDi
             </Group>
             <Group title="Последние">
               <RecentButton onOpen={file.openHere} />
+              <Btn big icon="home" label="Начальный экран" onClick={() => newWindow('start')} title="Начальный экран в новом окне: создать, последние файлы, восстановление" />
             </Group>
             <Group title="Справка">
               <Btn big icon="report" label="Сообщить о проблеме" onClick={() => reportProblem()} title="Собрать сведения о проблеме для администратора" />

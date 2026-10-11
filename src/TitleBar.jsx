@@ -20,7 +20,7 @@ export default function TitleBar({ name, dirty, children }) {
         <span className="app-mark" aria-hidden="true">П</span>
         {children}
       </div>
-      <div className="doc-title" title={name}>{name}{dirty ? ' •' : ''} — Перо</div>
+      <div className="doc-title" title={name || 'Перо'}>{name ? `${name}${dirty ? ' •' : ''} — Перо` : 'Перо'}</div>
       <div className="titlebar-right" />
     </div>
   );

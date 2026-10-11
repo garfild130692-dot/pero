@@ -74,13 +74,18 @@ export const pathForFile = (f) => (native && native.pathForFile ? native.pathFor
 // ---------- Окна, последние файлы, автосохранение, журнал (этап 9) ----------
 // Что открыть при загрузке окна; в браузере (отладка) — ?sheet для книги
 export const ready = async () => (native && native.ready ? native.ready() : {
-  kind: /[?&]sheet\b/.test(window.location.search) ? 'sheet' : 'doc', file: null, recovery: null, notice: null, autosaveSec: 0,
+  kind: /[?&]sheet\b/.test(window.location.search) ? 'sheet' : /[?&]start\b/.test(window.location.search) ? 'start' : 'doc', file: null, recovery: null, notice: null, autosaveSec: 0,
 });
 // Новый документ/книга в отдельном окне (как Ctrl+N в Word). false — нет окон (браузер): заменить содержимое текущего
 export const newWindow = (kind) => { if (!native || !native.newWindow) return false; native.newWindow(kind); return true; };
 // Открыть по пути: данные файла — если открывать здесь (окно пустое), null — открылось в другом окне
 export const openPath = (p) => (native && native.openPath ? native.openPath(p) : Promise.resolve(null));
-export const recentList = async () => (native && native.recentList ? native.recentList() : []);
+export const recentList = async (check = false) => (native && native.recentList ? native.recentList(check) : []);
+export const recentPin = async (p, v) => native && native.recentPin && native.recentPin(p, v);
+export const recentRemove = async (p) => native && native.recentRemove && native.recentRemove(p);
+export const recoveryList = async () => (native && native.recoveryList ? native.recoveryList() : []);
+export const settingsGet = async () => (native && native.settingsGet ? native.settingsGet() : { startScreen: true });
+export const settingsSet = async (k, v) => native && native.settingsSet && native.settingsSet(k, v);
 export const recentClear = async () => native && native.recentClear && native.recentClear();
 export const setDoc = (meta) => native && native.setDoc && native.setDoc(meta);
 export const autosave = async (meta, data) => native && native.autosave && native.autosave(meta, data);

@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client';
 import App from './App.jsx';
 import SheetApp from './sheet/SheetApp.jsx';
 import RecoveryPanel from './RecoveryPanel.jsx';
+import StartScreen from './StartScreen.jsx';
 import * as fileApi from './fileApi.js';
 import './styles.css';
 import './sheet/sheet.css';
@@ -11,7 +12,8 @@ import './sheet/sheet.css';
 window.addEventListener('error', (e) => fileApi.logError(`${e.message} (${e.filename}:${e.lineno})${e.error && e.error.stack ? `\n${e.error.stack}` : ''}`));
 window.addEventListener('unhandledrejection', (e) => fileApi.logError(`Необработанный отказ: ${e.reason && e.reason.stack ? e.reason.stack : e.reason}`));
 
-// Одно окно — один файл: текстовый документ (.docx) или книга (.xlsx). Root переключает редакторы.
+// Одно окно — один файл: текстовый документ (.docx) или книга (.xlsx). Root переключает редакторы;
+// запуск без файла — начальный экран (kind 'start'), выбор на нём открывается в этом же окне.
 const isSheet = (f) => f && /\.(xlsx|csv)$/i.test(f.name);
 
 function Root() {
@@ -22,12 +24,15 @@ function Root() {
 
   useEffect(() => {
     fileApi.ready().then((r) => {
-      setBoot({ autosaveSec: r.autosaveSec || 0, recovery: r.recovery, notice: r.notice });
-      if (r.file) openOther(r.file); else open(r.kind === 'sheet' ? 'sheet' : 'doc', null);
+      // на начальном экране копии для восстановления — в его списке, панель поверх документа не нужна
+      setBoot({ autosaveSec: r.autosaveSec || 0, recovery: r.kind === 'start' && !r.file ? null : r.recovery, notice: r.notice });
+      if (r.file) openOther(r.file); else open(['sheet', 'start'].includes(r.kind) ? r.kind : 'doc', null);
     }, (e) => { fileApi.logError(e); open('doc', null); });
   }, []);
 
   if (!mode) return null;
+  // начальный экран показывает восстановление сам — отдельная панель не нужна
+  if (mode.kind === 'start') return <StartScreen key={mode.n} onCreate={(kind) => open(kind, null)} onOpen={openOther} />;
   const props = { initialFile: mode.file, onOpenOther: openOther, autosaveSec: boot.autosaveSec };
   return (
     <>

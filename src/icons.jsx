@@ -8,6 +8,7 @@ const S = ({ children, size = 18 }) => (
 );
 
 export const Icon = {
+  home: (p) => <S {...p}><path d="M3 11 12 4l9 7" /><path d="M5 10v10h5v-6h4v6h5V10" /></S>,
   multilevel: (p) => <S {...p}><path d="M9 6h11M12 12h8M15 18h5" /><path d="M3 5h2v3M3 11.5h3M6 17h2v3" strokeWidth="1.4" /></S>,
   footnote: (p) => <S {...p}><path d="M4 5h12M4 9h9" /><path d="M17 7h2v-3" /><path d="M4 16h16" strokeWidth="1" /><path d="M4 19h10" /></S>,
   toc: (p) => <S {...p}><path d="M4 5h11M4 10h13M7 15h10M4 20h13" /><path d="M19 5h1M20 10h0M20 15h0M20 20h0" /></S>,

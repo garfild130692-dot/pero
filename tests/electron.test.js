@@ -86,3 +86,36 @@ describe('автосохранение', () => {
     expect(fs.readdirSync(dir)).toEqual([]);
   });
 });
+
+describe('последние файлы: закрепление', () => {
+  it('закреплённые сверху, не вытесняются и не очищаются; повторное открытие сохраняет закрепление', () => {
+    const r = new RecentFiles(path.join(dir, 'recent.json'), 3);
+    for (const n of ['a', 'b', 'c']) r.add(path.join(dir, `${n}.docx`));
+    expect(r.pin(path.join(dir, 'a.docx'), true)).toBe(true);
+    for (const n of ['d', 'e', 'f', 'g']) r.add(path.join(dir, `${n}.docx`));
+    expect(r.list().map((x) => x.name)).toEqual(['a.docx', 'g.docx', 'f.docx', 'e.docx']);
+    r.add(path.join(dir, 'A.DOCX')); // тот же файл (регистр не важен) — остаётся закреплённым
+    expect(r.list()[0]).toMatchObject({ name: 'A.DOCX', pinned: true });
+    const again = new RecentFiles(path.join(dir, 'recent.json'), 3);
+    expect(again.list().map((x) => !!x.pinned)).toEqual([true, false, false, false]);
+    again.clear();
+    expect(again.list().map((x) => x.name)).toEqual(['A.DOCX']);
+    again.pin(path.join(dir, 'a.docx'), false);
+    expect(again.list()[0].pinned).toBeUndefined();
+  });
+});
+
+describe('настройки', () => {
+  it('умолчания, сохранение, неверные значения отклоняются', () => {
+    const { Settings } = require('../electron/settings.cjs');
+    const f = path.join(dir, 'settings.json');
+    const s = new Settings(f);
+    expect(s.get('startScreen')).toBe(true);
+    expect(s.set('startScreen', false)).toBe(true);
+    expect(s.set('startScreen', 'нет')).toBe(false);
+    expect(s.set('неизвестно', 1)).toBe(false);
+    expect(new Settings(f).get('startScreen')).toBe(false);
+    fs.writeFileSync(f, '{испорчен');
+    expect(new Settings(f).get()).toEqual({ startScreen: true });
+  });
+});
