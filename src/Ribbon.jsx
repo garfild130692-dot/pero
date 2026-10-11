@@ -20,6 +20,7 @@ import { UNDERLINES } from './editor/extensions.js';
 import { CASES, painterKey } from './editor/runFormat.js';
 import { marksKey } from './editor/marks.js';
 import { SymbolButton } from './SymbolDialog.jsx';
+import { MultilevelButton } from './NumberingDialogs.jsx';
 import { BordersButton, RowHeightField, ShadingButton, TableIcons, tableState } from './TableControls.jsx';
 
 function Btn({ icon, label, title, onClick, onDoubleClick, active, disabled, big, children }) {
@@ -274,6 +275,12 @@ export default function Ribbon({ editor, file, onLink, onFont, onSymbol, onRefDi
       underlineKind: e.isActive('underline') ? e.getAttributes('underline').kind || 'single' : null,
       painter: painterKey.getState(e.state).mode,
       showMarks: marksKey.getState(e.state).on,
+      numbering: {
+        headingNumbering: e.state.doc.attrs.headingNumbering,
+        inHeading: e.state.selection.$from.parent.type.name === 'heading',
+        headingNoNumber: !!e.state.selection.$from.parent.attrs.noNumber,
+        inOrdered: e.isActive('orderedList'),
+      },
       strike: e.isActive('strike'),
       bullet: e.isActive('bulletList'),
       ordered: e.isActive('orderedList'),
@@ -399,6 +406,7 @@ export default function Ribbon({ editor, file, onLink, onFont, onSymbol, onRefDi
                 <div className="rb-row">
                   <Btn icon="bullets" title="Маркированный список" active={s.bullet} onClick={() => c().toggleBulletList().run()} />
                   <Btn icon="numbers" title="Нумерованный список" active={s.ordered} onClick={() => c().toggleOrderedList().run()} />
+                  <MultilevelButton editor={editor} Btn={Btn} state={s.numbering} onDialog={onRefDialog} />
                   {/* в списке — уровень списка, иначе левый отступ абзаца шагом 1,25 см */}
                   <Btn icon="outdent" title={s.para.inList ? 'Уменьшить уровень списка (Shift+Tab)' : 'Уменьшить отступ (Ctrl+Shift+M)'}
                     disabled={s.para.inList ? !s.canLift : s.para.left <= 0} onClick={() => c().changeIndent(-1).run()} />

@@ -676,3 +676,21 @@ p[data-section-break]::after {
 @media print { .pero-notes-layer, .pero-notes-probe { display: none !important; } }
 .print-notes { display: none; }
 @media print { .print-notes { display: block; margin-top: 12pt; padding-top: 6pt; font-size: 10pt; break-inside: avoid; } .print-notes::before { content: ''; display: block; width: 144pt; border-top: 0.5pt solid #000; margin-bottom: 4pt; } }
+
+/* формат нумерованных списков (numbering.js): стиль номера — --lst, вид маркера — data-mk */
+.page-content ol { --lst: decimal; }
+.page-content ol ol { --lst: lower-alpha; }
+.page-content ol ol ol { --lst: lower-roman; }
+.page-content ol[data-fmt] { list-style-type: var(--lst); }
+.page-content ol[data-mk="paren"] > li::marker { content: counter(list-item, var(--lst)) ") "; }
+.page-content ol[data-mk="both"] > li::marker { content: "(" counter(list-item, var(--lst)) ") "; }
+.page-content ol[data-mk="plain"] > li::marker { content: counter(list-item, var(--lst)) "  "; }
+.page-content ol[data-mk="path-dot"] > li::marker { content: counters(list-item, ".", var(--lst)) ". "; }
+.page-content ol[data-mk="path"] > li::marker { content: counters(list-item, ".", var(--lst)) "  "; }
+
+/* «Определение многоуровневого списка» */
+.modal.ml-dlg { width: 600px; }
+.ml-body { display: grid; grid-template-columns: 130px 1fr; gap: 14px; }
+.ml-levels { border: 1px solid var(--line); background: #fff; align-self: start; }
+.ml-edit { display: flex; flex-direction: column; gap: 10px; }
+.ml-preview { border: 1px solid var(--line); background: #fff; padding: 8px 10px; font-size: 12.5px; line-height: 1.7; }

@@ -233,6 +233,8 @@ function parseNumbering(doc) {
       levels[il] = {
         fmt: wAttr(child(lvl, 'numFmt'), 'val') || 'decimal',
         start: +(wAttr(child(lvl, 'start'), 'val') || 1),
+        text: wAttr(child(lvl, 'lvlText'), 'val') ?? `%${il + 1}.`,
+        suff: wAttr(child(lvl, 'suff'), 'val') || 'tab',
       };
     }
     abstract[wAttr(a, 'abstractNumId')] = levels;
@@ -247,7 +249,29 @@ function listInfo(numbering, numId, ilvl) {
   const abs = numbering.abstract[numbering.nums[numId]];
   const lvl = abs && (abs[ilvl] || abs[0]);
   const fmt = lvl ? lvl.fmt : 'bullet';
-  return { type: fmt === 'bullet' || fmt === 'none' ? 'bulletList' : 'orderedList', start: lvl ? lvl.start : 1 };
+  // формат номера и шаблон — только отличия от нашего вида уровня (1., a., i.)
+  const DEF_FMT = ['decimal', 'lowerLetter', 'lowerRoman'][ilvl % 3];
+  const numFmt = lvl && fmt !== DEF_FMT && fmt !== 'bullet' && fmt !== 'none' ? fmt : null;
+  const norm = lvl && /%\d/.test(lvl.text || '') ? normalizeLvlText(lvl.text, ilvl) : null;
+  const lvlText = norm && norm !== '%1.' ? norm : null;
+  return { type: fmt === 'bullet' || fmt === 'none' ? 'bulletList' : 'orderedList', start: lvl ? lvl.start : 1, numFmt, lvlText };
+}
+
+// Шаблон номера уровня ilvl в виде «относительно списка»: '%3)' → '%1)', '%1.%2.%3.' → '%1.%2.' (с родителем)
+function normalizeLvlText(text, ilvl) {
+  const refs = (text.match(/%\d/g) || []).length;
+  if (refs > 1) return /\.$/.test(text) ? '%1.%2.' : '%1.%2';
+  return text.replace(/%\d/, '%1');
+}
+
+// Нумерация заголовков из numbering.xml: уровни абстрактной нумерации numId
+function headingLevelsOf(numbering, numId) {
+  const abs = numbering.abstract[numbering.nums[numId]];
+  if (!abs) return null;
+  return Array.from({ length: 9 }, (_, i) => {
+    const l = abs[i] || { fmt: 'decimal', start: 1, text: '' };
+    return { fmt: l.fmt === 'none' ? 'decimal' : l.fmt, text: l.fmt === 'none' ? '' : l.text, start: l.start, on: false };
+  });
 }
 
 // Первый потомок с локальным именем name на любой глубине
@@ -575,6 +599,29 @@ class Importer {
       const sm = /^list (?:bullet|number) (\d)$/.exec((this.styles[styleId] || {}).name || '');
       if (sNum) numPr = { ...sNum, ilvl: sNum.ilvl || (sm ? +sm[1] - 1 : 0) };
     }
+    // нумерация заголовка (1, 1.1…): прямая (numPr абзаца) или из стиля заголовка; numId 0 — «без номера»
+    let noNumber = false;
+    if (level) {
+      const rawId = wAttr(child(child(pPr, 'numPr'), 'numId'), 'val');
+      const viaStyle = !rawId;
+      const nId = rawId || (styleProp(this.styles, styleId, 'numPr') || {}).numId;
+      if (rawId === '0') noNumber = true;
+      else if (nId) {
+        if (!this.headingNum) {
+          const levels = headingLevelsOf(this.numbering, nId);
+          if (levels) {
+            const abs = this.numbering.abstract[this.numbering.nums[nId]] || {};
+            this.headingNum = { levels, suff: (abs[0] && abs[0].suff) || 'tab', source: { numId: nId, viaStyle }, changed: false };
+          }
+        }
+        if (this.headingNum && this.headingNum.source.numId === nId) {
+          const il = numPr ? numPr.ilvl : (styleProp(this.styles, styleId, 'numPr') || {}).ilvl || 0;
+          if (this.headingNum.levels[il]) this.headingNum.levels[il].on = true;
+          if (il !== level - 1) this.headingNum.levels[level - 1] = { ...this.headingNum.levels[il], on: true };
+        } else noNumber = true; // нумерация другим списком — показываем без номера (в файле сохраняется)
+      } else if (this.headingNum) noNumber = true;
+      if (this.headingNum && ['title', 'subtitle'].includes((this.styles[styleId] || {}).name)) noNumber = true;
+    }
     if (level) numPr = null;
 
     // Пользовательский стиль (не «Обычный», не заголовок, не список) — абзац ссылается на него (styleId),
@@ -619,7 +666,7 @@ class Importer {
     if (tabs.length) para.tabs = tabs;
     const layout = layoutAttrs({ ...(this.docLayout || {}), ...resolvedStyleLayout(this.styles, styleId, this.styleCache), ...readLayoutProps(pPr, child, wAttr) }, !!level);
     const node = level
-      ? { type: 'heading', attrs: { level, textAlign, ...para, ...layout, ...(styleId && (this.styles[styleId] || {}).name !== `heading ${level}` ? { fileStyle: { id: styleId, level } } : {}) }, content }
+      ? { type: 'heading', attrs: { level, textAlign, ...para, ...layout, ...(noNumber ? { noNumber: true } : {}), ...(styleId && (this.styles[styleId] || {}).name !== `heading ${level}` ? { fileStyle: { id: styleId, level } } : {}) }, content }
       : { type: 'paragraph', attrs: { textAlign, ...para, ...layout, ...(custom ? { styleId } : {}) }, content };
     // разрыв раздела после абзаца — исходный XML параметров раздела
     const sect = child(pPr, 'sectPr');
@@ -723,7 +770,7 @@ class Importer {
       }
       if (!top || top.level < ilvl) {
         const list = { type: info.type, content: [] };
-        if (info.type === 'orderedList') list.attrs = { start: info.start };
+        if (info.type === 'orderedList') list.attrs = { start: info.start, ...(info.numFmt ? { numFmt: info.numFmt } : {}), ...(info.lvlText ? { lvlText: info.lvlText } : {}) };
         if (top) {
           const items = top.list.content;
           items[items.length - 1].content.push(list);
@@ -852,7 +899,7 @@ export async function importDocx(data) {
   return {
     doc: {
       type: 'doc',
-      attrs: { ...docDefaults, para: docPara, defaultTab, sectPr: imp.bodySectPr, hf, styles: Object.values(imp.usedStyles), comments: commentList, footnotes: footnoteList },
+      attrs: { ...docDefaults, para: docPara, defaultTab, sectPr: imp.bodySectPr, hf, styles: Object.values(imp.usedStyles), comments: commentList, footnotes: footnoteList, ...(imp.headingNum ? { headingNumbering: imp.headingNum } : {}) },
       content,
     },
     warnings: imp.warnings,

@@ -12,6 +12,7 @@ import ParagraphDialog from './ParagraphDialog.jsx';
 import FontDialog from './FontDialog.jsx';
 import SymbolDialog from './SymbolDialog.jsx';
 import { BookmarkDialog, CrossRefDialog, DateDialog } from './RefDialogs.jsx';
+import { ListFormatDialog, MultilevelDialog } from './NumberingDialogs.jsx';
 import { cssFontStack } from './editor/font.js';
 import { NEW_DOC_PARA } from './editor/paragraph.js';
 import { lineCss } from './editor/paraFormat.js';
@@ -22,6 +23,7 @@ import { HeaderFooterDialog, MarginsDialog, PageChrome, printCss } from './PageC
 import FindBar from './FindBar.jsx';
 import StyleDialog from './StyleDialog.jsx';
 import { styleCss } from './editor/styles.js';
+import { COUNTER_STYLES_CSS, headingNumberCss } from './editor/numbering.js';
 import { sectionPrintCss } from './editor/sections.js';
 import CommentsPanel from './CommentsPanel.jsx';
 import FootnotesPanel, { PrintNotes } from './FootnotesPanel.jsx';
@@ -395,7 +397,7 @@ export default function App({ initialFile, onOpenOther, onNewSheet, autosaveSec 
     editor,
     selector: ({ editor: e }) => (e ? {
       family: e.state.doc.attrs.fontFamily, size: e.state.doc.attrs.fontSize, para: e.state.doc.attrs.para,
-      sectPr: e.state.doc.attrs.sectPr, hf: e.state.doc.attrs.hf, total: pageInfo(e.state).total, styles: e.state.doc.attrs.styles, chrome: pageChrome(e.state), firstSect: sectionList(e.state.doc)[0], sects: sectionList(e.state.doc), sectCss: sectionPrintCss(e.state.doc),
+      sectPr: e.state.doc.attrs.sectPr, hf: e.state.doc.attrs.hf, total: pageInfo(e.state).total, styles: e.state.doc.attrs.styles, headingNumbering: e.state.doc.attrs.headingNumbering, chrome: pageChrome(e.state), firstSect: sectionList(e.state.doc)[0], sects: sectionList(e.state.doc), sectCss: sectionPrintCss(e.state.doc),
     } : null),
   });
 
@@ -469,11 +471,15 @@ export default function App({ initialFile, onOpenOther, onNewSheet, autosaveSec 
       {modal === 'bookmark' && <BookmarkDialog editor={editor} onClose={() => setModal(null)} />}
       {modal === 'xref' && <CrossRefDialog editor={editor} onClose={() => setModal(null)} />}
       {modal === 'date' && <DateDialog editor={editor} onClose={() => setModal(null)} />}
+      {modal === 'multilevel' && <MultilevelDialog editor={editor} onClose={() => setModal(null)} />}
+      {modal === 'listFormat' && <ListFormatDialog editor={editor} onClose={() => setModal(null)} />}
       {modal === 'margins' && <MarginsDialog editor={editor} onClose={() => setModal(null)} />}
       {modal === 'hf' && <HeaderFooterDialog editor={editor} onClose={() => setModal(null)} />}
       {modal && modal.style && <StyleDialog editor={editor} mode={modal.style} onClose={() => setModal(null)} />}
       {/* пользовательские стили абзацев — правила по data-pstyle */}
       <style>{styleCss(docFont && docFont.styles)}</style>
+      <style>{`${COUNTER_STYLES_CSS}
+${headingNumberCss(docFont && docFont.headingNumbering)}`}</style>
       {/* печать/PDF: размер листа, поля и колонтитулы — правилами @page */}
       <style>{printCss(docFont && docFont.sectPr, (docFont && docFont.hf) || EMPTY_HF, docFont && docFont.firstSect)}{docFont && docFont.sectCss ? `@media print { ${docFont.sectCss} }` : ''}</style>
       {modal && typeof modal === 'object' && !modal.style && (

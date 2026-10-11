@@ -111,7 +111,8 @@ const DEFAULT_SECTPR = `<w:sectPr><w:pgSz w:w="${PAGE.w}" w:h="${PAGE.h}"/>` +
   '<w:cols w:space="708"/><w:docGrid w:linePitch="360"/></w:sectPr>';
 
 class Exporter {
-  constructor({ styleIds = OUR_STYLE_IDS, numBase = 1, relTargets = null, imgBase = 0, sect = (x) => x, customStyles = [], styleTabs = {}, fileStyleIds = null } = {}) {
+  constructor({ styleIds = OUR_STYLE_IDS, numBase = 1, relTargets = null, imgBase = 0, sect = (x) => x, customStyles = [], styleTabs = {}, fileStyleIds = null, headingNum = null } = {}) {
+    this.headingNum = headingNum; // нумерация заголовков: { numId, viaStyle } | { off } | null (см. headingNumMode)
     this.fileStyleIds = fileStyleIds; // id стилей исходного пакета (исходный стиль заголовка — если он там есть)
     this.styleTabs = styleTabs; // id пользовательского стиля → его позиции табуляции (убранные в абзаце пишутся как clear)
     this.sect = sect;             // преобразование XML sectPr (подстановка ссылок на свои колонтитулы)
@@ -237,6 +238,14 @@ class Exporter {
     if (pStyle) pPr += `<w:pStyle w:val="${pStyle}"/>`;
     // порядок в pPr по схеме: pStyle, keepNext, keepLines, pageBreakBefore, widowControl, numPr, pBdr, shd, tabs, spacing, ind, jc
     pPr += layoutXmlHead(attrs);
+    // нумерация заголовка: свой список Пера / прямая из файла — numPr уровня; «без номера» при нумерации из стиля — numId 0
+    // (заголовок своего стиля файла — «Название», «Подзаголовок» — не нумеруется)
+    if (!numPr && node.type === 'heading' && this.headingNum) {
+      const hn = this.headingNum;
+      const lvl = Math.min(Math.max(attrs.level || 1, 1), 9) - 1;
+      if (hn.off || attrs.noNumber || fs) { if (hn.viaStyle || hn.off || hn.ours) numPr = { numId: 0, ilvl: 0 }; }
+      else if (!hn.viaStyle) numPr = { numId: hn.numId, ilvl: lvl };
+    }
     if (numPr) pPr += `<w:numPr><w:ilvl w:val="${numPr.ilvl}"/><w:numId w:val="${numPr.numId}"/></w:numPr>`;
     pPr += layoutXmlTail(attrs);
     pPr += tabsXml(attrs.tabs, (pStyle && this.styleTabs[pStyle]) || []);
@@ -251,7 +260,7 @@ class Exporter {
     let numId;
     if (node.type === 'bulletList') numId = this.numBase;
     else {
-      this.orderedNums.push({ start: (node.attrs && node.attrs.start) || 1, ilvl });
+      this.orderedNums.push({ start: (node.attrs && node.attrs.start) || 1, ilvl, fmt: (node.attrs && node.attrs.numFmt) || null, text: (node.attrs && node.attrs.lvlText) || null });
       numId = this.numBase + this.orderedNums.length; // numBase — маркированный, дальше — нумерованные
     }
     let xml = '';
@@ -456,7 +465,7 @@ ${[1, 2, 3, 4, 5, 6].map(headingStyle).join('\n')}
 </w:styles>`;
 
 // Наши определения нумерации. absBase/numBase — первые свободные идентификаторы (при слиянии с исходным файлом).
-function numberingParts(orderedNums, absBase = 0, numBase = 1) {
+function numberingParts(orderedNums, absBase = 0, numBase = 1, heading = null) {
   // маркеры Word: точка (Symbol U+F0B7), «o» (Courier New), квадрат (Wingdings U+F0A7)
   const BULLETS = [['\uF0B7', 'Symbol'], ['o', 'Courier New'], ['\uF0A7', 'Wingdings']];
   const bulletLvls = Array.from({ length: 9 }, (_, i) => {
@@ -466,23 +475,59 @@ function numberingParts(orderedNums, absBase = 0, numBase = 1) {
       `<w:rPr><w:rFonts w:ascii="${font}" w:hAnsi="${font}" w:hint="default"/></w:rPr></w:lvl>`;
   }).join('');
   const FMT = ['decimal', 'lowerLetter', 'lowerRoman'];
-  const decimalLvls = Array.from({ length: 9 }, (_, i) =>
-    `<w:lvl w:ilvl="${i}"><w:start w:val="1"/><w:numFmt w:val="${FMT[i % 3]}"/><w:lvlText w:val="%${i + 1}."/><w:lvlJc w:val="${i % 3 === 2 ? 'right' : 'left'}"/>` +
-    `<w:pPr><w:ind w:left="${720 * (i + 1)}" w:hanging="${i % 3 === 2 ? 180 : 360}"/></w:pPr></w:lvl>`
-  ).join('');
+  // уровень нумерованного списка; custom — { fmt, text } списка с особым форматом (шаблон '%1)' → номер своего уровня)
+  const decLvl = (i, custom = null) => {
+    const fmt = (custom && custom.fmt) || FMT[i % 3];
+    let text = `%${i + 1}.`;
+    if (custom && custom.text) {
+      text = (custom.text.match(/%\d/g) || []).length > 1
+        ? `${Array.from({ length: i + 1 }, (_, k) => `%${k + 1}`).join('.')}${/\.$/.test(custom.text) ? '.' : ''}`
+        : custom.text.replace(/%\d/, `%${i + 1}`);
+    }
+    const right = !custom && i % 3 === 2;
+    return `<w:lvl w:ilvl="${i}"><w:start w:val="1"/><w:numFmt w:val="${fmt}"/><w:lvlText w:val="${esc(text)}"/><w:lvlJc w:val="${right ? 'right' : 'left'}"/>` +
+      `<w:pPr><w:ind w:left="${720 * (i + 1)}" w:hanging="${right ? 180 : 360}"/></w:pPr></w:lvl>`;
+  };
+  const decimalLvls = Array.from({ length: 9 }, (_, i) => decLvl(i)).join('');
   let nums = `<w:num w:numId="${numBase}"><w:abstractNumId w:val="${absBase}"/></w:num>`;
-  orderedNums.forEach((n, k) => {
-    nums += `<w:num w:numId="${numBase + k + 1}"><w:abstractNumId w:val="${absBase + 1}"/>` +
-      `<w:lvlOverride w:ilvl="${n.ilvl}"><w:startOverride w:val="${n.start}"/></w:lvlOverride></w:num>`;
-  });
-  const abstracts =
+  let abstracts =
     `<w:abstractNum w:abstractNumId="${absBase}"><w:multiLevelType w:val="hybridMultilevel"/>${bulletLvls}</w:abstractNum>` +
     `<w:abstractNum w:abstractNumId="${absBase + 1}"><w:multiLevelType w:val="hybridMultilevel"/>${decimalLvls}</w:abstractNum>`;
-  return { abstracts, nums };
+  orderedNums.forEach((n, k) => {
+    // список с особым форматом — своя абстрактная нумерация (уровень списка изменён)
+    let abs = absBase + 1;
+    if (n.fmt || n.text) {
+      abs = absBase + 2 + k;
+      abstracts += `<w:abstractNum w:abstractNumId="${abs}"><w:multiLevelType w:val="hybridMultilevel"/>${Array.from({ length: 9 }, (_, i) => decLvl(i, i === n.ilvl ? n : null)).join('')}</w:abstractNum>`;
+    }
+    nums += `<w:num w:numId="${numBase + k + 1}"><w:abstractNumId w:val="${abs}"/>` +
+      `<w:lvlOverride w:ilvl="${n.ilvl}"><w:startOverride w:val="${n.start}"/></w:lvlOverride></w:num>`;
+  });
+  // нумерация заголовков Пера: многоуровневый список (номер на выступе, как «1 Заголовок 1» Word)
+  let headingNumId = null;
+  if (heading) {
+    const abs = absBase + 2 + orderedNums.length;
+    headingNumId = numBase + orderedNums.length + 1;
+    const suff = heading.suff && heading.suff !== 'tab' ? `<w:suff w:val="${heading.suff}"/>` : '';
+    const lv = heading.levels.map((l, i) => `<w:lvl w:ilvl="${i}"><w:start w:val="${l.start || 1}"/><w:numFmt w:val="${l.on && l.text ? esc(l.fmt || 'decimal') : 'none'}"/>${suff}` +
+      `<w:lvlText w:val="${l.on ? esc(l.text || '') : ''}"/><w:lvlJc w:val="left"/><w:pPr><w:ind w:left="${432 + 144 * i}" w:hanging="${432 + 144 * i}"/></w:pPr></w:lvl>`).join('');
+    abstracts += `<w:abstractNum w:abstractNumId="${abs}"><w:multiLevelType w:val="multilevel"/>${lv}</w:abstractNum>`;
+    nums += `<w:num w:numId="${headingNumId}"><w:abstractNumId w:val="${abs}"/></w:num>`;
+  }
+  return { abstracts, nums, headingNumId };
 }
 
-function numberingXml(orderedNums) {
-  const { abstracts, nums } = numberingParts(orderedNums);
+// Как писать нумерацию заголовков (Exporter.headingNum) по doc.attrs.headingNumbering; hasSource — сохраняем в исходный пакет
+const HNUM = '__PERO_HNUM__';
+function headingNumMode(hn, hasSource) {
+  if (!hn) return null;
+  if (hn.off) return { off: true, viaStyle: !!(hn.source && hn.source.viaStyle) };
+  if (hn.changed || !hasSource || !hn.source) return { ours: true, numId: HNUM, viaStyle: false };
+  return { numId: hn.source.numId, viaStyle: !!hn.source.viaStyle };
+}
+
+function numberingXml(orderedNums, heading = null) {
+  const { abstracts, nums } = numberingParts(orderedNums, 0, 1, heading);
   return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <w:numbering ${NS}>
 ${abstracts}
@@ -681,9 +726,12 @@ export async function exportDocx(doc, { source } = {}) {
   if (!source) {
     const usedNotes = footnoteIds(doc);
     const notes = (da.footnotes || []).filter((n) => usedNotes.has(String(n.id)));
-    const ex = new Exporter({ sect, customStyles: customs.map((s) => s.id), styleTabs });
+    const hMode = headingNumMode(da.headingNumbering, false);
+    const ex = new Exporter({ sect, customStyles: customs.map((s) => s.id), styleTabs, headingNum: hMode });
     let body = ex.blocks(doc.content || []);
     if (!body) body = '<w:p/>';
+    const hLevels = hMode && hMode.ours ? da.headingNumbering : null;
+    if (hLevels) body = body.split(HNUM).join(String(numberingParts(ex.orderedNums, 0, 1, hLevels).headingNumId));
     const documentXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<w:document ${NS}><w:body>${body}${sectPr}</w:body></w:document>`;
     const docRels = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
@@ -711,7 +759,7 @@ ${notes.length ? `<Relationship Id="rIdPeroF" Type="${relType('footnotes')}" Tar
     zip.file('word/document.xml', documentXml);
     zip.file('word/styles.xml', stylesXml(da.fontFamily || DEFAULT_FONT, parseSize(da.fontSize) || DEFAULT_SIZE, { ...NEW_DOC_PARA, ...(da.para || {}) })
       .replace('</w:styles>', `${customs.map((s) => customStyleXml(s, 'Normal')).join('')}</w:styles>`));
-    zip.file('word/numbering.xml', numberingXml(ex.orderedNums));
+    zip.file('word/numbering.xml', numberingXml(ex.orderedNums, hLevels));
     zip.file('word/settings.xml', settingsXml(da.defaultTab, !!hf.evenOdd));
     zip.file('word/_rels/document.xml.rels', docRels);
     return zip.generateAsync({ type: 'uint8array', compression: 'DEFLATE' });
@@ -762,13 +810,17 @@ ${notes.length ? `<Relationship Id="rIdPeroF" Type="${relType('footnotes')}" Tar
   const imgBase = Math.max(0, ...Object.keys(zip.files).map((n) => +((/\/media\/pero_image(\d+)\.\w+$/.exec(n) || [])[1] || 0)),
     ...[...src.rels.matchAll(/Id="rIdPeroImg(\d+)"/g)].map((m) => +m[1]));
   const fileStyleIds = new Set([...String(src.styles || '').matchAll(/w:styleId="([^"]+)"/g)].map((m) => m[1]));
-  const ex = new Exporter({ styleIds, numBase, relTargets: src.relTargets, imgBase, sect, customStyles: customs.map((s) => s.id), styleTabs, fileStyleIds });
+  const hMode = headingNumMode(da.headingNumbering, true);
+  const ex = new Exporter({ styleIds, numBase, relTargets: src.relTargets, imgBase, sect, customStyles: customs.map((s) => s.id), styleTabs, fileStyleIds, headingNum: hMode });
   let body = ex.blocks(doc.content || []);
   if (!body) body = '<w:p/>';
+  const hLevels = hMode && hMode.ours ? da.headingNumbering : null;
+  const parts = numberingParts(ex.orderedNums, absBase, numBase, hLevels);
+  if (hLevels) body = body.split(HNUM).join(String(parts.headingNumId));
   body = stripRootNs(body + sectPr, src.rootNs);
   zip.file(src.mainPath, `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n${src.rootTag}${src.preBody}<w:body>${body}</w:body></w:document>`);
 
-  const { abstracts, nums } = numberingParts(ex.orderedNums, absBase, numBase);
+  const { abstracts, nums } = parts;
   if (src.numbering) {
     // по схеме все abstractNum идут перед num; num — перед numIdMacAtCleanup
     let x = src.numbering;
