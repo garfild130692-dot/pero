@@ -30,6 +30,7 @@ import { FormattingMarks } from './marks.js';
 import { Fields } from './fields.js';
 import { Footnotes } from './footnotes.js';
 import { Numbering } from './numbering.js';
+import { Design } from './design.js';
 
 // Как оформлены заголовки — font.js (совпадает со styles.css и стилями Heading1–6 в export.js)
 export { HEADING_FONT, HEADING_SIZES };
@@ -50,6 +51,10 @@ const PeroDocument = Document.extend({
       commentsEdited: { default: false }, // примечания менялись — при сохранении comments.xml пишется заново
       footnotes: { default: [] },      // тексты сносок: [{ id, text, changed }] (см. footnotes.js)
       headingNumbering: { default: null }, // нумерация заголовков (см. numbering.js)
+      watermark: { default: null },     // подложка (см. design.js)
+      watermarkChanged: { default: false },
+      pageColor: { default: null },     // цвет страницы '#rrggbb'
+      pageColorChanged: { default: false },
       footnotesEdited: { default: false }, // сноски менялись — при сохранении footnotes.xml пишется заново
       defaultTab: { default: DEFAULT_TAB }, // шаг позиций табуляции по умолчанию, pt (settings.xml w:defaultTabStop)
     };
@@ -62,7 +67,7 @@ export function loadDocument(editor, json) {
   editor.commands.setContent(json, { emitUpdate: false });
   const attrs = {
     fontFamily: DEFAULT_FONT, fontSize: DEFAULT_SIZE, para: NEW_DOC_PARA, sectPr: null, hf: EMPTY_HF, styles: [], defaultsModified: false,
-    comments: [], commentsEdited: false, footnotes: [], footnotesEdited: false, headingNumbering: null, defaultTab: DEFAULT_TAB,
+    comments: [], commentsEdited: false, footnotes: [], footnotesEdited: false, headingNumbering: null, watermark: null, watermarkChanged: false, pageColor: null, pageColorChanged: false, defaultTab: DEFAULT_TAB,
     ...((json && json.attrs) || {}),
   };
   const { tr } = editor.state;
@@ -277,6 +282,7 @@ export const extensions = [
   Fields,
   Footnotes,
   Numbering,
+  Design,
   PeroTable.configure({ resizable: true }),
   PeroTableRow,
   PeroTableCell,

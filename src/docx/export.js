@@ -5,7 +5,8 @@ import { DEFAULT_FONT, DEFAULT_SIZE, highlightName, normalizeColor, parseSize } 
 import { NEW_DOC_PARA, ptToTwips } from '../editor/paragraph.js';
 import { CELL_SIDES, GRID_BORDERS, TABLE_SIDES, TWIPS_PER_PX, borderToOoxml } from '../editor/table.js';
 import { EMU_PER_PX, dataUrlToBytes, extOf } from '../editor/image.js';
-import { setHfRefs, setTitlePg, writeHfPart } from '../editor/page.js';
+import { parseSectPr, setHfRefs, setTitlePg, writeHfPart } from '../editor/page.js';
+import { addWatermark, patchBackground, patchSettingsBackground, stripWatermark, watermarkBox, watermarkRunXml } from '../editor/design.js';
 import { commentsXml } from '../editor/comments.js';
 import { FOOTNOTES_TYPE, footnotesPartXml } from '../editor/footnotes.js';
 import { layoutXmlHead, layoutXmlTail } from '../editor/paraLayout.js';
@@ -717,6 +718,22 @@ export async function exportDocx(doc, { source } = {}) {
     if (own.titlePg) out = setTitlePg(out, !!hf.titlePg);
     return out;
   };
+  // Подложка изменена в Пере: во все верхние колонтитулы (свои — здесь, из файла — ниже, в исходном пакете);
+  // если верхнего колонтитула «по умолчанию» нет нигде — создаётся свой пустой с подложкой
+  const wm = da.watermarkChanged ? da.watermark : undefined;
+  let wmRun = null;
+  if (wm) {
+    const g = parseSectPr(da.sectPr || DEFAULT_SECTPR);
+    wmRun = watermarkRunXml(wm, watermarkBox(wm, (g.w - g.left - g.right) / 20));
+    const hasDefault = refs.some(([type, ids]) => type === 'default' && ids.header)
+      || (!!source && /<w:headerReference\b[^>]*w:type="default"/.test(JSON.stringify(doc.content || []) + (da.sectPr || '')));
+    if (!hasDefault) {
+      hfParts.push({ id: 'rIdPeroH', file: 'header_pero.xml', xml: writeHfPart('hdr', [], NS), type: 'header' });
+      const def = refs.find(([type]) => type === 'default');
+      if (def) def[1].header = 'rIdPeroH'; else refs.push(['default', { header: 'rIdPeroH' }]);
+    }
+  }
+  if (wm !== undefined) for (const p of hfParts) if (p.type === 'header') p.xml = wmRun ? addWatermark(p.xml, wmRun) : stripWatermark(p.xml);
   const sectPr = sect(da.sectPr || DEFAULT_SECTPR);
   const hfRels = hfParts.map((p) => `<Relationship Id="${p.id}" Type="${relType(p.type)}" Target="${p.file}"/>`).join('');
   const addHfTypes = (ct, prefix) => hfParts.reduce((acc, p) => addOverride(acc, prefix + p.file,
@@ -732,7 +749,7 @@ export async function exportDocx(doc, { source } = {}) {
     if (!body) body = '<w:p/>';
     const hLevels = hMode && hMode.ours ? da.headingNumbering : null;
     if (hLevels) body = body.split(HNUM).join(String(numberingParts(ex.orderedNums, 0, 1, hLevels).headingNumId));
-    const documentXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<w:document ${NS}><w:body>${body}${sectPr}</w:body></w:document>`;
+    const documentXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<w:document ${NS}>${patchBackground('', da.pageColor)}<w:body>${body}${sectPr}</w:body></w:document>`;
     const docRels = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
 <Relationship Id="rId1" Type="${relType('styles')}" Target="styles.xml"/>
@@ -760,7 +777,7 @@ ${notes.length ? `<Relationship Id="rIdPeroF" Type="${relType('footnotes')}" Tar
     zip.file('word/styles.xml', stylesXml(da.fontFamily || DEFAULT_FONT, parseSize(da.fontSize) || DEFAULT_SIZE, { ...NEW_DOC_PARA, ...(da.para || {}) })
       .replace('</w:styles>', `${customs.map((s) => customStyleXml(s, 'Normal')).join('')}</w:styles>`));
     zip.file('word/numbering.xml', numberingXml(ex.orderedNums, hLevels));
-    zip.file('word/settings.xml', settingsXml(da.defaultTab, !!hf.evenOdd));
+    zip.file('word/settings.xml', patchSettingsBackground(settingsXml(da.defaultTab, !!hf.evenOdd), !!da.pageColor));
     zip.file('word/_rels/document.xml.rels', docRels);
     return zip.generateAsync({ type: 'uint8array', compression: 'DEFLATE' });
   }
@@ -818,7 +835,22 @@ ${notes.length ? `<Relationship Id="rIdPeroF" Type="${relType('footnotes')}" Tar
   const parts = numberingParts(ex.orderedNums, absBase, numBase, hLevels);
   if (hLevels) body = body.split(HNUM).join(String(parts.headingNumId));
   body = stripRootNs(body + sectPr, src.rootNs);
-  zip.file(src.mainPath, `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n${src.rootTag}${src.preBody}<w:body>${body}</w:body></w:document>`);
+  // цвет страницы изменён в Пере — w:background перед телом (остальное, что было перед телом, — как в файле)
+  const preBody = da.pageColorChanged ? patchBackground(src.preBody, da.pageColor) : src.preBody;
+  zip.file(src.mainPath, `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n${src.rootTag}${preBody}<w:body>${body}</w:body></w:document>`);
+  // подложка изменена — в верхних колонтитулах из файла тоже (свои части Пера уже с ней)
+  if (wm !== undefined) {
+    for (const m of rels.matchAll(/<Relationship\b[^>]*\/>/g)) {
+      if (!/Type="[^"]*\/header"/.test(m[0]) || /Id="rIdPero/.test(m[0])) continue;
+      const t = /Target="([^"]+)"/.exec(m[0]);
+      const part = t && resolvePart(src.dir, t[1]);
+      const f = part && zip.file(part);
+      if (!f) continue;
+      const x = await f.async('string');
+      const y = wmRun ? addWatermark(x, wmRun) : stripWatermark(x);
+      if (y !== x) zip.file(part, y);
+    }
+  }
 
   const { abstracts, nums } = parts;
   if (src.numbering) {
@@ -905,6 +937,7 @@ ${notes.length ? `<Relationship Id="rIdPeroF" Type="${relType('footnotes')}" Tar
       }
     }
     if (sx && own.evenOdd) sx = setEvenAndOdd(sx, !!hf.evenOdd);
+    if (sx && da.pageColorChanged) sx = patchSettingsBackground(sx, !!da.pageColor);
     if (sx && sx !== orig) zip.file(sPath, sx);
   }
   ct = addImageTypes(ct, ex.images);

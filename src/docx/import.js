@@ -9,6 +9,7 @@ import { EMU_PER_PX, bytesToBase64, mimeOf } from '../editor/image.js';
 import { EMPTY_HF, readHfPart } from '../editor/page.js';
 import { readComments } from '../editor/comments.js';
 import { readFootnotes } from '../editor/footnotes.js';
+import { readBackground, readWatermark } from '../editor/design.js';
 import { layoutAttrs, readLayoutProps } from '../editor/paraLayout.js';
 import { applyTabLayer, readTabs } from '../editor/tabs.js';
 
@@ -886,6 +887,16 @@ export async function importDocx(data) {
     }
   }
   if (hf.header || hf.footer || hf.first || hf.even) imp.preserved.header = 1;
+  // подложка (надпись PowerPlusWaterMarkObject в верхнем колонтитуле) — по первому колонтитулу, где она есть
+  let watermark = null;
+  for (const rel of Object.values(rels)) {
+    if (watermark || !/\/header$/.test(rel.type || '')) continue;
+    const f = zip.file(rel.target.startsWith('/') ? rel.target.slice(1) : 'word/' + rel.target);
+    if (f) watermark = readWatermark(await f.async('string'));
+  }
+  // цвет страницы — w:background перед телом документа
+  const rawDoc = await zip.file('word/document.xml').async('string');
+  const pageColor = readBackground(rawDoc.slice(0, Math.max(0, rawDoc.indexOf('<w:body'))));
   // колонки текста (w:cols w:num > 1) сохраняются в sectPr, но на экране и при печати — одной колонкой
   if (sects.some((x) => +((/<w:cols\b[^>]*w:num="(\d+)"/.exec(x || '') || [])[1] || 1) > 1)) imp.preserved.columns = 1;
   // тексты примечаний (связь типа comments)
@@ -899,7 +910,7 @@ export async function importDocx(data) {
   return {
     doc: {
       type: 'doc',
-      attrs: { ...docDefaults, para: docPara, defaultTab, sectPr: imp.bodySectPr, hf, styles: Object.values(imp.usedStyles), comments: commentList, footnotes: footnoteList, ...(imp.headingNum ? { headingNumbering: imp.headingNum } : {}) },
+      attrs: { ...docDefaults, para: docPara, defaultTab, sectPr: imp.bodySectPr, hf, styles: Object.values(imp.usedStyles), comments: commentList, footnotes: footnoteList, watermark, pageColor, ...(imp.headingNum ? { headingNumbering: imp.headingNum } : {}) },
       content,
     },
     warnings: imp.warnings,

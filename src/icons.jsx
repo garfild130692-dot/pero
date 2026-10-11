@@ -8,6 +8,11 @@ const S = ({ children, size = 18 }) => (
 );
 
 export const Icon = {
+  fonts: (p) => <S {...p}><path d="M4 19 9 5l5 14M6 14h6" /><path d="M15 19l3-8 3 8M16 16h4" strokeWidth="1.5" /></S>,
+  paraSpacing: (p) => <S {...p}><path d="M10 5h10M10 9h10M10 15h10M10 19h10" /><path d="M4 4v16M2.5 6 4 4l1.5 2M2.5 18 4 20l1.5-2" strokeWidth="1.4" /></S>,
+  watermark: (p) => <S {...p}><rect x="5" y="3" width="14" height="18" rx="1" /><path d="m8 16 8-8" strokeDasharray="2 2" /></S>,
+  pageColor: (p) => <S {...p}><rect x="5" y="3" width="14" height="18" rx="1" /><path d="M5 15h14v5a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1z" fill="currentColor" opacity=".35" stroke="none" /></S>,
+  pageBorders: (p) => <S {...p}><rect x="4" y="3" width="16" height="18" rx="1" /><rect x="7" y="6" width="10" height="12" strokeDasharray="2 1.6" /></S>,
   readMode: (p) => <S {...p}><path d="M3 5c3-1 6-1 9 1v14c-3-2-6-2-9-1z" /><path d="M21 5c-3-1-6-1-9 1v14c3-2 6-2 9-1z" /></S>,
   printLayout: (p) => <S {...p}><rect x="5" y="3" width="14" height="18" rx="1" /><path d="M8 7h8M8 10h8M8 13h5" /></S>,
   draft: (p) => <S {...p}><path d="M4 5h16M4 9h16M4 13h16M4 17h10" /></S>,

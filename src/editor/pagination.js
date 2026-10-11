@@ -487,7 +487,7 @@ function measure(view) {
     deco = DecorationSet.create(view.state.doc, decos);
   }
   view.dispatch(view.state.tr.setMeta(paginationKey, {
-    key, deco, breaks: pageStarts(breaks), total, chrome: { firstHeader: chrome.firstHeader, lastFooter: chrome.lastFooter },
+    key, deco, breaks: pageStarts(breaks), total, sects: pages.map((p) => p.sect), chrome: { firstHeader: chrome.firstHeader, lastFooter: chrome.lastFooter },
   }).setMeta('addToHistory', false));
   if (scroller && scroller.scrollTop !== scrollTop) scroller.scrollTop = scrollTop;
   placeBands(view, frame, breaks.map((b) => ({ from: b.from, to: b.sect ?? b.from })), chrome.hfOf, total);
@@ -806,6 +806,12 @@ export function pageInfo(state) {
   if (!p) return { page: 1, total: 1 };
   const at = state.selection.from;
   return { page: 1 + p.breaks.filter((b) => b <= at).length, total: p.total };
+}
+
+// Разделы листов по порядку (номер раздела каждого листа) — для рамок и подложки на экране
+export function pageSects(state) {
+  const p = paginationKey.getState(state);
+  return (p && p.sects) || [0];
 }
 
 // Колонтитулы первого листа (верхний) и последнего (нижний) — их рисует App (PageChrome), остальные — слой полос

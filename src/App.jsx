@@ -16,6 +16,7 @@ import { NavPane, ZoomDialog, clampZoom, fitZoom, loadViewPrefs, saveViewPrefs }
 import { setDraft } from './editor/pagination.js';
 import { Icon } from './icons.jsx';
 import VRuler from './VRuler.jsx';
+import { PageBordersDialog, PageDecor, PrintDecor, WatermarkDialog } from './DesignControls.jsx';
 import { ListFormatDialog, MultilevelDialog } from './NumberingDialogs.jsx';
 import { cssFontStack } from './editor/font.js';
 import { NEW_DOC_PARA } from './editor/paragraph.js';
@@ -432,7 +433,7 @@ export default function App({ initialFile, onOpenOther, onNewSheet, autosaveSec 
     editor,
     selector: ({ editor: e }) => (e ? {
       family: e.state.doc.attrs.fontFamily, size: e.state.doc.attrs.fontSize, para: e.state.doc.attrs.para,
-      sectPr: e.state.doc.attrs.sectPr, hf: e.state.doc.attrs.hf, total: pageInfo(e.state).total, styles: e.state.doc.attrs.styles, headingNumbering: e.state.doc.attrs.headingNumbering, chrome: pageChrome(e.state), firstSect: sectionList(e.state.doc)[0], sects: sectionList(e.state.doc), sectCss: sectionPrintCss(e.state.doc),
+      sectPr: e.state.doc.attrs.sectPr, hf: e.state.doc.attrs.hf, total: pageInfo(e.state).total, styles: e.state.doc.attrs.styles, headingNumbering: e.state.doc.attrs.headingNumbering, pageColor: e.state.doc.attrs.pageColor, chrome: pageChrome(e.state), firstSect: sectionList(e.state.doc)[0], sects: sectionList(e.state.doc), sectCss: sectionPrintCss(e.state.doc),
     } : null),
   });
 
@@ -498,9 +499,11 @@ export default function App({ initialFile, onOpenOther, onNewSheet, autosaveSec 
         {findMode && <FindBar editor={editor} mode={findMode} setMode={setFindMode} />}
         {viewPrefs.ruler && viewMode !== 'read' && <Ruler editor={editor} zoom={zoom} />}
         <PageScaler scale={zoom / 100}>
-          <div className={`page${frame.mixed ? ' pero-multi' : ''}${viewMode === 'draft' ? ' draft' : ''}`} style={{ ...pageVars(docFont), ...pageBox(pageGeo) }}>
+          <div className={`page${frame.mixed ? ' pero-multi' : ''}${viewMode === 'draft' ? ' draft' : ''}`} style={{ ...pageVars(docFont), ...pageBox(pageGeo), ...(docFont && docFont.pageColor ? { background: docFont.pageColor, '--page-bg': docFont.pageColor } : {}) }}>
             {viewMode !== 'draft' && <PageChrome geo={chromeGeo.head} footGeo={chromeGeo.foot} hf={(docFont && docFont.hf) || EMPTY_HF} chrome={docFont && docFont.chrome} total={(docFont && docFont.total) || 1} />}
             {viewPrefs.ruler && viewMode === 'print' && <VRuler editor={editor} />}
+            {viewMode !== 'draft' && <PageDecor editor={editor} />}
+            <PrintDecor editor={editor} />
             <EditorContent editor={editor} />
             <PrintNotes editor={editor} />
           </div>
@@ -520,6 +523,8 @@ export default function App({ initialFile, onOpenOther, onNewSheet, autosaveSec 
       {modal === 'date' && <DateDialog editor={editor} onClose={() => setModal(null)} />}
       {modal === 'multilevel' && <MultilevelDialog editor={editor} onClose={() => setModal(null)} />}
       {modal === 'listFormat' && <ListFormatDialog editor={editor} onClose={() => setModal(null)} />}
+      {modal === 'watermark' && <WatermarkDialog editor={editor} onClose={() => setModal(null)} />}
+      {modal === 'pageBorders' && <PageBordersDialog editor={editor} onClose={() => setModal(null)} />}
       {modal === 'zoom' && <ZoomDialog zoom={zoom} onApply={setZoom} onFit={fitTo} onClose={() => setModal(null)} />}
       {modal === 'margins' && <MarginsDialog editor={editor} onClose={() => setModal(null)} />}
       {modal === 'hf' && <HeaderFooterDialog editor={editor} onClose={() => setModal(null)} />}

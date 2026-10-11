@@ -22,6 +22,7 @@ import { marksKey } from './editor/marks.js';
 import { SymbolButton } from './SymbolDialog.jsx';
 import { MultilevelButton } from './NumberingDialogs.jsx';
 import { ViewPanel } from './ViewControls.jsx';
+import { DesignPanel } from './DesignControls.jsx';
 import { BordersButton, RowHeightField, ShadingButton, TableIcons, tableState } from './TableControls.jsx';
 
 function Btn({ icon, label, title, onClick, onDoubleClick, active, disabled, big, children }) {
@@ -315,6 +316,7 @@ export default function Ribbon({ editor, file, view, onLink, onFont, onSymbol, o
     ['file', 'Файл'],
     ['home', 'Главная'],
     ['insert', 'Вставка'],
+    ['design', 'Конструктор'],
     ['layout', 'Макет'],
     ['refs', 'Ссылки'],
     ['review', 'Рецензирование'],
@@ -536,6 +538,8 @@ export default function Ribbon({ editor, file, view, onLink, onFont, onSymbol, o
         {activeTab === 'picture' && s.image && <PicturePanel editor={editor} image={s.image} Group={Group} />}
 
         {activeTab === 'layout' && <LayoutPanel editor={editor} Group={Group} onMargins={onMargins} onHf={onHf} />}
+
+        {activeTab === 'design' && <DesignPanel Group={Group} Btn={Btn} editor={editor} onDialog={onRefDialog} />}
 
         {activeTab === 'view' && <ViewPanel Group={Group} Btn={Btn} editor={editor} view={view} showMarks={s.showMarks} />}
 
