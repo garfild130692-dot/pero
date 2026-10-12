@@ -5,7 +5,7 @@ import { DOMParser, XMLSerializer } from '@xmldom/xmldom';
 import { addr, colIndex, key, MAX_COLS, parseRange, rangeName, unkey } from './address.js';
 import { canonical, fileFormula, isErr, offsetFormula, shiftFormula } from './formula.js';
 import { BUILTIN_FMT } from './format.js';
-import { maxLevel, newSheet, recalc, DEFAULT_COL_W, DEFAULT_ROW_H } from './model.js';
+import { maxLevel, newSheet, recalc, recalcOpen, RECOMPUTE, DEFAULT_COL_W, DEFAULT_ROW_H } from './model.js';
 import { parsePrintArea, parsePrintTitles, printAreaText, printTitlesText } from './pageSetup.js';
 import { filterColumnXml, readFilterColumn } from './filter.js';
 import { cfSignature, cfXml, dxfXml, readCf, readDxf } from './cf.js';
@@ -184,11 +184,13 @@ async function readBook(zip) {
 }
 
 // Ячейки листа: on.cell(r, c, cell, el, shared) — для каждой непустой <c>; on.row(r, el) — для каждой <row>
-// Ячейка из файла: скрытое свойство с исходным адресом (r * 16384 + c). Неизменённая ячейка — тот же объект на том же
-// месте: при сохранении поверх исходного пакета пишется исходной разметкой без разбора и сравнения (копия {...cell}
-// свойство не переносит — изменённая или перенесённая ячейка пишется заново). Общие формулы и формулы массива не
-// метятся: их разметка зависит от соседей.
-const SRC = Symbol('pero-src');
+// Ячейки из файла: sheet.src.cells — карта ячеек, как её прочитал импорт (объекты ячеек модель не меняет: правка —
+// новый объект). Ячейка, которая и сейчас тот же объект по тому же ключу, при сохранении поверх исходного пакета
+// пишется исходной разметкой без разбора и сравнения. Общие формулы и формулы массива (src.noRaw) — заново: их
+// разметка зависит от соседей.
+// Формула из файла → каноническая запись. Записанная Excel (английские имена, «,», без _xlfn. и строчных латинских
+// букв) уже каноническая — без разбора на лексемы (проверено на 80 тыс. формул эталонных книг: совпадает)
+const canonFile = (t) => (/[a-z_;{]/.test(t) || t.includes('ANCHORARRAY') ? canonical(t) : t);
 
 // Строки листа: из сканера (parseSheet, sheetScan.js) или из DOM — в одном виде { el, cells: [{ el, v, f, is }] }
 function sheetRows(root) {
@@ -243,9 +245,9 @@ function readSheetData(root, ctx, on) {
         if (ft === 'shared') {
           isShared = true;
           const si = fEl.getAttribute('si');
-          if (text) { shared[si] = { f: text, r, c: ci }; cell.f = canonical(text); }
-          else if (shared[si]) cell.f = offsetFormula(canonical(shared[si].f), r - shared[si].r, ci - shared[si].c);
-        } else if (text) cell.f = canonical(text);
+          if (text) { shared[si] = { f: canonFile(text), r, c: ci }; cell.f = shared[si].f; }
+          else if (shared[si]) cell.f = offsetFormula(shared[si].f, r - shared[si].r, ci - shared[si].c);
+        } else if (text) cell.f = canonFile(text);
         if (cell.f != null) {
           if (ft === 'array') {
             isArr = true;
@@ -462,7 +464,7 @@ export async function importXlsx(data, { recalc: doRecalc = true } = {}) {
     if (!info.worksheet) { keep('листы диаграмм'); continue; }
     const doc = parseSheet(await book.text(info.target)); // <sheetData> — сканером (sheetScan.js)
     if (!doc) continue;
-    sheet.src = { part: info.target, rid: info.rid, name: info.name };
+    sheet.src = { part: info.target, rid: info.rid, name: info.name, cells: sheet.cells, noRaw: new Set() };
     const root = doc.documentElement;
     for (const col of kids(kid(root, 'cols'), 'col')) {
       const min = +col.getAttribute('min') - 1;
@@ -483,7 +485,8 @@ export async function importXlsx(data, { recalc: doRecalc = true } = {}) {
         if (li) sheet.rowInfo[ri] = li;
       },
       cell: (r, c, cell, el, shared, arr) => {
-        if (!shared && !arr) Object.defineProperty(cell, SRC, { value: r * 16384 + c });
+        if (shared || arr) sheet.src.noRaw.add(key(r, c));
+        if (arr && cell.f != null) Object.defineProperty(cell, RECOMPUTE, { value: true }); // массив вычислить при открытии
         sheet.cells.set(key(r, c), cell);
       },
     });
@@ -532,7 +535,7 @@ export async function importXlsx(data, { recalc: doRecalc = true } = {}) {
   const manual = !!calcPr && calcPr.getAttribute('calcMode') === 'manual';
   const base = { sheets, active, ...(names.length ? { names } : {}), ...(manual ? { calcMode: 'manual' } : {}) };
   // при открытии — полный пересчёт (летучие функции, устаревший кеш), в том числе в режиме «вручную»
-  const wb = doRecalc ? recalc(base, { full: true }) : base;
+  const wb = doRecalc ? recalcOpen(base) : base;
   for (const sh of wb.sheets) if (sh.src) pristine.add(sh);
   if (wb.names) pristine.add(wb.names);
   return { wb, warnings: {}, kept };
@@ -850,10 +853,12 @@ function patchSheetXml(xml, sheet, active, root, book, xfOf, str, cm) {
   }
   const byRef = new Map();
   for (const raw of rawList) { const m = /\br="([A-Z]+\d+)"/.exec(raw.slice(0, raw.indexOf('>'))); if (m) byRef.set(m[1], raw); }
+  const orig = sheet.src && sheet.src.cells && sheet.src.noRaw ? sheet.src.cells : null;
   const cellOf = (r, c, cell) => {
     const fx = formulaFx(sheet, key(r, c), cell, cm);
-    // неизменённая ячейка из файла на своём месте (SRC) — исходной разметкой (форматированный текст и т. п.)
-    if (!fx && cell[SRC] === r * 16384 + c) { const raw = byRef.get(addr(r, c)); if (raw) return raw; }
+    // неизменённая ячейка из файла на своём месте — исходной разметкой (форматированный текст и т. п.)
+    const k = key(r, c);
+    if (!fx && orig && orig.get(k) === cell && !sheet.src.noRaw.has(k)) { const raw = byRef.get(addr(r, c)); if (raw) return raw; }
     return cellXml(cell, addr(r, c), xfOf, str, fx);
   };
   let out = xml;

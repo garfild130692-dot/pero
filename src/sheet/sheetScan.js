@@ -31,7 +31,7 @@ const F = new RegExp(`<${P}f\\b([^>]*?)(?:/>|>([\\s\\S]*?)</${P}f>)`);
 const IS = new RegExp(`<${P}is\\b[^>]*?(?:/>|>([\\s\\S]*?)</${P}is>)`);
 const T = new RegExp(`<${P}t\\b[^>]*?(?:/>|>([\\s\\S]*?)</${P}t>)`, 'g');
 const RUN = new RegExp(`<${P}r\\b[\\s\\S]*?</${P}r>`, 'g');
-const textOf = (s) => unescapeXml(s.replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, (a, x) => x.replace(/&/g, '&amp;').replace(/</g, '&lt;')).replace(/<[^>]*>/g, ''));
+const textOf = (s) => (s.indexOf('<') < 0 ? unescapeXml(s) : unescapeXml(s.replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, (a, x) => x.replace(/&/g, '&amp;').replace(/</g, '&lt;')).replace(/<[^>]*>/g, '')));
 
 // Содержимое <sheetData> → [{ el, cells: [{ el, v, f: { el, text } | null, is }] }]
 export function scanSheetData(inner) {

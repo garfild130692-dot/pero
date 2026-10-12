@@ -22,7 +22,7 @@ export function colIndex(name) {
 
 export const addr = (r, c) => `${colName(c)}${r + 1}`;
 export const key = (r, c) => `${r},${c}`;
-export const unkey = (k) => k.split(',').map(Number);
+export const unkey = (k) => { const i = k.indexOf(','); return [+k.slice(0, i), +k.slice(i + 1)]; };
 
 // "A1", "$B$2" → { r, c, absR, absC } или null
 export function parseRef(s) {

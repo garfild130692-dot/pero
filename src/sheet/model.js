@@ -12,7 +12,7 @@
 //          cse — диапазон формулы массива Ctrl+Shift+Enter из файла }
 // Лист после пересчёта: spill — Map(ячейка → значение «разлива»), spillAt — Map(якорь → диапазон), spillBlocked — Set якорей с #ПЕРЕНОС!
 // Стиль: { bold, italic, underline, strike, color, fill, fontSize, fontFamily, align, valign, wrap, numFmt }
-import { key, unkey } from './address.js';
+import { colIndex, key, unkey } from './address.js';
 import { ERR, err, fromUser, localize, evaluate, isErr, offsetFormula, parse, rewriteRefs, shiftFormula } from './formula.js';
 import { parseInput } from './format.js';
 import { extendLine } from './fill.js';
@@ -96,7 +96,11 @@ const cellId = (sheetName, k) => `${String(sheetName).toLowerCase()}!${k}`;
 // Летучие функции (как в Excel): пересчитываются при любом пересчёте
 export const VOLATILE = new Set(['NOW', 'TODAY', 'RAND', 'RANDBETWEEN', 'RANDARRAY', 'OFFSET', 'INDIRECT', 'CELL', 'INFO']);
 const volCache = new Map();
+// в тексте формулы нет ни одного имени летучей функции перед «(» — точно не летучая (без разбора: на 400 тыс. формул
+// кеш AST вытесняется, и проверка разбирала каждую формулу заново)
+const MAYBE_VOLATILE = /(?:^|[^\w.])(?:NOW|TODAY|RAND|RANDBETWEEN|RANDARRAY|OFFSET|INDIRECT|CELL|INFO)\s*\(/i;
 function isVolatile(f) {
+  if (!MAYBE_VOLATILE.test(f)) return false;
   let v = volCache.get(f);
   if (v === undefined) {
     const walk = (n) => {
@@ -278,6 +282,109 @@ function cycleMembers(g, wb, starts) {
   return members;
 }
 
+// Граф зависимостей без вычисления — по ссылкам в формулах. Это надмножество графа, который записывает вычисление
+// (обе ветки ЕСЛИ, весь ВПР-диапазон и т. п.), поэтому частичный пересчёт по нему верен, просто иногда считает лишнее;
+// ДВССЫЛ/СМЕЩ и другие летучие пересчитываются всегда. Имена книги разворачиваются в свои ссылки (циклы имён — стоп).
+function staticGraph(wb) {
+  const lcNames = wb.sheets.map((s) => s.name.toLowerCase());
+  const realName = new Map(wb.sheets.map((s) => [s.name.toLowerCase(), s.name]));
+  const between = (a, b) => {
+    const i = lcNames.indexOf(String(a).toLowerCase()); const j = lcNames.indexOf(String(b).toLowerCase());
+    return i < 0 || j < 0 ? [] : lcNames.slice(Math.min(i, j), Math.max(i, j) + 1);
+  };
+  const nameDef = (n, sheetLc) => {
+    const lc = String(n).toLowerCase(); const list = wb.names || [];
+    return list.find((x) => x.name.toLowerCase() === lc && x.sheet && x.sheet.toLowerCase() === sheetLc) || list.find((x) => x.name.toLowerCase() === lc && !x.sheet);
+  };
+  // зависимости формулы списком: ячейки [лист, r, c] и прямоугольники [листы, r1, c1, r2, c2] (имена развёрнуты)
+  const depsOf = (f, sheetName) => {
+    const own = sheetName.toLowerCase();
+    const out = [];
+    const busy = new Set();
+    const walk = (node, sh) => {
+      if (!node || typeof node !== 'object') return;
+      if (Array.isArray(node)) { for (const x of node) walk(x, sh); return; }
+      switch (node.t) {
+        case 'ref': case 'spill': out.push(['c', realName.get(String(node.sheet || sh).toLowerCase()) || node.sheet || sh, node.r, node.c]); return;
+        case 'range': out.push(['r', node.sheet2 ? between(node.sheet, node.sheet2) : [String(node.sheet || sh).toLowerCase()], node.r1, node.c1, node.r2, node.c2]); return;
+        case 'name': {
+          const def = nameDef(node.v, own);
+          if (!def) return;
+          const bk = `${def.sheet || ''}!${def.name.toLowerCase()}`;
+          if (busy.has(bk)) return;
+          busy.add(bk);
+          walk(astOf(def.text), sh);
+          return;
+        }
+        case 'array': case 'num': case 'str': case 'bool': case 'err': case 'empty': return;
+        default:
+          for (const v of Object.values(node)) if (v && typeof v === 'object') walk(v, sh);
+      }
+    };
+    walk(astOf(f), sheetName);
+    return out;
+  };
+  // Формулы, протянутые по столбцу, отличаются только сдвигом относительных ссылок: шаблон — текст, где ссылки
+  // заменены сдвигами от своей ячейки (абсолютные части — как есть). Разбираются только первая формула шаблона и
+  // она же, сдвинутая на (1, 1) (offsetFormula): что сдвинулось — относительное. Остальным — сдвиг без разбора.
+  const REF = /('(?:[^']|'')*'|"(?:[^"]|"")*")|(?<![\w.$])(\$?)([A-Za-z]{1,3})(\$?)(\d{1,7})(?![\w(])/g;
+  const templateOf = (f, r0, c0) => f.replace(REF, (all, quoted, ac, col, ar, row) => (quoted ? all
+    : `\u0001${ac ? `$${col.toUpperCase()}` : colIndex(col) - c0}\u0002${ar ? `$${row}` : +row - 1 - r0}\u0003`));
+  const templates = new Map();
+  const toFrame = (deps, dr, dc, rel) => {
+    const fr = { cells: new Set(), rects: [] };
+    deps.forEach((d, i) => {
+      const m = rel ? rel[i] : null;
+      const sh = (j) => (m && m[j] === 'r' ? dr : m && m[j] === 'c' ? dc : 0);
+      if (d[0] === 'c') fr.cells.add(cellId(d[1], key(d[2] + sh(2), d[3] + sh(3))));
+      else for (const s of d[1]) fr.rects.push({ s, r1: d[2] + sh(2), c1: d[3] + sh(3), r2: d[4] + sh(4), c2: d[5] + sh(5) });
+    });
+    return fr;
+  };
+  const updates = new Map();
+  for (const sheet of wb.sheets) {
+    for (const [k, cell] of sheet.cells) {
+      if (cell.f == null) continue;
+      const [r, c] = unkey(k);
+      const tk = `${sheet.name}\u0004${templateOf(cell.f, r, c)}`;
+      let tp = templates.get(tk);
+      if (!tp) {
+        // первая формула шаблона; относительность компонентов — по ней же, сдвинутой на (1, 1)
+        const deps = depsOf(cell.f, sheet.name);
+        let rel = null;
+        try {
+          const moved = depsOf(offsetFormula(cell.f, 1, 1), sheet.name);
+          if (moved.length === deps.length && moved.every((d, i) => d[0] === deps[i][0] && d.length === deps[i].length)) {
+            rel = deps.map((d, i) => d.map((v, j) => (j < 2 ? null : moved[i][j] === v + 1 ? (j % 2 === 0 ? 'r' : 'c') : moved[i][j] === v ? null : 'x')));
+            if (rel.some((m) => m.includes('x'))) rel = null;
+          }
+        } catch { rel = null; }
+        tp = { r, c, deps, rel };
+        templates.set(tk, tp);
+      }
+      // нет надёжной относительности (край листа, #ССЫЛКА!) — эта формула разбирается сама
+      const fr = tp.r === r && tp.c === c ? toFrame(tp.deps, 0, 0, null)
+        : tp.rel ? toFrame(tp.deps, r - tp.r, c - tp.c, tp.rel) : toFrame(depsOf(cell.f, sheet.name), 0, 0, null);
+      updates.set(cellId(sheet.name, k), fr);
+    }
+  }
+  const volOf = (id) => { const bang = id.lastIndexOf('!'); const sh = wb.sheets[lcNames.indexOf(id.slice(0, bang))]; const c = sh && sh.cells.get(id.slice(bang + 1)); return !!(c && c.f != null && isVolatile(c.f)); };
+  return updateGraph(null, updates, wb.sheets, wb.names, volOf);
+}
+// Пересчёт при открытии файла: граф — по ссылкам формул (staticGraph), считаются только формулы без сохранённого
+// значения, летучие и зависящие от них — как Excel, который при открытии берёт значения из файла. Книга без значений
+// (их не записала программа, создавшая файл) — затронуто больше половины формул — полный пересчёт, как раньше.
+// Формулы массива из файла (у якоря в файле только левое верхнее значение — массив надо вычислить) импорт метит
+// скрытым свойством RECOMPUTE. Режим «вручную» — полный пересчёт: значения в такой книге могли устареть.
+export const RECOMPUTE = Symbol('pero-recompute');
+export function recalcOpen(wb) {
+  if (wb.calcMode === 'manual') return recalc(wb, { full: true });
+  graphs.set(wb.sheets, staticGraph(wb));
+  const extra = [];
+  for (const sh of wb.sheets) for (const [k, c] of sh.cells) if (c[RECOMPUTE]) extra.push(cellId(sh.name, k));
+  return recalc(wb, { extra });
+}
+
 // Сведения о последнем пересчёте (для тестов): converged — раскладка «разлива» сошлась без принудительных #ЦИКЛ!
 export const recalcInfo = { converged: true, partial: false };
 
@@ -300,7 +407,7 @@ export function recalc(wb, opts = {}) {
     const fresh = [];
     // и ячейки циклов (#ЦИКЛ!): цикл мог разорваться не через их собственные ссылки (например, «разлив» заблокирован)
     for (const sh of wb.sheets) for (const k of metaOf(sh.cells).fresh) fresh.push(cellId(sh.name, k));
-    todo = dependents(prevEntry, new Set([...changed, ...fresh]), prevEntry.vol, Math.max(200, formulaCount / 2));
+    todo = dependents(prevEntry, new Set([...changed, ...fresh, ...(opts.extra || [])]), prevEntry.vol, Math.max(200, formulaCount / 2));
     if (!todo) changed = null; // затронуто почти всё — проще пересчитать целиком
   }
   // лист по имени — словарём (обращений к ячейкам много)

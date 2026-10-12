@@ -88,6 +88,35 @@ describe('пересчёт по графу зависимостей', () => {
     }
   });
 
+  it('открытие файла: граф по ссылкам формул (без пересчёта), дальше правки — как при полном пересчёте', async () => {
+    const { exportXlsx, importXlsx } = await import('../src/sheet/xlsx.js');
+    for (let seed = 1; seed <= 6; seed++) {
+      const rnd = rng(500 + seed);
+      const pick = (a) => a[Math.floor(rnd() * a.length)];
+      const cell = () => `${pick('ABCDE')}${1 + Math.floor(rnd() * 8)}`;
+      const formulas = [() => `=${cell()}*2+${cell()}`, () => `=СУММ(A1:${pick('ABCDE')}8)`, () => `=СУММ(${pick('ABCDE')}:${pick('ABCDE')})`,
+        () => `=ВПР(${cell()};A1:C8;2;ЛОЖЬ)`, () => `=ЕСЛИ(${cell()}>4;${cell()};${cell()})`, () => `=ПОСЛЕД(${1 + Math.floor(rnd() * 3)})`,
+        () => `=Ставка*${cell()}`, () => `=СУММ(Лист1:Лист2!${cell()})`, () => `=LET(x;${cell()};x+1)`, () => `=СУММ(${cell()}#)`,
+        () => `=ИНДЕКС(A1:E8;${1 + Math.floor(rnd() * 8)};2)`, () => `=Лист2!${cell()}-${cell()}`];
+      let wb = m.setNames(m.addSheet(newWorkbook()), [{ name: 'Ставка', text: 'Лист2!$B$2', sheet: null }]);
+      for (let i = 0; i < 70; i++) {
+        const ref = cell(); const si = rnd() < 0.8 ? 0 : 1;
+        wb = setInput(wb, si, +ref.slice(1) - 1, ref.charCodeAt(0) - 65, rnd() < 0.5 ? String(Math.floor(rnd() * 10)) : pick(formulas)());
+      }
+      wb = (await importXlsx(await exportXlsx(wb))).wb;
+      const opened = recalc(wb, { full: true });
+      if (m.recalcInfo.converged) expect(snapshot(wb), `seed ${seed}: открытие`).toBe(snapshot(opened));
+      for (let step = 0; step < 30; step++) {
+        const ref = cell(); const si = rnd() < 0.8 ? 0 : 1;
+        wb = setInput(wb, si, +ref.slice(1) - 1, ref.charCodeAt(0) - 65, rnd() < 0.6 ? String(Math.floor(rnd() * 10)) : pick(formulas)());
+        const stable = m.recalcInfo.converged;
+        const full = recalc(wb, { full: true });
+        if (!stable || !m.recalcInfo.converged) continue;
+        expect(snapshot(wb), `seed ${seed}, шаг ${step}`).toBe(snapshot(full));
+      }
+    }
+  });
+
   it('считаются только затронутые формулы', () => {
     let wb = newWorkbook();
     for (let i = 0; i < 300; i++) { wb = setInput(wb, 0, i, 0, String(i)); }
