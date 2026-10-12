@@ -3,6 +3,7 @@
 import { readPicFormat } from '../editor/picFormat.js';
 import { readAnchor } from '../editor/anchor.js';
 import { themeColorsFromXml } from '../editor/shapes.js';
+import { zipBytes } from './zipBytes.js';
 import { parseCols, wrapColumnSections } from '../editor/columns.js';
 import JSZip from 'jszip';
 import { DOMParser, XMLSerializer } from '@xmldom/xmldom';
@@ -888,12 +889,13 @@ export async function importDocx(data) {
   const dts = settings ? +wAttr(child(settings.documentElement, 'defaultTabStop'), 'val') : NaN;
   const defaultTab = dts > 0 ? dts / 20 : 36;
   const media = {};
-  for (const [rid, rel] of Object.entries(rels)) {
-    if (!/\/image$/.test(rel.type || '') || !rel.target || /^[a-z]+:/i.test(rel.target)) continue; // внешние ссылки — нет
+  // картинки читаются параллельно (большие сжатые — встроенной распаковкой, см. zipBytes.js)
+  await Promise.all(Object.entries(rels).map(async ([rid, rel]) => {
+    if (!/\/image$/.test(rel.type || '') || !rel.target || /^[a-z]+:/i.test(rel.target)) return; // внешние ссылки — нет
     const target = rel.target.startsWith('/') ? rel.target.slice(1) : 'word/' + rel.target.replace(/^\.\//, '');
     const f = zip.file(target);
-    if (f) media[rid] = { src: `data:${mimeOf(target)};base64,${bytesToBase64(await f.async('uint8array'))}`, target };
-  }
+    if (f) media[rid] = { src: `data:${mimeOf(target)};base64,${bytesToBase64(await zipBytes(f))}`, target };
+  }));
   const imp = new Importer({
     media,
     styles,
