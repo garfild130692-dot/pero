@@ -261,7 +261,20 @@ export const TrackChanges = Extension.create({
   },
 });
 
+// Число правок — по блокам верхнего уровня с кешем по узлу (правка не переходит границу блока): строка состояния и
+// лента спрашивают это на каждое нажатие, а обход всего текста 200+ страниц — десятки миллисекунд
+const revCache = new WeakMap();
+function revisionCount(doc) {
+  let n = 0;
+  doc.forEach((block) => {
+    let c = revCache.get(block);
+    if (c == null) { c = allRevisions(block).length; revCache.set(block, c); }
+    n += c;
+  });
+  return n;
+}
+
 export const trackInfo = (state) => {
   const s = trackKey.getState(state);
-  return { enabled: !!(s && s.enabled), count: allRevisions(state.doc).length };
+  return { enabled: !!(s && s.enabled), count: revisionCount(state.doc) };
 };

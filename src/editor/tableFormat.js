@@ -147,9 +147,19 @@ const OPPOSITE = { top: 'bottom', bottom: 'top', left: 'right', right: 'left' };
 // Края таблицы для каждой ячейки (с учётом объединений): data-tb-edge="t l b r" — по нему ячейка берёт внешнюю
 // или внутреннюю границу. Декорации, а не правка DOM: ProseMirror не перечитывает ячейки из-за чужих атрибутов.
 const edgesKey = new PluginKey('tableEdges');
+// Таблицы документа по порядку (внутрь абзацев не заходим — на 200+ страницах обход всего текста заметен)
+function tablesOf(doc) {
+  const out = [];
+  doc.descendants((node) => {
+    if (node.type.name === 'table') out.push(node);
+    return !node.isTextblock;
+  });
+  return out;
+}
 function edgeDecorations(doc) {
   const decos = [];
   doc.descendants((node, pos) => {
+    if (node.isTextblock) return false;
     if (node.type.name !== 'table') return true;
     const map = TableMap.get(node);
     const seen = new Set();
@@ -171,16 +181,23 @@ function edgeDecorations(doc) {
   });
   return DecorationSet.create(doc, decos);
 }
+const edgesState = (doc) => ({ deco: edgeDecorations(doc), tables: tablesOf(doc) });
 
 export const TableFormat = Extension.create({
   addProseMirrorPlugins() {
     return [new Plugin({
       key: edgesKey,
       state: {
-        init: (_c, state) => edgeDecorations(state.doc),
-        apply: (tr, old) => (tr.docChanged ? edgeDecorations(tr.doc) : old),
+        init: (_c, state) => edgesState(state.doc),
+        apply: (tr, old) => {
+          if (!tr.docChanged) return old;
+          // таблицы те же (правка вне таблиц) — края прежние, декорации только сдвигаются
+          const tables = tablesOf(tr.doc);
+          if (tables.length === old.tables.length && tables.every((t, i) => t === old.tables[i])) return { deco: old.deco.map(tr.mapping, tr.doc), tables };
+          return edgesState(tr.doc);
+        },
       },
-      props: { decorations: (state) => edgesKey.getState(state) },
+      props: { decorations: (state) => edgesKey.getState(state).deco },
     })];
   },
 

@@ -70,6 +70,56 @@ const out = await send(`(async () => { try {
     }
     r[name] = { sync: med(sync), measure: med(meas), total: med(total) };
   }
+  // набор текста подряд (~8 знаков в секунду, как быстрый набор): задержка каждого нажатия — насколько позже
+  // запланированного момента главный поток смог его обработать (занят разбиением и т. п.) + время самой транзакции
+  for (const [name, frac] of [['burstMiddle', 0.5], ['burstStart', 0.001]]) {
+    const pos = textPos(frac);
+    const lags = [];
+    const t0 = performance.now() + 50;
+    await new Promise((done) => {
+      let i = 0;
+      const step = () => {
+        const planned = t0 + i * 120;
+        const late = performance.now() - planned;
+        const a = performance.now();
+        const text = i % 6 === 5 ? ' ' : 'ж';
+        view.dispatch(view.state.tr.insertText(text, pos + i));
+        lags.push(late + performance.now() - a);
+        i++;
+        if (i >= 40) { done(); return; }
+        setTimeout(step, Math.max(0, t0 + i * 120 - performance.now()));
+      };
+      setTimeout(step, 50);
+    });
+    await settle();
+    const sorted = lags.slice().sort((x, y) => x - y);
+    r[name] = { mean: lags.reduce((x, y) => x + y, 0) / lags.length, p90: sorted[Math.floor(sorted.length * 0.9)], max: sorted[sorted.length - 1] };
+  }
+  // согласованность: после случайных правок (быстрый путь и обычные замеры) полный замер даёт то же разбиение
+  {
+    let seed = 7; const rnd = (n) => { seed = (seed * 1103515245 + 12345) % 2147483648; return seed % n; };
+    const key = () => pagin().key;
+    let bad = 0; let runs = 0;
+    for (let round = 0; round < 6; round++) {
+      for (let s = 0; s < 12; s++) {
+        const pos = textPos(rnd(1000) / 1000);
+        const op = rnd(10);
+        const tr = view.state.tr;
+        if (op < 6) tr.insertText(op < 5 ? 'жжж ' : 'з', pos);
+        else if (op < 8) tr.delete(pos, Math.min(pos + 3, view.state.doc.resolve(pos).end()));
+        else if (op === 8) tr.split(pos);
+        else { const $p = view.state.doc.resolve(pos); if ($p.depth === 1 && $p.index(0) > 0) tr.join($p.before(1)); }
+        view.dispatch(tr);
+        await sleep(60 + rnd(120));
+      }
+      await settle();
+      const a = key();
+      const p = paginated(); view.dom.dispatchEvent(new Event('pero-remeasure')); await guard(p, 'полный замер'); await settle();
+      runs++;
+      if (key() !== a) { bad++; const b = key(); if (!r.diff) { if (a == null || b == null) r.diff = 'ключ ' + (a == null ? 'до: null' : 'после: null'); else { let i = 0; while (a[i] === b[i]) i++; r.diff = a.slice(Math.max(0, i - 60), i + 60) + ' ≠ ' + b.slice(Math.max(0, i - 60), i + 60); } } }
+    }
+    r.consistency = runs - bad + ' из ' + runs;
+  }
   t = performance.now();
   const saved = await exportDocx(view.state.doc.toJSON(), { source: bytes });
   r.export = performance.now() - t;
@@ -84,4 +134,7 @@ if (r.error) { console.log('ошибка в окне:', r.error); process.exit(1
 console.log(`${file}: ${r.pages} стр., ${r.blocks} блоков верхнего уровня; эталонная нагрузка ${r.cpu} мс`);
 console.log(`открытие: разбор ${r.import} мс, загрузка в редактор ${r.load} мс, первое разбиение готово через ${r.firstPaginate} мс (замер ${r.firstMeasure} мс), всё утихло через ${r.settled} мс`);
 for (const k of ['typeStart', 'typeMiddle', 'typeEnd']) console.log(`набор (${{ typeStart: 'начало', typeMiddle: 'середина', typeEnd: 'конец' }[k]}): транзакция ${r[k].sync} мс + разбиение ${r[k].measure} мс = ${r[k].total} мс на нажатие`);
+for (const k of ['burstMiddle', 'burstStart']) console.log(`набор подряд 40 знаков (${k === 'burstMiddle' ? 'середина' : 'начало'}): задержка нажатия в среднем ${r[k].mean} мс, 90 % — до ${r[k].p90} мс, худшее ${r[k].max} мс`);
+console.log(`согласованность (после случайных правок полный замер даёт то же разбиение): ${r.consistency}`);
+if (r.diff) console.log('первое расхождение:', r.diff);
 console.log(`сохранение: ${r.export} мс (${r.exportKB} КБ)`);

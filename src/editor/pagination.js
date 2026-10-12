@@ -169,9 +169,25 @@ function cellLines(td, rootTop, scale) {
   return out.sort((a, b) => a.top - b.top);
 }
 
+// DOM блоков верхнего уровня по позиции — одним проходом по представлениям ProseMirror. view.nodeDOM(pos) ищет
+// перебором детей документа: на 1000+ блоках вызов для каждого — квадратичная работа (~40 мс на замер)
+export function topDoms(view) {
+  const out = new Map();
+  const descs = view.docView && view.docView.children;
+  if (!descs) return out;
+  let pos = 0;
+  for (const d of descs) {
+    if (!d.node) continue; // виджеты (распорки и т. п.) места в документе не занимают
+    out.set(pos, d.dom);
+    pos += d.node.nodeSize;
+  }
+  return out;
+}
+
 // Единицы разбиения в порядке документа
 function collectUnits(view, rootTop, scale) {
   const units = [];
+  const tops = topDoms(view);
   const sectList = sectionList(view.state.doc);
   const box = (dom) => {
     const r = dom.getBoundingClientRect();
@@ -192,7 +208,7 @@ function collectUnits(view, rootTop, scale) {
       });
       return;
     }
-    const dom = view.nodeDOM(pos);
+    const dom = tops.get(pos) || view.nodeDOM(pos);
     if (!dom || dom.nodeType !== 1) return;
     if (node.type.name === 'columns') {
       // раздел с колонками — одна единица; как он ложится на листы, решает план (colLayout.js)
@@ -252,7 +268,12 @@ function collectUnits(view, rootTop, scale) {
       sect,
     });
   };
-  view.state.doc.forEach((node, off) => { visit(node, off); if (node.attrs && node.attrs.sectPr) sect++; });
+  view.state.doc.forEach((node, off) => {
+    visit(node, off);
+    if (node.attrs && node.attrs.sectPr) sect++;
+    const dom = tops.get(off);
+    if (dom && dom.nodeType === 1) blockH.set(dom, dom.getBoundingClientRect().height); // для быстрого пути (quickCheck)
+  });
   return units;
 }
 
@@ -462,11 +483,12 @@ function paginate(view, units, secs, rootTop, scale, notes = [], plans = new Map
 
 // Разрыв для сравнения замеров: позиции (их сдвигает правка до разрыва), заполнение, текст копий шапки таблицы
 const rawBreak = (b) => ({
-  kind: b.kind, pos: b.pos, fill: Math.round(b.fill), items: b.items ? b.items.map((x) => ({ pos: x.pos, fill: Math.round(x.fill) })) : null,
+  // у разделённой строки таблицы (cells) своих pos/fill нет — только у ячеек (items)
+  kind: b.kind, pos: b.pos ?? null, fill: b.fill == null ? null : Math.round(b.fill), items: b.items ? b.items.map((x) => ({ pos: x.pos, fill: Math.round(x.fill) })) : null,
   head: b.headers ? (Array.isArray(b.headers) ? b.headers.map((tr) => tr.textContent).join('\u0001') : 1) : 0,
 });
 const breaksSig = (raw) => raw.map((b) => `${b.kind}:${b.pos}:${b.fill}:${(b.items || []).map((x) => `${x.pos}/${x.fill}`).join(',')}:${b.head}`).join('|');
-const mapRaw = (raw, mapping) => raw.map((b) => ({ ...b, pos: mapping.map(b.pos), items: b.items && b.items.map((x) => ({ ...x, pos: mapping.map(x.pos) })) }));
+const mapRaw = (raw, mapping) => raw.map((b) => ({ ...b, pos: b.pos == null ? null : mapping.map(b.pos), items: b.items && b.items.map((x) => ({ ...x, pos: mapping.map(x.pos) })) }));
 
 // Режим «Черновик» (вкладка «Вид»): текст сплошной лентой, без листов, колонтитулов и сносок внизу листов
 const draftViews = new WeakSet();
@@ -475,7 +497,51 @@ export function setDraft(view, on) {
   view.dom.dispatchEvent(new Event('pero-remeasure'));
 }
 
+// ---------- Быстрый путь ----------
+// Правка внутри одного блока верхнего уровня, высота которого не изменилась и внутри которого нет разрыва листа:
+// всё ниже стоит там же, листы режутся там же (позиции разрывов уже сдвинуты транзакцией) — замер не нужен.
+// Так проходит большинство нажатий (новая строка в абзаце или правка в многостраничной таблице — полный замер).
+const blockH = new WeakMap(); // DOM блока верхнего уровня → высота (px экрана) по последнему замеру
+const pending = new WeakMap(); // view → { full, els: Set } — что менялось с последнего замера
+function pendingOf(view) {
+  let p = pending.get(view);
+  if (!p) { p = { full: true, els: new Set() }; pending.set(view, p); }
+  return p;
+}
+// Изменение документа: какой блок верхнего уровня затронут (или «всё заново»)
+function noteDocChange(view, prevDoc) {
+  const p = pendingOf(view);
+  if (p.full) return;
+  const doc = view.state.doc;
+  if (doc.attrs !== prevDoc.attrs || doc.childCount !== prevDoc.childCount) { p.full = true; return; }
+  const s = prevDoc.content.findDiffStart(doc.content);
+  if (s == null) return;
+  const e = prevDoc.content.findDiffEnd(doc.content);
+  const a = doc.content.findIndex(s);
+  const b = doc.content.findIndex(Math.max(s, e ? e.b - 1 : s));
+  if (a.index !== b.index) { p.full = true; return; }
+  const dom = view.nodeDOM(a.offset);
+  if (!dom || dom.nodeType !== 1) { p.full = true; return; }
+  p.els.add(dom);
+}
+function quickCheck(view) {
+  const p = pendingOf(view);
+  if (p.full || !p.els.size) return false;
+  for (const el of p.els) {
+    if (!el.isConnected || !blockH.has(el)) return false;
+    if (el.matches('[data-pero-spacer], .pero-cols') || el.querySelector('[data-pero-spacer], .pero-float, [data-opaque="footnote"]')) return false;
+    if (Math.abs(el.getBoundingClientRect().height - blockH.get(el)) > 0.5) return false;
+  }
+  return true;
+}
+
 function measure(view) {
+  if (!draftViews.has(view) && quickCheck(view)) {
+    pending.set(view, { full: false, els: new Set() });
+    view.dom.dispatchEvent(new Event('pero-paginated', { bubbles: true }));
+    return;
+  }
+  pending.set(view, { full: false, els: new Set() });
   if (draftViews.has(view)) {
     const prev = paginationKey.getState(view.state);
     if (prev.deco !== DecorationSet.empty || prev.breaks.length) {
@@ -531,7 +597,10 @@ function measure(view) {
   }
 
   // 2. замер чистой раскладки
+  const ph = []; let pt = performance.now(); // отладка: время фаз замера (window.__peroMeasurePhases в режиме разработки)
+  const mark = (name) => { const t = performance.now(); ph.push(`${name} ${Math.round(t - pt)}`); pt = t; };
   const rootRect = view.dom.getBoundingClientRect();
+  mark('раскладка');
   const scale = pageScale(view.dom); // масштаб страницы (transform)
   let result = { breaks: [], pages: [{ sect: 0, first: true }], trailing: 0 };
   const notes = scale && isFinite(scale) ? collectNotes(view, rootRect.top, scale) : [];
@@ -540,7 +609,10 @@ function measure(view) {
   if (scale && isFinite(scale)) {
     // планы колонок — по порядку: разбить до раздела, выбрать его план, применить (раскладка ниже меняется), заново
     for (let it = 0; it <= conts.length * 3 + 1; it++) {
-      result = paginate(view, collectUnits(view, rootRect.top, scale), secs, rootRect.top, scale, notes, plans, hNat);
+      const units = collectUnits(view, rootRect.top, scale);
+      mark('блоки');
+      result = paginate(view, units, secs, rootRect.top, scale, notes, plans, hNat);
+      mark('разбиение');
       if (!result.mismatch) break;
       const { pos, plan, balance } = result.mismatch;
       const dom = view.nodeDOM(pos);
@@ -602,16 +674,24 @@ function measure(view) {
     }, { side: 1, key: `tail:${Math.round(trailing)}`, ignoreSelection: true }));
     deco = DecorationSet.create(view.state.doc, decos);
   }
-  view.dispatch(view.state.tr.setMeta(paginationKey, {
-    key, keyRest, raw, deco, breaks: pageStarts(breaks), total, sects: pages.map((p) => p.sect), chrome: { firstHeader: chrome.firstHeader, lastFooter: chrome.lastFooter },
-  }).setMeta('addToHistory', false));
+  mark('распорки');
+  // то же разбиение (ключ по сдвинутым позициям совпал) — состояние плагина уже верное, транзакция не нужна
+  if (!same) {
+    view.dispatch(view.state.tr.setMeta(paginationKey, {
+      key, keyRest, raw, deco, breaks: pageStarts(breaks), total, sects: pages.map((p) => p.sect), chrome: { firstHeader: chrome.firstHeader, lastFooter: chrome.lastFooter },
+    }).setMeta('addToHistory', false));
+  }
   if (scroller && scroller.scrollTop !== scrollTop) scroller.scrollTop = scrollTop;
+  mark('транзакция');
   placeBands(view, frame, breaks.map((b) => ({ from: b.from, to: b.sect ?? b.from })), chrome.hfOf, total);
+  mark('полосы');
   // сноски — по листам их ссылок
   const starts = pageStarts(breaks);
   const perPage = Array.from({ length: total }, () => []);
   for (const n of notes) perPage[starts.filter((p) => p <= n.pos).length].push(n);
   placeNotes(view, perPage);
+  mark('сноски');
+  if (import.meta.env && import.meta.env.DEV) window.__peroMeasurePhases = ph.join(', ');
   placeColumnRules(view, scale);
   view.dom.dispatchEvent(new Event('pero-paginated', { bubbles: true })); // вертикальная линейка и т.п. — листы на местах
 }
@@ -797,6 +877,13 @@ function placeBands(view, frame, meta, hfOf, total) {
   spacers.sort((a, b) => a.top - b.top);
   const sig = JSON.stringify([spacers.map((s) => Math.round(s.top)), frame, meta, total, spacers.map((s, i) => [hfOf('footer', i + 1), hfOf('header', i + 2)])]);
   if (layer.dataset.sig === sig) return;
+  // координаты таблиц разделённых строк — до первой записи в DOM: чтение после записи заставляет браузер перекладывать
+  // страницу на каждой таблице (на 200+ листах — до секунды)
+  const tableBox = new Map();
+  for (const s of spacers) {
+    const t = (s.cell || s.header) && (s.cell || s.header).closest('table');
+    if (t && !tableBox.has(t)) tableBox.set(t, t.getBoundingClientRect());
+  }
   layer.dataset.sig = sig;
   layer.textContent = '';
   // поля колонтитула по ширине листа своего раздела (узкие листы — по центру общей рамки)
@@ -841,7 +928,7 @@ function placeBands(view, frame, meta, hfOf, total) {
     if (s.cell) {
       const table = s.cell.closest('table');
       if (table) {
-        const tr = table.getBoundingClientRect();
+        const tr = tableBox.get(table);
         const style = table.style.getPropertyValue('--tb-ih') || '0.5pt solid #000';
         const line = (y) => {
           const l = document.createElement('div');
@@ -857,7 +944,7 @@ function placeBands(view, frame, meta, hfOf, total) {
     if (s.header) {
       const table = s.header.closest('table');
       if (table) {
-        const tr = table.getBoundingClientRect();
+        const tr = tableBox.get(table);
         const copy = table.cloneNode(false);
         const cg = table.querySelector(':scope > colgroup');
         if (cg) copy.appendChild(cg.cloneNode(true));
@@ -922,7 +1009,9 @@ export const Pagination = Extension.create({
         let timer = 0;
         let verify = 0;
         let measuring = false;
-        const schedule = () => {
+        // full — не из-за правки документа (размер, шрифты, просьба соседей): быстрый путь не годится
+        const schedule = (full = true) => {
+          if (full !== false) pendingOf(view).full = true;
           if (measuring) return; // собственные изменения размера во время замера
           clearTimeout(timer);
           timer = setTimeout(() => {
@@ -930,19 +1019,22 @@ export const Pagination = Extension.create({
             measuring = true;
             const t0 = performance.now();
             try { measure(view); } finally { measuring = false; view.dom.classList.remove('pero-measuring'); }
+            size = `${view.dom.offsetWidth}x${view.dom.offsetHeight}`;
             if (import.meta.env && import.meta.env.DEV) window.__peroMeasureMs = Math.round(performance.now() - t0); // отладка: время замера
             // самопроверка: раскладка могла сдвинуться позже (шрифты, коэффициент строки документа) — замерить заново
             clearTimeout(verify);
             verify = setTimeout(() => { if (!view.isDestroyed && !bandsAligned(view)) schedule(); }, 300);
           }, 40);
         };
-        const ro = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(schedule) : null;
+        // размер после собственного замера (распорки встали) — не повод мерить заново
+        let size = '';
+        const ro = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(() => { if (`${view.dom.offsetWidth}x${view.dom.offsetHeight}` !== size) schedule(); }) : null;
         if (ro) ro.observe(view.dom);
         view.dom.addEventListener('pero-remeasure', schedule);
         if (document.fonts) document.fonts.addEventListener('loadingdone', schedule);
         schedule();
         return {
-          update(v, prevState) { if (v.state.doc !== prevState.doc) schedule(); },
+          update(v, prevState) { if (v.state.doc !== prevState.doc) { noteDocChange(v, prevState.doc); schedule(false); } },
           destroy() {
             clearTimeout(timer); clearTimeout(verify);
             if (ro) ro.disconnect();
