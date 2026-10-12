@@ -2,6 +2,7 @@
 // Собственный разбор OOXML: никаких сторонних конвертеров, только распаковка zip и XML.
 import { readPicFormat } from '../editor/picFormat.js';
 import { readAnchor } from '../editor/anchor.js';
+import { themeColorsFromXml } from '../editor/shapes.js';
 import { parseCols, wrapColumnSections } from '../editor/columns.js';
 import JSZip from 'jszip';
 import { DOMParser, XMLSerializer } from '@xmldom/xmldom';
@@ -868,6 +869,10 @@ export async function importDocx(data) {
   const documentXml = await read('word/document.xml');
   if (!documentXml) throw new Error('Это не документ Word: внутри нет word/document.xml');
 
+  const themeFile = zip.file('word/theme/theme1.xml');
+  // цвета темы нужны только для показа фигур (shapes.js) — берутся, если в документе есть фигуры wps
+  const hasShapes = /<wps:wsp[\s>]/.test(await zip.file('word/document.xml').async('string'));
+  const themeColors = themeFile && hasShapes ? themeColorsFromXml(await themeFile.async('string')) : {};
   const theme = parseTheme(await read('word/theme/theme1.xml'));
   const { map: styles, defaults, defaultPara } = parseStyles(await read('word/styles.xml'), theme);
   // Шрифт/размер документа: docDefaults, поверх — стиль абзаца по умолчанию («Обычный»).
@@ -963,7 +968,7 @@ export async function importDocx(data) {
   return {
     doc: {
       type: 'doc',
-      attrs: { ...docDefaults, para: docPara, defaultTab, sectPr: imp.bodySectPr, hf, styles: Object.values(imp.usedStyles), charStyles: Object.values(imp.usedCharStyles), comments: commentList, footnotes: footnoteList, watermark, pageColor, props, ...(mirrorMargins ? { mirrorMargins } : {}), ...(autoHyphenation ? { autoHyphenation } : {}), ...(noCapsHyphens ? { hyphenateCaps: false } : {}), ...(imp.headingNum ? { headingNumbering: imp.headingNum } : {}) },
+      attrs: { ...docDefaults, para: docPara, defaultTab, sectPr: imp.bodySectPr, hf, styles: Object.values(imp.usedStyles), charStyles: Object.values(imp.usedCharStyles), comments: commentList, footnotes: footnoteList, watermark, pageColor, props, ...(themeColors.accent1 ? { themeColors } : {}), ...(mirrorMargins ? { mirrorMargins } : {}), ...(autoHyphenation ? { autoHyphenation } : {}), ...(noCapsHyphens ? { hyphenateCaps: false } : {}), ...(imp.headingNum ? { headingNumbering: imp.headingNum } : {}) },
       content,
     },
     warnings: imp.warnings,

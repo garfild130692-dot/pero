@@ -14,6 +14,7 @@ import { NodeSelection, Plugin, PluginKey } from '@tiptap/pm/state';
 import { Decoration, DecorationSet } from '@tiptap/pm/view';
 import { pagePx, parseSectPr, sectionList } from './page.js';
 import { rotatedPad } from './picFormat.js';
+import { shapeOf } from './shapes.js';
 
 const BLOCKS = 'p, h1, h2, h3, h4, h5, h6';
 
@@ -49,7 +50,14 @@ const setStyle = (el, css) => {
 export function placeFloats(view, pending = new Set()) {
   const { doc } = view.state;
   const items = [];
-  doc.descendants((n, pos) => { if (n.type.name === 'image' && n.attrs.anchor) items.push({ n, pos }); });
+  // рисунки с обтеканием и фигуры/надписи с wp:anchor (opaque drawing, shapes.js)
+  doc.descendants((n, pos) => {
+    if (n.type.name === 'image' && n.attrs.anchor) items.push({ n, pos, a: n.attrs.anchor, rot: n.attrs.rotate });
+    else if (n.type.name === 'opaque' && n.attrs.kind === 'drawing') {
+      const s = shapeOf(n.attrs.xml);
+      if (s && s.anchor) items.push({ n, pos, a: s.anchor, w: s.w, h: s.h, pad: s.effect });
+    }
+  });
   if (!items.length) return false;
   const root = view.dom;
   const pageEl = root.closest('.page');
@@ -61,13 +69,13 @@ export function placeFloats(view, pending = new Set()) {
   const rcs = getComputedStyle(root);
   let changed = false;
   const proxies = [];
-  for (const { n, pos } of items) {
+  for (const it of items) {
+    const { n, pos, a } = it;
     const dom = view.nodeDOM(pos);
     if (!dom || dom.nodeType !== 1) continue;
-    const a = n.attrs.anchor;
     const img = dom.querySelector('img');
-    const w = (n.attrs.width || (img ? img.offsetWidth : 96));
-    const h = (n.attrs.height || (img ? img.offsetHeight : 96));
+    const w = it.w || n.attrs.width || (img ? img.offsetWidth : 96);
+    const h = it.h || n.attrs.height || (img ? img.offsetHeight : 96);
     const para = dom.closest(BLOCKS) || dom.parentElement;
     const cell = dom.closest('td, th');
     // всё дальше — px без масштаба, от левого верхнего угла .page
@@ -100,7 +108,9 @@ export function placeFloats(view, pending = new Set()) {
     const y = va === 'center' ? (v0 + v1 - h) / 2 : va === 'bottom' ? v1 - h : va === 'top' ? v0 : v0 + a.v.off;
     const d = a.dist || { t: 0, b: 0, l: 0, r: 0 };
     // повёрнутый рисунок: Word ставит на место рамку без поворота, а узел у нас шире на запас под габарит
-    const pad = rotatedPad(w, h, n.attrs.rotate);
+    // запас вокруг рамки по сторонам: у фигуры — wp:effectExtent, у повёрнутого рисунка — габарит поворота
+    const rp = it.pad ? null : rotatedPad(w, h, it.rot);
+    const pad = it.pad || { l: rp.x, r: rp.x, t: rp.y, b: rp.y };
     // для перетаскивания: место рисунка от колонки и от абзаца
     dom.dataset.relx = (x - colL).toFixed(2);
     dom.dataset.rely = (y - pTop).toFixed(2);
@@ -114,7 +124,7 @@ export function placeFloats(view, pending = new Set()) {
       if (!dom.classList.contains('pf-abs')) dom.classList.add('pf-abs');
       const op = dom.offsetParent || root;
       const o = op.getBoundingClientRect();
-      css = `position:absolute;left:${(x - pad.x - X(o.left) - op.clientLeft).toFixed(1)}px;top:${(y - pad.y - Y(o.top) - op.clientTop).toFixed(1)}px;z-index:${a.behind ? -1 : 3}`;
+      css = `position:absolute;left:${(x - pad.l - X(o.left) - op.clientLeft).toFixed(1)}px;top:${(y - pad.t - Y(o.top) - op.clientTop).toFixed(1)}px;z-index:${a.behind ? -1 : 3}`;
     } else {
       // float: статическое место — начало строки привязки (замер без сдвигов)
       if (dom.dataset.floatCss !== 'probe') { dom.style.cssText = 'float:left;margin:0'; dom.dataset.floatCss = 'probe'; }
@@ -125,24 +135,24 @@ export function placeFloats(view, pending = new Set()) {
       const contR = X(pRect.right) - parseFloat(ps.paddingRight) - parseFloat(ps.borderRightWidth || 0);
       // float в строке с верхом lt: отступы сверху и по сторонам, shape-outside
       const floatCss = (lt) => {
-        const mt = Math.max(0, y - pad.y - lt);
+        const mt = Math.max(0, y - pad.t - lt);
         // +1 px: строку, которая задевает рисунок на доли пикселя, Word не обтекает (строка 14,3 pt над рисунком со сдвигом 14,2 pt)
         const inset = Math.max(0, mt - d.t + (mt > 0 ? 1 : 0));
         const shape = `shape-outside:inset(${inset.toFixed(1)}px 0 0 0) margin-box`;
-        if (a.wrap === 'topBottom') return `float:left;margin:${mt.toFixed(1)}px ${Math.max(0, contR - x - w - pad.x).toFixed(1)}px ${d.b}px ${(x - pad.x - contL).toFixed(1)}px;${shape}`;
+        if (a.wrap === 'topBottom') return `float:left;margin:${mt.toFixed(1)}px ${Math.max(0, contR - x - w - pad.r).toFixed(1)}px ${d.b}px ${(x - pad.l - contL).toFixed(1)}px;${shape}`;
         // текст — со стороны, где места больше; поровну (рисунок по центру) — слева, как начинает строки Word
-        if (x - colL < colR - x - w - 1) return `float:left;margin:${mt.toFixed(1)}px ${d.r}px ${d.b}px ${(x - pad.x - contL).toFixed(1)}px;${shape}`;
-        return `float:right;margin:${mt.toFixed(1)}px ${(contR - x - w - pad.x).toFixed(1)}px ${d.b}px ${d.l}px;${shape}`;
+        if (x - colL < colR - x - w - 1) return `float:left;margin:${mt.toFixed(1)}px ${d.r}px ${d.b}px ${(x - pad.l - contL).toFixed(1)}px;${shape}`;
+        return `float:right;margin:${mt.toFixed(1)}px ${(contR - x - w - pad.r).toFixed(1)}px ${d.b}px ${d.l}px;${shape}`;
       };
-      const hit = y - pad.y < lineTop - 2 ? view.posAtCoords({ left: pr.left + (colL + 2) * scale, top: pr.top + (y - pad.y + 2) * scale }) : null;
+      const hit = y - pad.t < lineTop - 2 ? view.posAtCoords({ left: pr.left + (colL + 2) * scale, top: pr.top + (y - pad.t + 2) * scale }) : null;
       if (hit && hit.pos < pos) {
         // выше строки привязки: заместитель на строке этой высоты, сам рисунок — абсолютно
-        let lt = y - pad.y;
+        let lt = y - pad.t;
         try { lt = Y(view.coordsAtPos(hit.pos).top); } catch { /* верх строки — по высоте рисунка */ }
-        proxies.push({ pos: hit.pos, css: `${floatCss(lt)};width:${(w + 2 * pad.x).toFixed(1)}px;height:${(h + 2 * pad.y).toFixed(1)}px` });
+        proxies.push({ pos: hit.pos, css: `${floatCss(lt)};width:${(w + pad.l + pad.r).toFixed(1)}px;height:${(h + pad.t + pad.b).toFixed(1)}px` });
         const op = dom.offsetParent || root;
         const o = op.getBoundingClientRect();
-        css = `position:absolute;left:${(x - pad.x - X(o.left) - op.clientLeft).toFixed(1)}px;top:${(y - pad.y - Y(o.top) - op.clientTop).toFixed(1)}px`;
+        css = `position:absolute;left:${(x - pad.l - X(o.left) - op.clientLeft).toFixed(1)}px;top:${(y - pad.t - Y(o.top) - op.clientTop).toFixed(1)}px`;
       } else css = floatCss(lineTop);
     }
     if (setStyle(dom, css)) changed = true;

@@ -37,6 +37,7 @@ import { Sorting } from './sort.js';
 import { Breaks } from './breaks.js';
 import { TableConvert } from './tableConvert.js';
 import { Hyphenation } from './hyphen.js';
+import { setThemeColors } from './shapes.js';
 import { LineNumbers } from './lineNumbers.js';
 import { Columns } from './columns.js';
 import { ColLayout } from './colLayout.js';
@@ -76,6 +77,7 @@ const PeroDocument = Document.extend({
       hyphenateCaps: { default: true },     // переносы в словах из прописных (w:doNotHyphenateCaps — наоборот)
       hyphenChanged: { default: false },
       footnotesEdited: { default: false }, // сноски менялись — при сохранении footnotes.xml пишется заново
+      themeColors: { default: null },   // цвета темы документа (theme1.xml) — для фигур (shapes.js); в файл не пишется
       defaultTab: { default: DEFAULT_TAB }, // шаг позиций табуляции по умолчанию, pt (settings.xml w:defaultTabStop)
     };
   },
@@ -87,9 +89,10 @@ export function loadDocument(editor, json) {
   editor.commands.setContent(json, { emitUpdate: false });
   const attrs = {
     fontFamily: DEFAULT_FONT, fontSize: DEFAULT_SIZE, para: NEW_DOC_PARA, sectPr: null, hf: EMPTY_HF, styles: [], defaultsModified: false,
-    comments: [], commentsEdited: false, footnotes: [], footnotesEdited: false, headingNumbering: null, charStyles: [], watermark: null, watermarkChanged: false, props: {}, propsChanged: false, pageColor: null, pageColorChanged: false, mirrorMargins: false, mirrorChanged: false, autoHyphenation: false, hyphenateCaps: true, hyphenChanged: false, defaultTab: DEFAULT_TAB,
+    comments: [], commentsEdited: false, footnotes: [], footnotesEdited: false, headingNumbering: null, charStyles: [], watermark: null, watermarkChanged: false, props: {}, propsChanged: false, pageColor: null, pageColorChanged: false, mirrorMargins: false, mirrorChanged: false, autoHyphenation: false, hyphenateCaps: true, hyphenChanged: false, defaultTab: DEFAULT_TAB, themeColors: null,
     ...((json && json.attrs) || {}),
   };
+  setThemeColors(attrs.themeColors);
   const { tr } = editor.state;
   for (const [k, v] of Object.entries(attrs)) if (editor.state.doc.attrs[k] !== v) tr.setDocAttribute(k, v);
   if (tr.docChanged) editor.view.dispatch(tr.setMeta('addToHistory', false).setMeta('preventUpdate', true));

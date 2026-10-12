@@ -1014,3 +1014,12 @@ p[data-section-type="nextPage"]::after { content: 'Разрыв раздела (
 .pero-image.cropping .pero-image-handle { display: none; }
 @media print { .pero-crop-handle, .pero-crop-ghost { display: none !important; } }
 .page-content .pero-float-proxy { display: block; pointer-events: none; }
+
+/* Фигуры и надписи Word (shapes.js): SVG геометрии + текст надписи поверх; положение — floatLayout.js */
+.page-content .opaque-drawing.pero-shape { display: inline-block; padding: 0; margin: 0; border: 0; background: none; color: inherit; font: inherit; line-height: normal; vertical-align: bottom; text-indent: 0; }
+.page-content .opaque-drawing.pero-shape::before { content: none; }
+.page-content .opaque-drawing.pero-shape.ProseMirror-selectednode .pero-shape-box { outline: 1px solid var(--accent); outline-offset: 1px; }
+.pero-shape-box { position: relative; display: block; }
+.pero-shape-svg { position: absolute; left: 0; top: 0; overflow: visible; }
+.pero-shape-text { position: absolute; inset: 0; display: flex; flex-direction: column; overflow: hidden; box-sizing: border-box; white-space: pre-wrap; line-height: 1.08; text-align: left; text-indent: 0; }
+.pero-shape-text > div { margin: 0; }

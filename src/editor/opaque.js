@@ -3,6 +3,8 @@
 // Узел хранит исходный XML и при сохранении записывается обратно без изменений.
 import { Node, mergeAttributes } from '@tiptap/core';
 import { mathDom } from './omml.js';
+import { shapeHtml, shapeOf } from './shapes.js';
+import { transformCss } from './picFormat.js';
 
 // Подписи и вид значков. hidden — служебные метки без видимого представления (закладки, части полей)
 export const OPAQUE_KINDS = {
@@ -67,6 +69,19 @@ export const Opaque = Node.create({
     });
     // xml/text — в атрибутах: так значок переживает копирование и вставку внутри документа
     if (math) return ['span', attrs, math];
+    // фигура или надпись (wps:wsp) — нарисована; положение и обтекание — floatLayout.js, как у рисунков
+    const shape = kind === 'drawing' ? shapeOf(xml) : null;
+    if (shape) {
+      attrs.class += ` pero-shape${shape.anchor ? ` pero-float pf-${shape.anchor.wrap}` : ''}`;
+      attrs.title = null;
+      const box = document.createElement('span');
+      box.className = 'pero-shape-box';
+      const e = shape.effect; // запас wp:effectExtent (у повёрнутой фигуры Word включает в него габарит)
+      box.style.cssText = `width:${shape.w.toFixed(1)}px;height:${shape.h.toFixed(1)}px;margin:${[e.t, e.r, e.b, e.l].map((v) => `${v.toFixed(1)}px`).join(' ')}` +
+        (shape.rotate ? `;transform:${transformCss({ rotate: shape.rotate })}` : '');
+      box.innerHTML = shapeHtml(shape);
+      return ['span', attrs, box];
+    }
     const label = k.hidden ? '' : k.label === null ? text : k.label;
     return ['span', attrs, label];
   },
