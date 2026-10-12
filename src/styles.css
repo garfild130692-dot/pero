@@ -1003,3 +1003,14 @@ p[data-section-type="nextPage"]::after { content: 'Разрыв раздела (
 .lay-row .pd-check { width: 120px; }
 .wrap-kinds { display: flex; flex-wrap: wrap; gap: 6px; }
 .wrap-kinds .cols-preset { width: 72px; }
+
+/* Обрезка и поворот (picFormat.js): рамка показывает часть картинки */
+.pero-image .pero-frame { display: inline-block; overflow: hidden; line-height: 0; vertical-align: bottom; transform-origin: 50% 50%; }
+.pero-image .pero-frame img { display: block; }
+.pero-image.cropping .pero-frame { overflow: hidden; outline: 1.5px dashed #1f6f5c; }
+.pero-crop-handle { position: absolute; width: 14px; height: 14px; margin: -7px 0 0 -7px; background: #1f2f2a; border: 2px solid #fff; z-index: 5; }
+.pero-crop-handle.ch-l, .pero-crop-handle.ch-r { width: 6px; height: 22px; margin: -11px 0 0 -3px; cursor: ew-resize; }
+.pero-crop-handle.ch-t, .pero-crop-handle.ch-b { width: 22px; height: 6px; margin: -3px 0 0 -11px; cursor: ns-resize; }
+.pero-image.cropping .pero-image-handle { display: none; }
+@media print { .pero-crop-handle, .pero-crop-ghost { display: none !important; } }
+.page-content .pero-float-proxy { display: block; pointer-events: none; }

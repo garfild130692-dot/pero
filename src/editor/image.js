@@ -4,9 +4,11 @@
 // width/height — размер на странице в px (1 px = 9525 EMU), alt — замещающий текст,
 // xml/target — исходный <w:r> с <w:drawing> и путь картинки в пакете (у рисунков из файла):
 // при сохранении в тот же пакет пишется исходный XML с новым размером — сохраняются обтекание, обрезка, эффекты;
-// anchor — обтекание и положение плавающего рисунка (anchor.js; null — в строке текста), показ — floatLayout.js.
+// anchor — обтекание и положение плавающего рисунка (anchor.js; null — в строке текста), показ — floatLayout.js;
+// crop/rotate/flipH/flipV — обрезка и поворот (picFormat.js): рамка width×height показывает часть картинки.
 import { Node, mergeAttributes } from '@tiptap/core';
 import { NodeSelection } from '@tiptap/pm/state';
+import { rotatedPad, transformCss } from './picFormat.js';
 
 export const EMU_PER_PX = 9525;
 export const MAX_INSERT_WIDTH = 623; // ширина текста A4 с полями по умолчанию (16,5 см) в px
@@ -50,16 +52,46 @@ class ImageView {
     this.img.addEventListener('mousedown', (e) => this.startMove(e));
     // у плавающего — своё перетаскивание; родное (перенос узла в тексте) не запускать: ProseMirror сам ставит draggable
     this.dom.addEventListener('dragstart', (e) => { if (this.node.attrs.anchor) e.preventDefault(); });
-    this.dom.append(this.img, this.handle);
+    // рамка: обрезка (overflow: hidden, картинка сдвинута и увеличена) и поворот; в режиме обрезки — вся картинка бледно
+    this.frame = document.createElement('span');
+    this.frame.className = 'pero-frame';
+    this.ghost = null;
+    this.frame.append(this.img);
+    this.dom.append(this.frame, this.handle);
+    this.dom.peroView = this; // для кнопки «Обрезка» на ленте
+    this.cropping = null;
     this.render();
+  }
+
+  // Размер всей картинки и её сдвиг в рамке по обрезке
+  geom(crop = this.cropping || this.node.attrs.crop) {
+    const { width, height } = this.node.attrs;
+    const base = this.node.attrs.crop || { l: 0, t: 0, r: 0, b: 0 };
+    const w = width || this.img.naturalWidth || 96;
+    const h = height || this.img.naturalHeight || 96;
+    // вся картинка — по текущей (сохранённой) обрезке, рамка — по показываемой
+    const W = w / Math.max(0.01, 1 - base.l - base.r);
+    const H = h / Math.max(0.01, 1 - base.t - base.b);
+    const c = crop || { l: 0, t: 0, r: 0, b: 0 };
+    return { W, H, fw: W * (1 - c.l - c.r), fh: H * (1 - c.t - c.b), ox: -c.l * W, oy: -c.t * H };
   }
 
   render() {
     const { src, width, height, alt, anchor } = this.node.attrs;
     if (this.img.getAttribute('src') !== src) this.img.src = src || '';
     this.img.alt = alt || '';
-    this.img.style.width = width ? `${width}px` : '';
-    this.img.style.height = height ? `${height}px` : '';
+    const g = this.geom();
+    const cropped = !!(this.node.attrs.crop || this.cropping);
+    this.frame.style.width = width ? `${g.fw}px` : '';
+    this.frame.style.height = height ? `${g.fh}px` : '';
+    this.img.style.width = width ? `${cropped ? g.W : width}px` : '';
+    this.img.style.height = height ? `${cropped ? g.H : height}px` : '';
+    this.img.style.marginLeft = cropped ? `${g.ox}px` : '';
+    this.img.style.marginTop = cropped ? `${g.oy}px` : '';
+    this.frame.style.transform = transformCss(this.node.attrs);
+    // повёрнутая картинка занимает свой габарит (как wp:effectExtent у Word)
+    const pad = rotatedPad(g.fw, g.fh, this.node.attrs.rotate);
+    this.frame.style.margin = pad.x || pad.y ? `${pad.y.toFixed(1)}px ${pad.x.toFixed(1)}px` : '';
     // плавающий: класс по виду обтекания, положение ставит floatLayout (стили — прямо в DOM, ignoreMutation)
     const kind = !anchor ? '' : anchor.wrap === 'none' ? (anchor.behind ? 'behind' : 'front') : anchor.wrap;
     this.dom.className = `pero-image${kind ? ` pero-float pf-${kind}` : ''}${this.dom.classList.contains('selected') ? ' selected' : ''}`;
@@ -71,10 +103,14 @@ class ImageView {
     e.stopPropagation();
     const startX = e.clientX;
     const startY = e.clientY;
-    const w0 = this.img.offsetWidth;
-    const h0 = this.img.offsetHeight;
+    // размер рамки (при обрезке картинка внутри больше рамки — масштабируется вместе с ней)
+    const w0 = this.frame.offsetWidth;
+    const h0 = this.frame.offsetHeight;
+    const iw0 = this.img.offsetWidth; const ih0 = this.img.offsetHeight;
+    const ml0 = parseFloat(this.img.style.marginLeft) || 0; const mt0 = parseFloat(this.img.style.marginTop) || 0;
     // offsetWidth — без учёта масштаба страницы (CSS zoom), смещение мыши — с ним
-    const scale = this.img.getBoundingClientRect().width / (w0 || 1);
+    // масштаб страницы — по узлу рисунка (он не повёрнут, в отличие от рамки)
+    const scale = this.dom.getBoundingClientRect().width / (this.dom.offsetWidth || 1) || 1;
     let w = w0;
     let h = h0;
     const move = (ev) => {
@@ -82,8 +118,13 @@ class ImageView {
       const dy = (ev.clientY - startY) / scale;
       w = Math.max(16, w0 + dx);
       h = ev.shiftKey ? Math.max(16, h0 + dy) : (w * h0) / (w0 || 1);
-      this.img.style.width = `${w}px`;
-      this.img.style.height = `${h}px`;
+      const kx = w / (w0 || 1); const ky = h / (h0 || 1);
+      this.frame.style.width = `${w}px`;
+      this.frame.style.height = `${h}px`;
+      this.img.style.width = `${iw0 * kx}px`;
+      this.img.style.height = `${ih0 * ky}px`;
+      this.img.style.marginLeft = `${ml0 * kx}px`;
+      this.img.style.marginTop = `${mt0 * ky}px`;
     };
     const up = () => {
       window.removeEventListener('mousemove', move);
@@ -130,6 +171,83 @@ class ImageView {
     window.addEventListener('mouseup', up);
   }
 
+  // Режим обрезки: вся картинка бледно, рамка — сохраняемая часть, маркеры на сторонах тянут края; Enter/щелчок мимо —
+  // применить, Esc — отменить. Размер рамки после обрезки = вся картинка × (1 − обрезанное).
+  toggleCrop() {
+    if (this.cropping) { this.finishCrop(true); return; }
+    this.cropping = { ...(this.node.attrs.crop || { l: 0, t: 0, r: 0, b: 0 }) };
+    this.dom.classList.add('cropping');
+    this.ghost = this.img.cloneNode();
+    this.ghost.className = 'pero-crop-ghost';
+    this.frame.before(this.ghost);
+    this.cropHandles = ['l', 't', 'r', 'b'].map((side) => {
+      const hd = document.createElement('span');
+      hd.className = `pero-crop-handle ch-${side}`;
+      hd.addEventListener('mousedown', (e) => this.dragCrop(e, side));
+      this.dom.append(hd);
+      return hd;
+    });
+    this.onKey = (e) => { if (e.key === 'Enter') { e.preventDefault(); this.finishCrop(true); } else if (e.key === 'Escape') this.finishCrop(false); };
+    this.onDown = (e) => { if (!this.dom.contains(e.target)) this.finishCrop(true); };
+    window.addEventListener('keydown', this.onKey, true);
+    window.addEventListener('mousedown', this.onDown, true);
+    this.renderCrop();
+  }
+
+  renderCrop() {
+    const g = this.geom();
+    // бледная вся картинка — от левого верхнего угла рамки назад на обрезанное
+    this.ghost.style.cssText = `position:absolute;left:${g.ox}px;top:${g.oy}px;width:${g.W}px;height:${g.H}px;opacity:.35;pointer-events:none`;
+    this.render();
+    const pos = { l: [0, g.fh / 2], r: [g.fw, g.fh / 2], t: [g.fw / 2, 0], b: [g.fw / 2, g.fh] };
+    for (const hd of this.cropHandles) {
+      const side = hd.className.slice(-1);
+      hd.style.left = `${pos[side][0]}px`;
+      hd.style.top = `${pos[side][1]}px`;
+    }
+  }
+
+  dragCrop(e, side) {
+    e.preventDefault();
+    e.stopPropagation();
+    const g = this.geom();
+    const scale = this.dom.getBoundingClientRect().width / (this.dom.offsetWidth || 1) || 1;
+    const start = { ...this.cropping };
+    const sx = e.clientX; const sy = e.clientY;
+    const move = (ev) => {
+      const dx = (ev.clientX - sx) / scale / g.W;
+      const dy = (ev.clientY - sy) / scale / g.H;
+      const c = { ...start };
+      if (side === 'l') c.l = Math.min(Math.max(0, start.l + dx), 0.95 - c.r);
+      if (side === 'r') c.r = Math.min(Math.max(0, start.r - dx), 0.95 - c.l);
+      if (side === 't') c.t = Math.min(Math.max(0, start.t + dy), 0.95 - c.b);
+      if (side === 'b') c.b = Math.min(Math.max(0, start.b - dy), 0.95 - c.t);
+      this.cropping = c;
+      this.renderCrop();
+    };
+    const up = () => { window.removeEventListener('mousemove', move); window.removeEventListener('mouseup', up); };
+    window.addEventListener('mousemove', move);
+    window.addEventListener('mouseup', up);
+  }
+
+  finishCrop(apply) {
+    const c = this.cropping;
+    const g = this.geom();
+    this.cropping = null;
+    window.removeEventListener('keydown', this.onKey, true);
+    window.removeEventListener('mousedown', this.onDown, true);
+    this.dom.classList.remove('cropping');
+    if (this.ghost) this.ghost.remove();
+    (this.cropHandles || []).forEach((hd) => hd.remove());
+    this.ghost = null; this.cropHandles = null;
+    const pos = this.getPos();
+    if (!apply || typeof pos !== 'number') { this.render(); return; }
+    const r = (v) => Math.round(v * 100000) / 100000;
+    const crop = c.l || c.t || c.r || c.b ? { l: r(c.l), t: r(c.t), r: r(c.r), b: r(c.b) } : null;
+    const r2 = (v) => Math.round(v * 100) / 100;
+    this.view.dispatch(this.view.state.tr.setNodeMarkup(pos, undefined, { ...this.node.attrs, crop, width: r2(g.fw), height: r2(g.fh) }));
+  }
+
   update(node) {
     if (node.type !== this.node.type) return false;
     this.node = node;
@@ -160,6 +278,10 @@ export const PeroImage = Node.create({
       xml: { default: null, rendered: false },
       target: { default: null, rendered: false },
       anchor: { default: null, rendered: false },
+      crop: { default: null, rendered: false },
+      rotate: { default: 0, rendered: false },
+      flipH: { default: false, rendered: false },
+      flipV: { default: false, rendered: false },
     };
   },
 
@@ -198,6 +320,13 @@ export const PeroImage = Node.create({
         const sel = state.selection;
         if (!sel.node || sel.node.type.name !== 'image') return false;
         if (dispatch) dispatch(tr.setNodeMarkup(sel.from, undefined, { ...sel.node.attrs, anchor }).setMeta('floatLayout$', { pending: sel.from }));
+        return true;
+      },
+      // поворот/отражение: { rotate, flipH, flipV } — заданные поля; сброс обрезки — crop: null с прежним размером всей картинки
+      setImageFormat: (fmt) => ({ state, tr, dispatch }) => {
+        const sel = state.selection;
+        if (!sel.node || sel.node.type.name !== 'image') return false;
+        if (dispatch) dispatch(tr.setNodeMarkup(sel.from, undefined, { ...sel.node.attrs, ...fmt }));
         return true;
       },
       setImageAlt: (alt) => ({ state, tr, dispatch }) => {

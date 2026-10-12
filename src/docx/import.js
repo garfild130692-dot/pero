@@ -1,5 +1,6 @@
 // Импорт .docx → JSON-документ редактора (формат ProseMirror/TipTap).
 // Собственный разбор OOXML: никаких сторонних конвертеров, только распаковка zip и XML.
+import { readPicFormat } from '../editor/picFormat.js';
 import { readAnchor } from '../editor/anchor.js';
 import { parseCols, wrapColumnSections } from '../editor/columns.js';
 import JSZip from 'jszip';
@@ -562,6 +563,7 @@ class Importer {
                 xml: runXml(n),
                 target: media.target,
                 anchor: pic.anchored ? readAnchor(runXml(n)) : null,
+                ...readPicFormat(runXml(n)),
               },
             });
           } else this.opaque(push, 'drawing', runXml(n));

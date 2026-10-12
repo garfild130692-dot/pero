@@ -1,4 +1,5 @@
 // Экспорт JSON-документа редактора → .docx (OOXML), собственная генерация.
+import { setPicFormatXml } from '../editor/picFormat.js';
 import { readAnchor, setAnchorXml } from '../editor/anchor.js';
 import { unwrapColumnSections } from '../editor/columns.js';
 import JSZip from 'jszip';
@@ -253,7 +254,7 @@ class Exporter {
     const cy = Math.max(1, Math.round((a.height || 96) * EMU_PER_PX));
     // рисунок из этого же пакета: исходная разметка (обтекание, обрезка, эффекты) с новым размером
     const rid = a.xml && (/r:embed="([^"]+)"/.exec(a.xml) || [])[1];
-    if (rid && this.relTargets && this.relTargets[rid] === a.target) return patchDrawing(withAnchor(a.xml, a.anchor), cx, cy, a.alt);
+    if (rid && this.relTargets && this.relTargets[rid] === a.target) return patchDrawing(setPicFormatXml(withAnchor(a.xml, a.anchor), a), cx, cy, a.alt);
     // новый рисунок (или пришёл из другого документа) — своя часть в word/media
     const data = dataUrlToBytes(a.src);
     if (!data) return '';
@@ -262,7 +263,7 @@ class Exporter {
     const img = { rid: `rIdPeroImg${n}`, path: `media/pero_image${n}.${ext}`, bytes: data.bytes, ext, mime: data.mime === 'image/jpeg' ? 'image/jpeg' : `image/${ext}` };
     this.images.push(img);
     const xml = drawingXml({ rid: img.rid, cx, cy, id: 90000 + n, name: `Рисунок ${n}`, alt: a.alt });
-    return a.anchor ? setAnchorXml(xml, a.anchor) : xml;
+    return setPicFormatXml(a.anchor ? setAnchorXml(xml, a.anchor) : xml, a);
   }
 
   inlines(content = []) {

@@ -6,10 +6,14 @@
 //     отступы от текста — distL/R/T/B;
 //   • «сверху и снизу» — float шириной во всю колонку (рядом с рисунком текста нет).
 // CSS обтекает только с одной стороны: рисунок посреди колонки, который Word обтекает с двух сторон, у нас — с одной.
+// Рисунок выше своей строки привязки (Word так хранит перетащенные рисунки; float туда не поднять): на строке нужной
+// высоты — виджет-заместитель (пустой float того же размера, даёт обтекание), сам рисунок — абсолютно на своём месте.
 // Поменялась раскладка — разбиение пересчитывается (событие pero-remeasure), не больше нескольких кругов подряд.
 import { Extension } from '@tiptap/core';
 import { NodeSelection, Plugin, PluginKey } from '@tiptap/pm/state';
+import { Decoration, DecorationSet } from '@tiptap/pm/view';
 import { pagePx, parseSectPr, sectionList } from './page.js';
+import { rotatedPad } from './picFormat.js';
 
 const BLOCKS = 'p, h1, h2, h3, h4, h5, h6';
 
@@ -56,6 +60,7 @@ export function placeFloats(view, pending = new Set()) {
   const sects = sectionList(doc).map((x) => pagePx(parseSectPr(x)));
   const rcs = getComputedStyle(root);
   let changed = false;
+  const proxies = [];
   for (const { n, pos } of items) {
     const dom = view.nodeDOM(pos);
     if (!dom || dom.nodeType !== 1) continue;
@@ -94,6 +99,8 @@ export function placeFloats(view, pending = new Set()) {
     const va = a.v.align;
     const y = va === 'center' ? (v0 + v1 - h) / 2 : va === 'bottom' ? v1 - h : va === 'top' ? v0 : v0 + a.v.off;
     const d = a.dist || { t: 0, b: 0, l: 0, r: 0 };
+    // повёрнутый рисунок: Word ставит на место рамку без поворота, а узел у нас шире на запас под габарит
+    const pad = rotatedPad(w, h, n.attrs.rotate);
     // для перетаскивания: место рисунка от колонки и от абзаца
     dom.dataset.relx = (x - colL).toFixed(2);
     dom.dataset.rely = (y - pTop).toFixed(2);
@@ -107,7 +114,7 @@ export function placeFloats(view, pending = new Set()) {
       if (!dom.classList.contains('pf-abs')) dom.classList.add('pf-abs');
       const op = dom.offsetParent || root;
       const o = op.getBoundingClientRect();
-      css = `position:absolute;left:${(x - X(o.left) - op.clientLeft).toFixed(1)}px;top:${(y - Y(o.top) - op.clientTop).toFixed(1)}px;z-index:${a.behind ? -1 : 3}`;
+      css = `position:absolute;left:${(x - pad.x - X(o.left) - op.clientLeft).toFixed(1)}px;top:${(y - pad.y - Y(o.top) - op.clientTop).toFixed(1)}px;z-index:${a.behind ? -1 : 3}`;
     } else {
       // float: статическое место — начало строки привязки (замер без сдвигов)
       if (dom.dataset.floatCss !== 'probe') { dom.style.cssText = 'float:left;margin:0'; dom.dataset.floatCss = 'probe'; }
@@ -116,23 +123,48 @@ export function placeFloats(view, pending = new Set()) {
       const ps = getComputedStyle(para);
       const contL = X(pRect.left) + parseFloat(ps.paddingLeft) + parseFloat(ps.borderLeftWidth || 0);
       const contR = X(pRect.right) - parseFloat(ps.paddingRight) - parseFloat(ps.borderRightWidth || 0);
-      const mt = Math.max(0, y - lineTop); // выше строки привязки float не поднять — у самой строки
-      // +1 px: строку, которая задевает рисунок на доли пикселя, Word не обтекает (строка 14,3 pt над рисунком со сдвигом 14,2 pt)
-      const inset = Math.max(0, mt - d.t + (mt > 0 ? 1 : 0));
-      const shape = `shape-outside:inset(${inset.toFixed(1)}px 0 0 0) margin-box`;
-      if (a.wrap === 'topBottom') {
-        css = `float:left;margin:${mt.toFixed(1)}px ${Math.max(0, contR - x - w).toFixed(1)}px ${d.b}px ${(x - contL).toFixed(1)}px;${shape}`;
-      } else if (x - colL < colR - x - w - 1) {
+      // float в строке с верхом lt: отступы сверху и по сторонам, shape-outside
+      const floatCss = (lt) => {
+        const mt = Math.max(0, y - pad.y - lt);
+        // +1 px: строку, которая задевает рисунок на доли пикселя, Word не обтекает (строка 14,3 pt над рисунком со сдвигом 14,2 pt)
+        const inset = Math.max(0, mt - d.t + (mt > 0 ? 1 : 0));
+        const shape = `shape-outside:inset(${inset.toFixed(1)}px 0 0 0) margin-box`;
+        if (a.wrap === 'topBottom') return `float:left;margin:${mt.toFixed(1)}px ${Math.max(0, contR - x - w - pad.x).toFixed(1)}px ${d.b}px ${(x - pad.x - contL).toFixed(1)}px;${shape}`;
         // текст — со стороны, где места больше; поровну (рисунок по центру) — слева, как начинает строки Word
-        css = `float:left;margin:${mt.toFixed(1)}px ${d.r}px ${d.b}px ${(x - contL).toFixed(1)}px;${shape}`;
-      } else {
-        css = `float:right;margin:${mt.toFixed(1)}px ${(contR - x - w).toFixed(1)}px ${d.b}px ${d.l}px;${shape}`;
-      }
+        if (x - colL < colR - x - w - 1) return `float:left;margin:${mt.toFixed(1)}px ${d.r}px ${d.b}px ${(x - pad.x - contL).toFixed(1)}px;${shape}`;
+        return `float:right;margin:${mt.toFixed(1)}px ${(contR - x - w - pad.x).toFixed(1)}px ${d.b}px ${d.l}px;${shape}`;
+      };
+      const hit = y - pad.y < lineTop - 2 ? view.posAtCoords({ left: pr.left + (colL + 2) * scale, top: pr.top + (y - pad.y + 2) * scale }) : null;
+      if (hit && hit.pos < pos) {
+        // выше строки привязки: заместитель на строке этой высоты, сам рисунок — абсолютно
+        let lt = y - pad.y;
+        try { lt = Y(view.coordsAtPos(hit.pos).top); } catch { /* верх строки — по высоте рисунка */ }
+        proxies.push({ pos: hit.pos, css: `${floatCss(lt)};width:${(w + 2 * pad.x).toFixed(1)}px;height:${(h + 2 * pad.y).toFixed(1)}px` });
+        const op = dom.offsetParent || root;
+        const o = op.getBoundingClientRect();
+        css = `position:absolute;left:${(x - pad.x - X(o.left) - op.clientLeft).toFixed(1)}px;top:${(y - pad.y - Y(o.top) - op.clientTop).toFixed(1)}px`;
+      } else css = floatCss(lineTop);
     }
     if (setStyle(dom, css)) changed = true;
   }
+  // заместители поменялись — новый набор виджетов (одна транзакция с метаданными)
+  const st = floatLayoutKey.getState(view.state);
+  const sig = JSON.stringify(proxies);
+  if (sig !== JSON.stringify(st.proxies)) {
+    view.dispatch(view.state.tr.setMeta(floatLayoutKey, { proxies }).setMeta('addToHistory', false));
+    changed = true;
+  }
   return changed;
 }
+
+const proxyDom = (css) => () => {
+  const el = document.createElement('span');
+  el.className = 'pero-float-proxy';
+  el.contentEditable = 'false';
+  el.style.cssText = css;
+  return el;
+};
+const proxySet = (doc, list) => DecorationSet.create(doc, list.map((p) => Decoration.widget(p.pos, proxyDom(p.css), { side: -1, key: `fp:${p.css}`, ignoreSelection: true, marks: [] })));
 
 // Перенести рисунок к абзацу, который на высоте y (того же листа): float не поднимается выше своей строки привязки.
 // Возвращает true, если документ изменён.
@@ -168,17 +200,25 @@ export const FloatLayout = Extension.create({
   addProseMirrorPlugins() {
     return [new Plugin({
       key: floatLayoutKey,
-      // позиции рисунков, ждущих перепривязки (meta { pending: pos } — поставил пользователь; { done } — перенесён)
+      // pending — позиции рисунков, ждущих перепривязки (meta { pending: pos } — поставил пользователь; { done } — всё);
+      // proxies — заместители рисунков, стоящих выше строки привязки ({ pos, css }), deco — их виджеты
       state: {
-        init: () => new Set(),
-        apply(tr, set) {
+        init: () => ({ pending: new Set(), proxies: [], deco: DecorationSet.empty }),
+        apply(tr, st) {
           const meta = tr.getMeta(floatLayoutKey);
-          let next = tr.docChanged ? new Set([...set].map((p) => tr.mapping.map(p))) : set;
-          if (meta && meta.pending != null) next = new Set([...next, meta.pending]);
-          if (meta && meta.done != null) next = new Set([]);
-          return next;
+          let { pending, proxies, deco } = st;
+          if (tr.docChanged) {
+            pending = new Set([...pending].map((p) => tr.mapping.map(p)));
+            deco = deco.map(tr.mapping, tr.doc);
+            proxies = deco.find().map((d) => ({ pos: d.from, css: d.spec.key.slice(3) }));
+          }
+          if (meta && meta.pending != null) pending = new Set([...pending, meta.pending]);
+          if (meta && meta.done != null) pending = new Set();
+          if (meta && meta.proxies) { proxies = meta.proxies; deco = proxySet(tr.doc, proxies); }
+          return pending === st.pending && proxies === st.proxies && deco === st.deco ? st : { pending, proxies, deco };
         },
       },
+      props: { decorations: (state) => floatLayoutKey.getState(state).deco },
       view(view) {
         let timer = 0;
         let rounds = 0; // кругов «рисунки сдвинулись → новый замер» подряд
@@ -187,7 +227,7 @@ export const FloatLayout = Extension.create({
           timer = setTimeout(() => {
             if (view.isDestroyed) return;
             if (typeof matchMedia === 'function' && matchMedia('print').matches) return;
-            const pending = floatLayoutKey.getState(view.state);
+            const { pending } = floatLayoutKey.getState(view.state);
             const moved = placeFloats(view, pending);
             if (moved === 'moved') return; // документ изменён — разбиение и новый круг придут сами
             if (pending.size) view.dispatch(view.state.tr.setMeta(floatLayoutKey, { done: -1 }).setMeta('addToHistory', false));
