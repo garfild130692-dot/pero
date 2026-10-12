@@ -28,7 +28,7 @@ const resolve = (dir, target) => {
 
 // Ширина столбца ↔ px по формулам спецификации (ширина цифры Calibri 11 — 7 px; в файле ширина с полями)
 export const widthToPx = (w) => Math.trunc(((256 * w + Math.trunc(128 / 7)) / 256) * 7);
-const pxToWidth = (px) => Math.trunc((px / 7) * 256) / 256;
+export const pxToWidth = (px) => Math.trunc((px / 7) * 256) / 256;
 
 // ---------- Цвета ----------
 // Стандартная палитра индексных цветов Excel (0–63)

@@ -28,7 +28,7 @@ export const errText = (code) => ERR_RU[code] || code;
 
 // Функции, появившиеся после Excel 2007: в файле пишутся с префиксом _xlfn. (ФИЛЬТР и СОРТ — _xlfn._xlws.),
 // иначе Excel покажет #ИМЯ?. В модели формулы хранятся без префиксов.
-const FUTURE = new Set(`ACOT ACOTH AGGREGATE ARABIC ARRAYTOTEXT BASE BETA.DIST BETA.INV BINOM.DIST BINOM.DIST.RANGE BINOM.INV BITAND
+export const FUTURE = new Set(`ACOT ACOTH AGGREGATE ARABIC ARRAYTOTEXT BASE BETA.DIST BETA.INV BINOM.DIST BINOM.DIST.RANGE BINOM.INV BITAND
   BITLSHIFT BITOR BITRSHIFT BITXOR BYCOL BYROW CEILING.MATH CEILING.PRECISE CHISQ.DIST CHISQ.DIST.RT CHISQ.INV CHISQ.INV.RT CHISQ.TEST
   CHOOSECOLS CHOOSEROWS COMBINA CONCAT CONFIDENCE.NORM CONFIDENCE.T COT COTH COVARIANCE.P COVARIANCE.S CSC CSCH DAYS DECIMAL DROP
   ECMA.CEILING ENCODEURL ERF.PRECISE ERFC.PRECISE EXPAND EXPON.DIST F.DIST F.DIST.RT F.INV F.INV.RT F.TEST FIELDVALUE FILTER FILTERXML
@@ -40,7 +40,7 @@ const FUTURE = new Set(`ACOT ACOTH AGGREGATE ARABIC ARRAYTOTEXT BASE BETA.DIST B
   RRI SCAN SEC SECH SEQUENCE SHEET SHEETS SKEW.P SORT SORTBY STDEV.P STDEV.S SWITCH T.DIST T.DIST.2T T.DIST.RT T.INV T.INV.2T T.TEST
   TAKE TEXTAFTER TEXTBEFORE TEXTJOIN TEXTSPLIT TOCOL TOROW UNICHAR UNICODE UNIQUE VALUETOTEXT VAR.P VAR.S VSTACK WEBSERVICE
   WEIBULL.DIST WORKDAY.INTL WRAPCOLS WRAPROWS XLOOKUP XMATCH XOR`.split(/\s+/));
-const XLWS = new Set(['FILTER', 'SORT']);
+export const XLWS = new Set(['FILTER', 'SORT']);
 export const err = (code) => ({ error: code });
 
 // ---------- Русские имена функций ----------
@@ -212,12 +212,14 @@ export function parse(src) {
         if (peek() && peek().type === ':' && toks[p + 1] && toks[p + 1].type === 'ref') {
           next();
           const b = next();
-          return { t: 'range', sheet: t.sheet, sheet2: t.sheet2, r1: Math.min(t.r, b.r), c1: Math.min(t.c, b.c), r2: Math.max(t.r, b.r), c2: Math.max(t.c, b.c) };
+          // abs — признаки «$» концов диапазона (нужны записи формулы в .xls): [строка 1, столбец 1, строка 2, столбец 2]
+          const [ra, rb] = t.r <= b.r ? [t, b] : [b, t]; const [ca, cb] = t.c <= b.c ? [t, b] : [b, t];
+          return { t: 'range', sheet: t.sheet, sheet2: t.sheet2, r1: Math.min(t.r, b.r), c1: Math.min(t.c, b.c), r2: Math.max(t.r, b.r), c2: Math.max(t.c, b.c), abs: [!!ra.absR, !!ca.absC, !!rb.absR, !!cb.absC] };
         }
-        return t.sheet2 ? { t: 'range', sheet: t.sheet, sheet2: t.sheet2, r1: t.r, c1: t.c, r2: t.r, c2: t.c } : { t: 'ref', sheet: t.sheet, r: t.r, c: t.c };
+        return t.sheet2 ? { t: 'range', sheet: t.sheet, sheet2: t.sheet2, r1: t.r, c1: t.c, r2: t.r, c2: t.c, abs: [!!t.absR, !!t.absC, !!t.absR, !!t.absC] } : { t: 'ref', sheet: t.sheet, r: t.r, c: t.c, abs: [!!t.absR, !!t.absC] };
       }
-      case 'cols': return { t: 'range', sheet: t.sheet, sheet2: t.sheet2, r1: 0, r2: MAX_ROWS - 1, c1: t.c1, c2: t.c2, whole: 'col' };
-      case 'rows': return { t: 'range', sheet: t.sheet, sheet2: t.sheet2, r1: t.r1, r2: t.r2, c1: 0, c2: MAX_COLS - 1, whole: 'row' };
+      case 'cols': return { t: 'range', sheet: t.sheet, sheet2: t.sheet2, r1: 0, r2: MAX_ROWS - 1, c1: t.c1, c2: t.c2, whole: 'col', abs: [true, !!t.abs1, true, !!t.abs2] };
+      case 'rows': return { t: 'range', sheet: t.sheet, sheet2: t.sheet2, r1: t.r1, r2: t.r2, c1: 0, c2: MAX_COLS - 1, whole: 'row', abs: [!!t.abs1, true, !!t.abs2, true] };
       case 'func': {
         expect('(');
         // ANCHORARRAY(A1) — так в файле записана ссылка на «разлив» A1#
