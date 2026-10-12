@@ -9,7 +9,7 @@ import {
 } from './editor/design.js';
 import { parseSectPr, sectionFrame, sectionList } from './editor/page.js';
 import { pageInfo, pageSects } from './editor/pagination.js';
-import { pageTopOf } from './VRuler.jsx';
+import { pageTops } from './VRuler.jsx';
 
 const PX = 4 / 3; // px в pt
 
@@ -224,10 +224,12 @@ export function PageDecor({ editor }) {
   });
   const ref = useRef(null);
   const [tops, setTops] = useState([0]);
+  // листы меряются, только если есть что рисовать (подложка или рамка) — на 200+ листах это заметно
+  const need = !!s.wm || s.list.some((x) => parsePgBorders(x));
   const place = useCallback(() => {
-    const page = ref.current && ref.current.closest('.page');
-    if (page) setTops(Array.from({ length: s.total }, (_, i) => pageTopOf(page, i + 1)));
-  }, [s.total]);
+    const page = need && ref.current && ref.current.closest('.page');
+    if (page) setTops(pageTops(page).slice(0, s.total));
+  }, [s.total, need]);
   useLayoutEffect(place, [place, s.list]);
   useEffect(() => {
     document.addEventListener('pero-paginated', place);

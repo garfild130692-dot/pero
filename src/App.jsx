@@ -166,13 +166,27 @@ function LinkDialog({ editor, onClose }) {
   );
 }
 
+// Слова и знаки документа — по блокам верхнего уровня с кешем по узлу: после правки считается только изменённый блок
+// (весь текст 200+ страниц на каждое нажатие — ~0,1 с)
+const wordCache = new WeakMap();
+function countWords(doc) {
+  let words = 0; let chars = 0;
+  doc.forEach((n) => {
+    let c = wordCache.get(n);
+    if (!c) {
+      const t = n.textBetween(0, n.content.size, ' ', ' ');
+      c = { words: (t.match(/[\p{L}\p{N}][\p{L}\p{N}'’-]*/gu) || []).length, chars: t.replace(/\s/g, '').length };
+      wordCache.set(n, c);
+    }
+    words += c.words; chars += c.chars;
+  });
+  return { words, chars };
+}
+
 function StatusBar({ editor, warnings, preserved, zoom, setZoom, viewMode, setViewMode, onZoomDialog }) {
   const { words, chars, page, total, track } = useEditorState({
     editor,
-    selector: ({ editor: e }) => {
-      const t = e.state.doc.textBetween(0, e.state.doc.content.size, ' ', ' ');
-      return { words: (t.match(/[\p{L}\p{N}][\p{L}\p{N}'’-]*/gu) || []).length, chars: t.replace(/\s/g, '').length, ...pageInfo(e.state), track: trackInfo(e.state) };
-    },
+    selector: ({ editor: e }) => ({ ...countWords(e.state.doc), ...pageInfo(e.state), track: trackInfo(e.state) }),
   });
   const warnList = Object.entries(warnings);
   // что Перо показывает значком и сохраняет без изменений (без служебных меток вроде закладок)

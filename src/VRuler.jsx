@@ -3,7 +3,9 @@
 // Стоит в слое листа (.page) на высоте текущего листа: его верх берётся из полос между листами (pagination.js).
 import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useEditorState } from '@tiptap/react';
-import { pageInfo } from './editor/pagination.js';
+import { pageInfo, pageTops } from './editor/pagination.js';
+
+export { pageTops };
 import { parseSectPr, sectionAt } from './editor/page.js';
 import { PT_PER_CM, fmtNum, ptToCm } from './editor/paragraph.js';
 import { setPage } from './PageControls.jsx';
@@ -11,14 +13,10 @@ import { setPage } from './PageControls.jsx';
 const SNAP = PT_PER_CM / 4;
 const MIN_TEXT = PT_PER_CM; // между полями — не меньше 1 см текста
 
-// Верх n-го листа в координатах .page (px без масштаба): лист 1 — 0, дальше — после нижнего поля и промежутка полосы
+// Верх n-го листа (см. pageTops)
 export function pageTopOf(pageEl, n) {
   if (!pageEl || n <= 1) return 0;
-  const bands = [...pageEl.querySelectorAll(':scope > .pero-bands > .pero-page-band')].sort((a, b) => a.offsetTop - b.offsetTop);
-  const b = bands[n - 2];
-  if (!b) return 0;
-  const [foot, gap] = b.children;
-  return b.offsetTop + (foot ? foot.offsetHeight : 0) + (gap ? gap.offsetHeight : 0);
+  return pageTops(pageEl)[n - 1] ?? 0;
 }
 
 // Деления: каждые 0,25 см, цифры — каждый сантиметр от верхнего поля (вверх и вниз, как в Word)

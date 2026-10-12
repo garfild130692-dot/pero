@@ -15,6 +15,7 @@
 import { Extension } from '@tiptap/core';
 import { Plugin, PluginKey } from '@tiptap/pm/state';
 import { Decoration, DecorationSet } from '@tiptap/pm/view';
+import { scratchRange } from './domRange.js';
 
 export const colLayoutKey = new PluginKey('colLayout');
 
@@ -102,7 +103,7 @@ function containerLines(view, dom, scale, geo) {
       for (let c = n.firstChild; c; c = c.nextSibling) {
         if (c.nodeType === 3) {
           if (!c.length) continue;
-          const rg = document.createRange();
+          const rg = scratchRange();
           rg.selectNodeContents(c);
           for (const x of rg.getClientRects()) if (x.width > 0 || x.height > 0) rects.push({ ...rel(x), bottom: (x.bottom - cr.top) / scale, src: c });
         } else if (c.nodeType === 1) {
@@ -153,7 +154,7 @@ function lineStart(view, line, key, cr, scale) {
   const src = line.src;
   try {
     if (src.nodeType !== 3) return view.posAtDOM(src.parentNode, Array.prototype.indexOf.call(src.parentNode.childNodes, src));
-    const rg = document.createRange();
+    const rg = scratchRange();
     const want = key({ top: line.top, left: line.x }) - 1;
     const kAt = (i) => {
       rg.setStart(src, i); rg.setEnd(src, i + 1);

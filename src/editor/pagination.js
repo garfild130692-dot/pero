@@ -25,8 +25,18 @@ import { footnoteRefs } from './footnotes.js';
 import { sectionType } from './breaks.js';
 import { applyColumnsStyle, columnsSectPr, parseCols } from './columns.js';
 import { applyMode, clearColSpacers, colLayoutKey, layoutBalance, layoutRows, placeColumnRules } from './colLayout.js';
+import { scratchRange } from './domRange.js';
 
 export const paginationKey = new PluginKey('pagination');
+
+// Верх всех листов в координатах .page (px без масштаба): лист 1 — 0, дальше — после нижнего поля и промежутка полосы.
+// offsetTop читается один раз на полосу (в сравнении сортировки — тысячи чтений на 200+ листах)
+export function pageTops(pageEl) {
+  if (!pageEl) return [0];
+  const bands = [...pageEl.querySelectorAll(':scope > .pero-bands > .pero-page-band')].map((b) => ({ b, y: b.offsetTop })).sort((a, b) => a.y - b.y);
+  return [0, ...bands.map(({ b, y }) => { const [foot, gap] = b.children; return y + (foot ? foot.offsetHeight : 0) + (gap ? gap.offsetHeight : 0); })];
+}
+
 export const PAGE_GAP = 18; // px между листами на экране
 
 const LIST_TYPES = ['bulletList', 'orderedList'];
@@ -106,7 +116,7 @@ export function textLines(dom, rootTop, scale) {
     for (let c = n.firstChild; c; c = c.nextSibling) {
       if (c.nodeType === 3) {
         if (!c.length) continue;
-        const r = document.createRange();
+        const r = scratchRange();
         r.selectNodeContents(c);
         for (const x of r.getClientRects()) if (x.width > 0 || x.height > 0) rects.push({ top: x.top, bottom: x.bottom, left: x.left, height: x.height, src: c });
       } else if (c.nodeType === 1) {
@@ -253,7 +263,7 @@ export function posAtLine(view, line) {
   try {
     if (src && src.nodeType === 3) {
       // первый символ текстового узла, попавший в эту строку (верх символа монотонно растёт со смещением)
-      const r = document.createRange();
+      const r = scratchRange();
       const topOf = (i) => { r.setStart(src, i); r.setEnd(src, i + 1); const x = r.getClientRects()[0]; return x ? x.top : -Infinity; };
       let lo = 0; let hi = src.length - 1;
       while (lo < hi) { const mid = (lo + hi) >> 1; if (topOf(mid) >= line.gTop - 1) hi = mid; else lo = mid + 1; }
@@ -450,6 +460,14 @@ function paginate(view, units, secs, rootTop, scale, notes = [], plans = new Map
   return { breaks, pages, trailing: Math.max(0, pageTop + contentOf(pageSect) - lastBottom) };
 }
 
+// Разрыв для сравнения замеров: позиции (их сдвигает правка до разрыва), заполнение, текст копий шапки таблицы
+const rawBreak = (b) => ({
+  kind: b.kind, pos: b.pos, fill: Math.round(b.fill), items: b.items ? b.items.map((x) => ({ pos: x.pos, fill: Math.round(x.fill) })) : null,
+  head: b.headers ? (Array.isArray(b.headers) ? b.headers.map((tr) => tr.textContent).join('\u0001') : 1) : 0,
+});
+const breaksSig = (raw) => raw.map((b) => `${b.kind}:${b.pos}:${b.fill}:${(b.items || []).map((x) => `${x.pos}/${x.fill}`).join(',')}:${b.head}`).join('|');
+const mapRaw = (raw, mapping) => raw.map((b) => ({ ...b, pos: mapping.map(b.pos), items: b.items && b.items.map((x) => ({ ...x, pos: mapping.map(x.pos) })) }));
+
 // Режим «Черновик» (вкладка «Вид»): текст сплошной лентой, без листов, колонтитулов и сносок внизу листов
 const draftViews = new WeakSet();
 export function setDraft(view, on) {
@@ -479,10 +497,12 @@ function measure(view) {
   const hf = doc.attrs.hf || EMPTY_HF;
   const prev = paginationKey.getState(view.state);
 
-  // 1. снять распорки (прокрутку запоминаем: документ временно короче)
+  // 1. спрятать распорки (прокрутку запоминаем: документ временно короче). Не транзакцией, а классом: снять и снова
+  // поставить сотни виджетов — две полные сверки узлов ProseMirror (~0,1 с на 200+ листах), а если разбиение не
+  // изменилось, распорки остаются те же самые
   const scroller = view.dom.closest('.workspace') || document.scrollingElement;
   const scrollTop = scroller ? scroller.scrollTop : 0;
-  if (prev.deco !== DecorationSet.empty) view.dispatch(view.state.tr.setMeta(paginationKey, { ...prev, deco: DecorationSet.empty }).setMeta('addToHistory', false));
+  view.dom.classList.add('pero-measuring');
 
   // разделы с колонками: неизменённые с прошлого замера (тот же узел и sectPr) остаются как разложены — план проверит
   // разбиение; изменённые — распорки долой, естественный вид (выравненные колонки), замер высоты
@@ -548,12 +568,15 @@ function measure(view) {
     return hfFor(hf, kind, { page: n, firstOfSection: p.first, sectTitlePg: titlePgs[p.sect] ?? titlePgs[titlePgs.length - 1] });
   };
   const chrome = { firstHeader: hfOf('header', 1), lastFooter: hfOf('footer', total), hfOf };
-  const sig = breaks.map((b) => `${b.kind}:${b.pos}:${Math.round(b.fill)}:${(b.items || []).map((x) => `${x.pos}/${Math.round(x.fill)}`).join(',')}:${(b.headers ? 1 : 0)}`).join('|');
-  const key = JSON.stringify([sig, Math.round(trailing), total, frame, hf, pages]);
+  const keyRest = JSON.stringify([Math.round(trailing), total, frame, hf, pages]);
+  const raw = breaks.map(rawBreak);
+  const key = breaksSig(raw) + keyRest;
 
   // 3. поставить распорки (те же — если ничего не изменилось)
   let deco = prev.deco;
-  if (prev.key !== key || prev.deco === DecorationSet.empty) {
+  view.dom.classList.remove('pero-measuring');
+  const same = prev.key === key && prev.deco !== DecorationSet.empty;
+  if (!same) {
     const decos = [];
     breaks.forEach((b, i) => {
       const band = bandOf(b);
@@ -580,7 +603,7 @@ function measure(view) {
     deco = DecorationSet.create(view.state.doc, decos);
   }
   view.dispatch(view.state.tr.setMeta(paginationKey, {
-    key, deco, breaks: pageStarts(breaks), total, sects: pages.map((p) => p.sect), chrome: { firstHeader: chrome.firstHeader, lastFooter: chrome.lastFooter },
+    key, keyRest, raw, deco, breaks: pageStarts(breaks), total, sects: pages.map((p) => p.sect), chrome: { firstHeader: chrome.firstHeader, lastFooter: chrome.lastFooter },
   }).setMeta('addToHistory', false));
   if (scroller && scroller.scrollTop !== scrollTop) scroller.scrollTop = scrollTop;
   placeBands(view, frame, breaks.map((b) => ({ from: b.from, to: b.sect ?? b.from })), chrome.hfOf, total);
@@ -884,7 +907,9 @@ export const Pagination = Extension.create({
           // распорки удалены вместе с текстом (замена всего документа тем же по раскладке, отмена) — следующий замер
           // не должен счесть их «теми же» по ключу
           const lost = deco.find().length !== old.deco.find().length;
-          return { ...old, deco, key: lost ? null : old.key, breaks: old.breaks.map((p) => tr.mapping.map(p)) };
+          // ключ — по сдвинутым позициям: если после правки листы режутся там же, распорки не пересоздаются
+          const raw = old.raw && mapRaw(old.raw, tr.mapping);
+          return { ...old, deco, raw, key: lost || !raw ? null : breaksSig(raw) + old.keyRest, breaks: old.breaks.map((p) => tr.mapping.map(p)) };
         },
       },
       props: {
@@ -904,7 +929,7 @@ export const Pagination = Extension.create({
             if (view.isDestroyed) return;
             measuring = true;
             const t0 = performance.now();
-            try { measure(view); } finally { measuring = false; }
+            try { measure(view); } finally { measuring = false; view.dom.classList.remove('pero-measuring'); }
             if (import.meta.env && import.meta.env.DEV) window.__peroMeasureMs = Math.round(performance.now() - t0); // отладка: время замера
             // самопроверка: раскладка могла сдвинуться позже (шрифты, коэффициент строки документа) — замерить заново
             clearTimeout(verify);

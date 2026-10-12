@@ -14,6 +14,7 @@
 //  • bar — только вертикальная черта, позицией для символа табуляции не является.
 import { Extension, Node, mergeAttributes } from '@tiptap/core';
 import { Plugin, PluginKey } from '@tiptap/pm/state';
+import { scratchRange } from './domRange.js';
 
 const TYPES = ['paragraph', 'heading'];
 export const DEFAULT_TAB = 35.4; // 708 твипов = 1,25 см
@@ -95,7 +96,7 @@ const PX_PER_PT = 4 / 3;
 
 // Ширина текста от after до before (или до конца абзаца), только первая строка
 function segmentWidth(p, after, before, scale) {
-  const r = document.createRange();
+  const r = scratchRange(1);
   r.setStartAfter(after);
   if (before) r.setEndBefore(before); else r.setEnd(p, p.childNodes.length);
   // пустые прямоугольники (значки полей, разделители ProseMirror у inline-узлов) стоят на другой высоте — не в счёт
@@ -108,7 +109,7 @@ function segmentWidth(p, after, before, scale) {
 }
 // Ширина текста до десятичного разделителя (для decimal)
 function decimalWidth(p, after, before, scale) {
-  const r = document.createRange();
+  const r = scratchRange(1);
   r.setStartAfter(after);
   if (before) r.setEndBefore(before); else r.setEnd(p, p.childNodes.length);
   const text = r.toString();
@@ -117,7 +118,7 @@ function decimalWidth(p, after, before, scale) {
   // ищем текстовый узел и смещение разделителя
   let left = m.index + 1;
   const walker = document.createTreeWalker(r.commonAncestorContainer, NodeFilter.SHOW_TEXT);
-  const start = document.createRange();
+  const start = scratchRange(2);
   start.setStartAfter(after);
   for (let n = walker.nextNode(); n; n = walker.nextNode()) {
     if (!r.intersectsNode(n)) continue;

@@ -13,22 +13,13 @@ import { Extension } from '@tiptap/core';
 import { NodeSelection, Plugin, PluginKey } from '@tiptap/pm/state';
 import { Decoration, DecorationSet } from '@tiptap/pm/view';
 import { pagePx, parseSectPr, sectionList } from './page.js';
+import { pageTops } from './pagination.js';
 import { rotatedPad } from './picFormat.js';
 import { shapeOf } from './shapes.js';
 
+
 const BLOCKS = 'p, h1, h2, h3, h4, h5, h6';
 
-// Верх листов (px без масштаба от верха .page) — по полосам разбиения
-function pageTops(pageEl) {
-  const tops = [0];
-  if (!pageEl) return tops;
-  const bands = [...pageEl.querySelectorAll(':scope > .pero-bands > .pero-page-band')].sort((a, b) => a.offsetTop - b.offsetTop);
-  for (const b of bands) {
-    const [foot, gap] = b.children;
-    tops.push(b.offsetTop + (foot ? foot.offsetHeight : 0) + (gap ? gap.offsetHeight : 0));
-  }
-  return tops;
-}
 
 // Раздел позиции (номер в sectionList)
 function sectionIndex(doc, pos) {

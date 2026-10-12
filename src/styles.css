@@ -1023,3 +1023,7 @@ p[data-section-type="nextPage"]::after { content: 'Разрыв раздела (
 .pero-shape-svg { position: absolute; left: 0; top: 0; overflow: visible; }
 .pero-shape-text { position: absolute; inset: 0; display: flex; flex-direction: column; overflow: hidden; box-sizing: border-box; white-space: pre-wrap; line-height: 1.08; text-align: left; text-indent: 0; }
 .pero-shape-text > div { margin: 0; }
+
+/* Замер разбиения (pagination.js): распорки спрятаны на время замера чистой раскладки */
+.ProseMirror.pero-measuring .pero-page-spacer, .ProseMirror.pero-measuring .pero-line-spacer, .ProseMirror.pero-measuring .pero-row-spacer,
+.ProseMirror.pero-measuring .pero-header-copy, .ProseMirror.pero-measuring .pero-page-fill { display: none !important; }
