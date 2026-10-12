@@ -406,6 +406,30 @@ export function approxIndex(list, val, desc = false) {
   }
   return res;
 }
+// Точный поиск по запомненному диапазону (rangeEntry): индекс «значение → первая строка» по столбцу, с тем же сравнением,
+// что compare (текст без регистра, числа до 15 значащих цифр, пустая = 0 и ""). null — индексом не найти (подстановочные
+// знаки, пустое искомое, нет запомненного диапазона) — тогда обычный перебор.
+const exactKey = (v) => (typeof v === 'number' ? (Number.isFinite(v) ? `n${v.toPrecision(15)}` : null) : typeof v === 'string' ? `s${v.toLowerCase()}` : typeof v === 'boolean' ? `b${+v}` : null);
+function indexedFind(table, col, val, byRow = false) {
+  const entry = table && table.rangeEntry;
+  if (!entry || val == null || (typeof val === 'string' && /[*?]/.test(val))) return null;
+  const k = exactKey(val);
+  if (k == null) return null;
+  const ik = `${byRow ? 'r' : 'c'}${col}`;
+  let idx = entry.idx.get(ik);
+  if (!idx) {
+    idx = new Map();
+    const a = entry.arr;
+    const n = byRow ? (a[0] ? a[0].length : 0) : a.length;
+    for (let i = 0; i < n; i++) {
+      const v = byRow ? a[col][i] : a[i][col];
+      const keys = v == null ? ['n0.00000000000000', 's'] : [exactKey(v)];
+      for (const x of keys) if (x != null && !idx.has(x)) idx.set(x, i);
+    }
+    entry.idx.set(ik, idx);
+  }
+  return idx.has(k) ? idx.get(k) : -1;
+}
 // Точное совпадение для ВПР/ПОИСКПОЗ/ГПР: текст — без регистра и с подстановочными знаками
 function exactMatcher(val) {
   const re = typeof val === 'string' ? wildcard(val) : null;
@@ -610,6 +634,8 @@ const FN = {
     if (isErr(c) || c < 1 || c > table[0].length) return err(ERR.REF);
     const exact = approx === false || approx === 0;
     if (exact) {
+      const at = indexedFind(table, 0, val);
+      if (at != null) return at >= 0 ? (table[at][c - 1] ?? 0) : err(ERR.NA);
       const hit = exactMatcher(val);
       const row = table.find((r) => hit(r[0]));
       return row ? (row[c - 1] ?? 0) : err(ERR.NA);
@@ -621,7 +647,12 @@ const FN = {
     const list = flat(range);
     const t = type == null ? 1 : toNum(type);
     if (isErr(val)) return val;
-    if (t === 0) { const hit = exactMatcher(val); const i = list.findIndex(hit); return i < 0 ? err(ERR.NA) : i + 1; }
+    if (t === 0) {
+      // столбец или строка запомненного диапазона — по индексу
+      const one = Array.isArray(range) && range.rangeEntry && (range[0].length === 1 ? indexedFind(range, 0, val) : range.length === 1 ? indexedFind(range, 0, val, true) : null);
+      if (one != null) return one < 0 ? err(ERR.NA) : one + 1;
+      const hit = exactMatcher(val); const i = list.findIndex(hit); return i < 0 ? err(ERR.NA) : i + 1;
+    }
     const found = approxIndex(list, val, t < 0);
     return found < 0 ? err(ERR.NA) : found + 1;
   },
@@ -784,6 +815,17 @@ export function evaluate(node, ctx) {
         if ((r2 - node.r1 + 1) * (c2 - node.c1 + 1) > 2_000_000) return err(ERR.NUM);
         // зависимость — весь диапазон (у целых столбцов — до конца листа), ячейки по отдельности не записываются
         if (ctx.depRange) ctx.depRange(sh, node.r1, node.c1, node.r2, node.c2);
+        // уже собранный в этом проходе диапазон — копия строк (функции не испортят запомненное)
+        const ck = sheets.length === 1 && ctx.rangeCache && (r2 - node.r1 + 1) * (c2 - node.c1 + 1) >= 16 ? `${String(sh).toLowerCase()}|${node.r1}|${node.c1}|${r2}|${c2}` : null;
+        const hit = ck && ctx.rangeCache.get(ck);
+        if (hit) {
+          if (ctx.depDone) ctx.depDone();
+          const copy = hit.arr.map((row) => row.slice());
+          copy.rangeEntry = hit;
+          if (node.whole) copy.full = { rows: node.r2 - node.r1 + 1, cols: node.c2 - node.c1 + 1 };
+          return copy;
+        }
+        const taint0 = ck ? ctx.rangeTaint() : 0;
         try {
           for (let r = node.r1; r <= r2; r++) {
             const row = [];
@@ -791,6 +833,11 @@ export function evaluate(node, ctx) {
             out.push(row);
           }
         } finally { if (ctx.depDone) ctx.depDone(); }
+        if (ck && ctx.rangeTaint() === taint0) {
+          const entry = { arr: out.map((row) => row.slice()), idx: new Map() };
+          ctx.rangeCache.set(ck, entry);
+          out.rangeEntry = entry;
+        }
       }
       if (node.whole) out.full = { rows: (node.r2 - node.r1 + 1) * sheets.length, cols: node.c2 - node.c1 + 1 };
       return out;
@@ -954,7 +1001,18 @@ export function canonical(src) {
   return out.replace(/ANCHORARRAY\(((?:(?:'(?:[^']|'')+'|[^()'!,]+)!)?\$?[A-Za-z]{1,3}\$?\d+)\)/g, '$1#');
 }
 // Хранимая формула → запись в файл: префиксы _xlfn. у функций новее Excel 2007
+// Быстрая проверка: в формуле нет ни «разлива» (#), ни вызова функции из FUTURE / LET / LAMBDA — она пишется как есть
+// (разбор на лексемы каждой из 400 тыс. формул книги — секунды при сохранении)
+const CALL = /([A-Za-z_][\w.]*)\s*\(/g;
+function plainForFile(src) {
+  if (src.includes('#')) return false;
+  CALL.lastIndex = 0;
+  let m;
+  while ((m = CALL.exec(src))) { const n = m[1].toUpperCase(); if (FUTURE.has(n) || n === 'LET' || n === 'LAMBDA') return false; }
+  return true;
+}
 export function fileFormula(src) {
+  if (plainForFile(src)) return src;
   const toks = tokenize(src);
   // имена параметров LET (нечётные аргументы, кроме последнего) — в файле с префиксом _xlpm.
   const params = new Set();

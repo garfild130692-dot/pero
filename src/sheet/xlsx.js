@@ -1,5 +1,6 @@
 // Импорт/экспорт .xlsx — собственный код (JSZip + xmldom), как и для .docx.
 import JSZip from 'jszip';
+import { precompress } from '../docx/zipBytes.js';
 import { DOMParser, XMLSerializer } from '@xmldom/xmldom';
 import { addr, colIndex, key, MAX_COLS, parseRange, rangeName, unkey } from './address.js';
 import { canonical, fileFormula, isErr, offsetFormula, shiftFormula } from './formula.js';
@@ -9,6 +10,7 @@ import { parsePrintArea, parsePrintTitles, printAreaText, printTitlesText } from
 import { filterColumnXml, readFilterColumn } from './filter.js';
 import { cfSignature, cfXml, dxfXml, readCf, readDxf } from './cf.js';
 import { dvSignature, dvXml, readDv } from './dv.js';
+import { parseSheet } from './sheetScan.js';
 
 const NS = 'http://schemas.openxmlformats.org/spreadsheetml/2006/main';
 const R = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships';
@@ -182,31 +184,48 @@ async function readBook(zip) {
 }
 
 // Ячейки листа: on.cell(r, c, cell, el, shared) — для каждой непустой <c>; on.row(r, el) — для каждой <row>
+// Ячейка из файла: скрытое свойство с исходным адресом (r * 16384 + c). Неизменённая ячейка — тот же объект на том же
+// месте: при сохранении поверх исходного пакета пишется исходной разметкой без разбора и сравнения (копия {...cell}
+// свойство не переносит — изменённая или перенесённая ячейка пишется заново). Общие формулы и формулы массива не
+// метятся: их разметка зависит от соседей.
+const SRC = Symbol('pero-src');
+
+// Строки листа: из сканера (parseSheet, sheetScan.js) или из DOM — в одном виде { el, cells: [{ el, v, f, is }] }
+function sheetRows(root) {
+  if (root.__sheetData) return root.__sheetData;
+  return kids(kid(root, 'sheetData'), 'row').map((row) => ({
+    el: row,
+    cells: kids(row, 'c').map((c) => {
+      const v = kid(c, 'v'); const f = kid(c, 'f'); const is = kid(c, 'is');
+      const ts = is ? kids(is, 't').map((x) => x.textContent) : [];
+      return { el: c, v: v ? v.textContent : null, f: f ? { el: f, text: f.textContent } : null, is: is ? { direct: ts.join(''), hasDirect: ts.length > 0, all: is.textContent } : null };
+    }),
+  }));
+}
+
 function readSheetData(root, ctx, on) {
   const { sst, styles, date1904 } = ctx;
   const shared = {}; // si → { f, r, c }
   const ghosts = []; // диапазоны «разлива»/формул массива: значения в них считает формула-якорь
   const inGhost = (r, c) => ghosts.some((g) => r >= g.r1 && r <= g.r2 && c >= g.c1 && c <= g.c2 && !(r === g.r1 && c === g.c1));
-  for (const row of kids(kid(root, 'sheetData'), 'row')) {
+  for (const { el: row, cells } of sheetRows(root)) {
     const ri = +row.getAttribute('r') - 1;
     if (on.row) on.row(ri, row);
     let cAuto = 0;
-    for (const c of kids(row, 'c')) {
+    for (const { el: c, v: vt, f: fx, is } of cells) {
       const ref = c.getAttribute('r');
       let r = ri; let ci = cAuto;
       if (ref) { const m = /^([A-Z]+)(\d+)$/.exec(ref); ci = colIndex(m[1]); r = +m[2] - 1; }
       cAuto = ci + 1;
       const t = c.getAttribute('t') || 'n';
       const sIdx = +(c.getAttribute('s') || 0);
-      const v = kid(c, 'v');
-      const fEl = kid(c, 'f');
+      const fEl = fx && fx.el;
       const cell = {};
       const st = styles[sIdx];
       if (st) cell.s = st;
       // значение
-      const vt = v ? v.textContent : null;
       if (t === 's') cell.v = sst[+vt] ?? '';
-      else if (t === 'inlineStr') cell.v = kids(kid(c, 'is'), 't').map((x) => x.textContent).join('') || (kid(c, 'is') ? kid(c, 'is').textContent : '');
+      else if (t === 'inlineStr') cell.v = is ? (is.direct || is.all) : '';
       else if (t === 'str') cell.v = vt ?? '';
       else if (t === 'b') cell.v = vt === '1';
       else if (t === 'e') cell.v = { error: vt || '#N/A' };
@@ -217,9 +236,10 @@ function readSheetData(root, ctx, on) {
       } else cell.v = null;
       // формула (общие формулы — развернуть со смещением от главной ячейки)
       let isShared = false;
+      let isArr = false;
       if (fEl) {
         const ft = fEl.getAttribute('t');
-        const text = fEl.textContent;
+        const text = fx.text;
         if (ft === 'shared') {
           isShared = true;
           const si = fEl.getAttribute('si');
@@ -228,6 +248,7 @@ function readSheetData(root, ctx, on) {
         } else if (text) cell.f = canonical(text);
         if (cell.f != null) {
           if (ft === 'array') {
+            isArr = true;
             // t="array": с cm — динамический массив Excel 365, без cm — формула массива Ctrl+Shift+Enter
             const ref = fEl.getAttribute('ref') || addr(r, ci);
             const rg = parseRange(ref);
@@ -242,7 +263,7 @@ function readSheetData(root, ctx, on) {
       }
       if (cell.v == null && cell.f == null && !cell.s) continue;
       if (cell.v === undefined) cell.v = null;
-      on.cell(r, ci, cell, c, isShared);
+      on.cell(r, ci, cell, c, isShared, isArr);
     }
   }
 }
@@ -439,7 +460,7 @@ export async function importXlsx(data, { recalc: doRecalc = true } = {}) {
   for (const [idx, info] of book.sheets.entries()) {
     const sheet = newSheet(info.name);
     if (!info.worksheet) { keep('листы диаграмм'); continue; }
-    const doc = await read(info.target);
+    const doc = parseSheet(await book.text(info.target)); // <sheetData> — сканером (sheetScan.js)
     if (!doc) continue;
     sheet.src = { part: info.target, rid: info.rid, name: info.name };
     const root = doc.documentElement;
@@ -461,7 +482,10 @@ export async function importXlsx(data, { recalc: doRecalc = true } = {}) {
         const li = readLineInfo(row, 's');
         if (li) sheet.rowInfo[ri] = li;
       },
-      cell: (r, c, cell) => sheet.cells.set(key(r, c), cell),
+      cell: (r, c, cell, el, shared, arr) => {
+        if (!shared && !arr) Object.defineProperty(cell, SRC, { value: r * 16384 + c });
+        sheet.cells.set(key(r, c), cell);
+      },
     });
     for (const m of kids(kid(root, 'mergeCells'), 'mergeCell')) {
       const rg = parseRange(m.getAttribute('ref'));
@@ -815,8 +839,7 @@ function selectTab(xml, active) {
 
 // Лист поверх исходного XML: заменяются данные, столбцы, объединения, размер, выбор листа; остальное — как в файле
 function patchSheetXml(xml, sheet, active, root, book, xfOf, str, cm) {
-  // исходные ячейки: разобранное значение + исходный XML (по порядку в документе)
-  const src = new Map();
+  // исходный XML ячеек по адресу (неизменённые ячейки из файла пишутся им)
   const rawList = [];
   const sd = findEl(xml, 'sheetData');
   if (sd) {
@@ -825,20 +848,12 @@ function patchSheetXml(xml, sheet, active, root, book, xfOf, str, cm) {
     let m;
     while ((m = re.exec(part))) rawList.push(m[0]);
   }
-  const all = [];
-  readSheetData(root, book, { cell: (r, c, cell, el, shared) => all.push({ r, c, cell, shared }) });
-  // пустые <c r="…"/> без стиля readSheetData пропускает — сопоставляем по адресу
   const byRef = new Map();
   for (const raw of rawList) { const m = /\br="([A-Z]+\d+)"/.exec(raw.slice(0, raw.indexOf('>'))); if (m) byRef.set(m[1], raw); }
-  for (const x of all) { const raw = byRef.get(addr(x.r, x.c)); if (raw) src.set(key(x.r, x.c), { ...x, raw }); }
   const cellOf = (r, c, cell) => {
-    const e = src.get(key(r, c));
     const fx = formulaFx(sheet, key(r, c), cell, cm);
-    if (e && sameStyle(e.cell.s, cell.s)) {
-      if (cell.f == null && e.cell.f == null && sameValue(e.cell.v, cell.v)) return e.raw;
-      // формулу массива пишем заново: размер «разлива» мог измениться
-      if (cell.f != null && cell.f === e.cell.f && !e.shared && !fx && !/\bt="array"/.test(e.raw)) return e.raw;
-    }
+    // неизменённая ячейка из файла на своём месте (SRC) — исходной разметкой (форматированный текст и т. п.)
+    if (!fx && cell[SRC] === r * 16384 + c) { const raw = byRef.get(addr(r, c)); if (raw) return raw; }
     return cellXml(cell, addr(r, c), xfOf, str, fx);
   };
   let out = xml;
@@ -1013,11 +1028,12 @@ async function exportWithSource(wb, source) {
     const s = sheet.src && book.sheets.find((x) => x.rid === sheet.src.rid && x.worksheet);
     if (s && sheetEls[s.rid]) {
       const xml = await text(s.target);
-      const doc = xml != null && /^[\s\S]*?<worksheet\b/.test(xml) ? parseXml(xml) : null;
-      if (doc) {
+      const isSheet = xml != null && /^[\s\S]*?<worksheet\b/.test(xml);
+      if (isSheet) {
+        // неизменённый лист — без разбора: только отметка выбранного листа
         zip.file(s.target, pristine.has(sheet)
           ? selectTab(xml, i === wb.active)
-          : patchSheetXml(xml, sheet, i === wb.active, doc.documentElement, book, st.xfOf, str, cm));
+          : patchSheetXml(xml, sheet, i === wb.active, parseSheet(xml, { data: false }).documentElement, book, st.xfOf, str, cm));
         sheetTags.push(sheetEls[s.rid].replace(/\bname="[^"]*"/, `name="${esc(sheet.name)}"`));
         const shifts = (!pristine.has(sheet) && sheet.src.shifts) || [];
         if (shifts.length) { shifted.push([sheet.name, shifts, s.name]); await shiftSheetParts(zip, s.target, shifts); }
@@ -1203,6 +1219,7 @@ async function exportWithSource(wb, source) {
     const now = new Date().toISOString().replace(/\.\d+Z$/, 'Z');
     zip.file('docProps/core.xml', core.replace(/(<dcterms:modified\b[^>]*>)[^<]*(<\/dcterms:modified>)/, `$1${now}$2`));
   }
+  await precompress(JSZip, zip); // большие части — встроенным сжатием (zipBytes.js)
   return zip.generateAsync({ type: 'uint8array', compression: 'DEFLATE' });
 }
 
@@ -1245,5 +1262,6 @@ export async function exportXlsx(wb, { source = null } = {}) {
   sheetXml.forEach((x, i) => zip.file(`xl/worksheets/sheet${i + 1}.xml`, x));
   zip.file('xl/styles.xml', stylesXml);
   zip.file('xl/sharedStrings.xml', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<sst xmlns="${NS}" count="${sst.length}" uniqueCount="${sst.length}">${sst.map((s) => `<si><t xml:space="preserve">${esc(s)}</t></si>`).join('')}</sst>`);
+  await precompress(JSZip, zip); // большие части — встроенным сжатием (zipBytes.js)
   return zip.generateAsync({ type: 'uint8array', compression: 'DEFLATE' });
 }

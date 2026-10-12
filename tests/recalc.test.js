@@ -64,6 +64,30 @@ describe('пересчёт по графу зависимостей', () => {
     expect(unstable).toBeLessThan(25 * 60 * 0.15);
   });
 
+  it('ветвление (отмена и новая правка): граф, общий для цепочки книг, даёт те же значения, что полный пересчёт', () => {
+    // граф после частичного пересчёта правится на месте (этап 17); книга, к которой вернулись отменой, сверяется с ним
+    for (let seed = 1; seed <= 15; seed++) {
+      const rnd = rng(1000 + seed);
+      const pick = (a) => a[Math.floor(rnd() * a.length)];
+      const cell = () => `${pick('ABCD')}${1 + Math.floor(rnd() * 6)}`;
+      const formulas = [() => `=${cell()}+${cell()}`, () => `=СУММ(A1:${pick('ABCD')}6)`, () => `=СУММ(${pick('ABCD')}:${pick('ABCD')})`,
+        () => `=ВПР(${cell()};A1:C6;2;ЛОЖЬ)`, () => `=ЕСЛИ(${cell()}>4;${cell()};1)`, () => `=ПОСЛЕД(${1 + Math.floor(rnd() * 3)})`];
+      let wb = newWorkbook();
+      const history = [wb];
+      for (let step = 0; step < 50; step++) {
+        if (rnd() < 0.15) wb = pick(history); // «отмена» к одной из прежних книг
+        const ref = cell();
+        const r = +ref.slice(1) - 1; const c = ref.charCodeAt(0) - 65;
+        wb = setInput(wb, 0, r, c, rnd() < 0.5 ? String(Math.floor(rnd() * 10)) : pick(formulas)());
+        history.push(wb);
+        const stable = m.recalcInfo.converged;
+        const full = recalc(wb, { full: true });
+        if (!stable || !m.recalcInfo.converged) continue;
+        expect(snapshot(wb), `seed ${seed}, шаг ${step}`).toBe(snapshot(full));
+      }
+    }
+  });
+
   it('считаются только затронутые формулы', () => {
     let wb = newWorkbook();
     for (let i = 0; i < 300; i++) { wb = setInput(wb, 0, i, 0, String(i)); }

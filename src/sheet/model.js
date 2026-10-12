@@ -53,6 +53,44 @@ function astOf(f) {
 //          rcell: Map(ячейка → Set(формул)), rects: Map(лист → Map(формула → прямоугольники)), vol: Set(летучих) }
 // id ячейки — «лист в нижнем регистре!r,c»
 const graphs = new WeakMap();
+// Правка большой книги без проходов по всем ячейкам (этап 17). Карта ячеек, полученная правкой (setInputs), знает свою
+// базу и изменённые ключи — пересчёт смотрит только их. «Свежую» карту (создана операцией и ещё никому не отдана)
+// пересчёт дописывает значениями на месте, без второй копии.
+const cellDeltas = new WeakMap(); // cells → { base: Map, keys: Set }
+const freshCells = new WeakSet();
+// Сводка карты: число формул, «несосчитанные» формулы (нет значения или #ЦИКЛ!), занятая часть листа (с запасом:
+// удаление ячеек её не уменьшает — для ссылок на целые столбцы это лишь лишние пустые ячейки)
+const cellMeta = new WeakMap();
+const unsettled = (c) => !!c && c.f != null && (c.v == null || (isErr(c.v) && c.v.error === ERR.CIRC));
+function metaOf(cells) {
+  let m = cellMeta.get(cells);
+  // размер другой — в карту дописали в обход операций (так делают тесты): сводку заново
+  if (m && m.size === cells.size) return m;
+  m = null;
+  const d = cellDeltas.get(cells);
+  const bm = d && cellMeta.get(d.base);
+  if (bm && bm.size === d.base.size) {
+    m = { formulas: bm.formulas, fresh: new Set(bm.fresh), r: bm.r, c: bm.c };
+    for (const k of d.keys) {
+      const a = d.base.get(k); const b = cells.get(k);
+      if (a && a.f != null) m.formulas--;
+      if (b && b.f != null) m.formulas++;
+      if (unsettled(b)) m.fresh.add(k); else m.fresh.delete(k);
+      if (b) { const [r, c] = unkey(k); if (r > m.r) m.r = r; if (c > m.c) m.c = c; }
+    }
+    if (d.base.size + [...d.keys].reduce((s, k) => s + (cells.has(k) ? 1 : 0) - (d.base.has(k) ? 1 : 0), 0) !== cells.size) m = null; // база тоже правилась в обход
+  }
+  if (!m) {
+    m = { formulas: 0, fresh: new Set(), r: -1, c: -1 };
+    for (const [k, c0] of cells) {
+      if (c0.f != null) { m.formulas++; if (unsettled(c0)) m.fresh.add(k); }
+      const [r, c] = unkey(k); if (r > m.r) m.r = r; if (c > m.c) m.c = c;
+    }
+  }
+  m.size = cells.size;
+  cellMeta.set(cells, m);
+  return m;
+}
 const carryGraph = (next, prev) => { const g = graphs.get(prev.sheets); if (g && !graphs.has(next.sheets)) graphs.set(next.sheets, g); return next; };
 const cellId = (sheetName, k) => `${String(sheetName).toLowerCase()}!${k}`;
 // Летучие функции (как в Excel): пересчитываются при любом пересчёте
@@ -90,6 +128,8 @@ function changesSince(entry, wb) {
     if (cur === base) continue;
     if (cur.name !== base.name || cur.rowInfo !== base.rowInfo || cur.merges !== base.merges) return null;
     if (cur.cells === base.cells) continue;
+    const d = cellDeltas.get(cur.cells);
+    if (d && d.base === base.cells) { for (const k of d.keys) if (!sameCellInput(cur.cells.get(k), base.cells.get(k))) out.add(cellId(cur.name, k)); continue; }
     for (const [k, c] of cur.cells) if (!sameCellInput(c, base.cells.get(k))) out.add(cellId(cur.name, k));
     for (const [k, c] of base.cells) if (!cur.cells.has(k) && !sameCellInput(c, undefined)) out.add(cellId(cur.name, k));
   }
@@ -118,6 +158,53 @@ function updateGraph(old, updates, base, names, volOf) {
   }
   return { base, names, deps, rcell, rects, vol };
 }
+// Граф после частичного пересчёта — правкой на месте (копия всех карт графа на 400 тыс. формул — ~0,4 с на правку).
+// Граф общий у книг одной цепочки правок; base — листы, которым он сейчас соответствует: книга, к которой вернулись
+// отменой, сверяется с base через changesSince и пересчитывает разницу.
+function applyGraph(g, updates, base, names, volOf) {
+  const touched = new Set();
+  const setOf = (k) => { let s = g.rcell.get(k); if (!s) g.rcell.set(k, s = new Set()); return s; };
+  const mapOf = (sh) => { let m = g.rects.get(sh); if (!m) g.rects.set(sh, m = new Map()); touched.add(m); return m; };
+  for (const [owner, fr] of updates) {
+    const prev = g.deps.get(owner);
+    if (prev) {
+      for (const c of prev.cells) { const set = g.rcell.get(c); if (set) { set.delete(owner); if (!set.size) g.rcell.delete(c); } }
+      for (const sh of new Set(prev.rects.map((r) => r.s))) mapOf(sh).delete(owner);
+    }
+    if (!fr) { g.deps.delete(owner); g.vol.delete(owner); continue; }
+    g.deps.set(owner, { cells: fr.cells, rects: fr.rects });
+    for (const c of fr.cells) setOf(c).add(owner);
+    const bySheet = new Map();
+    for (const r of fr.rects) { if (!bySheet.has(r.s)) bySheet.set(r.s, []); bySheet.get(r.s).push(r); }
+    for (const [sh, list] of bySheet) mapOf(sh).set(owner, list);
+    if (volOf(owner)) g.vol.add(owner); else g.vol.delete(owner);
+  }
+  for (const m of touched) rectIndexes.delete(m); // индекс диапазонов листа устарел
+  g.base = base; g.names = names;
+  return g;
+}
+
+// Индекс диапазонов листа (owner → прямоугольники) для поиска «чьи диапазоны накрывают ячейку»: полосы по 256 строк,
+// высокие диапазоны (целые столбцы и т. п.) — отдельным списком. Перебор всех владельцев на каждую затронутую ячейку
+// был квадратичным (20 000 сумм со скользящим окном × 20 000 ячеек — минута). Кеш по объекту карты листа (граф
+// копируется при записи — изменённая карта получит новый индекс).
+const BAND = 256;
+const rectIndexes = new WeakMap();
+function rectIndex(list) {
+  let ix = rectIndexes.get(list);
+  if (ix) return ix;
+  ix = { bands: new Map(), tall: [] };
+  for (const [o, rs] of list) {
+    for (const x of rs) {
+      const b1 = Math.floor(x.r1 / BAND); const b2 = Math.floor(x.r2 / BAND);
+      if (b2 - b1 > 16) { ix.tall.push([o, x]); continue; }
+      for (let b = b1; b <= b2; b++) { let arr = ix.bands.get(b); if (!arr) ix.bands.set(b, arr = []); arr.push([o, x]); }
+    }
+  }
+  rectIndexes.set(list, ix);
+  return ix;
+}
+
 // Формулы, зависящие (по цепочке) от изменённых ячеек
 // (limit — больше стольких формул: вернуть null, дешевле пересчитать всё)
 function dependents(entry, changed, extra = [], limit = Infinity) {
@@ -137,7 +224,10 @@ function dependents(entry, changed, extra = [], limit = Infinity) {
     const list = entry.rects.get(id.slice(0, bang));
     if (list && list.size) {
       const [r, c] = unkey(id.slice(bang + 1));
-      for (const [o, rs] of list) if (!seen.has(o) && rs.some((x) => r >= x.r1 && r <= x.r2 && c >= x.c1 && c <= x.c2)) add(o);
+      const ix = rectIndex(list);
+      const check = (arr) => { if (arr) for (const [o, x] of arr) if (!seen.has(o) && r >= x.r1 && r <= x.r2 && c >= x.c1 && c <= x.c2) add(o); };
+      check(ix.bands.get(Math.floor(r / BAND)));
+      check(ix.tall);
     }
   }
   return seen;
@@ -201,7 +291,7 @@ export function recalc(wb, opts = {}) {
   // что считать: null — всё; иначе Set(id формул)
   let todo = null;
   let formulaCount = 0;
-  for (const sh of wb.sheets) for (const c of sh.cells.values()) if (c.f != null) formulaCount++;
+  for (const sh of wb.sheets) formulaCount += metaOf(sh.cells).formulas;
   if (manual) {
     todo = new Set();
     for (const sh of wb.sheets) for (const [k, c] of sh.cells) if (c.f != null && c.v == null) todo.add(cellId(sh.name, k));
@@ -209,7 +299,7 @@ export function recalc(wb, opts = {}) {
     // ещё не посчитанные формулы (значения нет) — тоже, даже если ячейку изменили в обход операций
     const fresh = [];
     // и ячейки циклов (#ЦИКЛ!): цикл мог разорваться не через их собственные ссылки (например, «разлив» заблокирован)
-    for (const sh of wb.sheets) for (const [k, c] of sh.cells) if (c.f != null && (c.v == null || (isErr(c.v) && c.v.error === ERR.CIRC))) fresh.push(cellId(sh.name, k));
+    for (const sh of wb.sheets) for (const k of metaOf(sh.cells).fresh) fresh.push(cellId(sh.name, k));
     todo = dependents(prevEntry, new Set([...changed, ...fresh]), prevEntry.vol, Math.max(200, formulaCount / 2));
     if (!todo) changed = null; // затронуто почти всё — проще пересчитать целиком
   }
@@ -218,7 +308,16 @@ export function recalc(wb, opts = {}) {
   for (const sh of wb.sheets) { byName.set(sh.name, sh); byName.set(sh.name.toLowerCase(), sh); }
   const sheetByName = (_wb, name) => byName.get(name) || byName.get(String(name).toLowerCase());
   const memo = new Map();
+  // частичный пересчёт: формулы вне recompute берут сохранённое значение при первом обращении (вместо заполнения memo
+  // значениями всех формул книги); computed — ячейки, посчитанные по-настоящему (только их сверяет сборка результата)
+  let lazy = false;
+  const recompute = new Set();
+  const computed = new Map(); // имя листа → Set(k)
   const visiting = new Set();
+  // диапазоны, уже собранные из ячеек в этом проходе (справочник ВПР читают тысячи формул): ключ → { arr, idx };
+  // сбрасывается вместе с memo. Встретился цикл при сборке (rangeTaint) — диапазон не запоминается
+  const rangeCache = new Map();
+  let rangeTaint = 0;
   // ячейки на пути вычисления; все ячейки найденного цикла — #ЦИКЛ! (не зависит от того, с какой начали)
   const path = [];
   const cyclic = new Set();
@@ -237,7 +336,7 @@ export function recalc(wb, opts = {}) {
     if (!extents.has(k)) {
       const sh = sheetByName(wb, name);
       let r = -1; let c = -1;
-      if (sh) for (const key0 of sh.cells.keys()) { const [rr, cc] = unkey(key0); if (rr > r) r = rr; if (cc > c) c = cc; }
+      if (sh) { const m = metaOf(sh.cells); r = m.r; c = m.c; }
       if (sh) for (const rg of spillOfSheet(sh.name).at.values()) { if (rg.r2 > r) r = rg.r2; if (rg.c2 > c) c = rg.c2; }
       extents.set(k, { r, c });
     }
@@ -272,6 +371,7 @@ export function recalc(wb, opts = {}) {
     if (!ctxCache.has(sheetName)) {
       ctxCache.set(sheetName, {
         get, sheet: sheetName, extent, sheetsBetween, name: nameValue(sheetName), spill: spillRef, markArray, cur: null, depRange, depDone,
+        rangeCache, rangeTaint: () => rangeTaint,
         formulaAt: (sh, r, c) => { const s0 = sheetByName(wb, sh); const cell = s0 && s0.cells.get(key(r, c)); return cell && cell.f != null ? cell.f : null; },
         rowHidden: (sh, r) => { const s0 = sheetByName(wb, sh); return !!(s0 && s0.rowInfo && s0.rowInfo[r] && s0.rowInfo[r].hidden); },
         rowFiltered: (sh, r) => { const s0 = sheetByName(wb, sh); return !!(s0 && s0.rowInfo && s0.rowInfo[r] && s0.rowInfo[r].hidden && s0.rowInfo[r].filtered); },
@@ -297,7 +397,9 @@ export function recalc(wb, opts = {}) {
   const evalCell = (sheet, k, cell) => {
     const mk = `${sheet.name}!${k}`;
     if (memo.has(mk)) return memo.get(mk);
-    if (visiting.has(mk)) { for (let i = path.lastIndexOf(mk); i < path.length; i++) cyclic.add(path[i]); return { top: err(ERR.CIRC) }; }
+    if (lazy && !recompute.has(mk)) { const res = { top: cell.v ?? 0, full: cell.arr || null, ax: !!cell.ax }; memo.set(mk, res); return res; }
+    if (lazy) { let s = computed.get(sheet.name); if (!s) computed.set(sheet.name, s = new Set()); s.add(k); }
+    if (visiting.has(mk)) { rangeTaint++; for (let i = path.lastIndexOf(mk); i < path.length; i++) cyclic.add(path[i]); return { top: err(ERR.CIRC) }; }
     visiting.add(mk);
     path.push(mk);
     const frame = { cells: new Set(), rects: [], quiet: 0 };
@@ -381,9 +483,15 @@ export function recalc(wb, opts = {}) {
     for (const sheet of wb.sheets) {
       const sp = emptySpill();
       const anchors = [];
-      for (const [k, cell] of sheet.cells) {
-        if (cell.f == null) continue;
-        const res = memo.get(`${sheet.name}!${k}`);
+      // частичный пересчёт: якоря — прежние (разлитые и заблокированные) и посчитанные сейчас; у непересчитанных —
+      // сохранённый массив (cell.arr), их нет в memo
+      const cand = lazy
+        ? new Set([...(sheet.spillAt ? sheet.spillAt.keys() : []), ...(sheet.spillBlocked || []), ...(computed.get(sheet.name) || [])])
+        : sheet.cells.keys();
+      for (const k of cand) {
+        const cell = sheet.cells.get(k);
+        if (!cell || cell.f == null) continue;
+        const res = memo.get(`${sheet.name}!${k}`) || (lazy && cell.arr ? { full: cell.arr } : null);
         if (res && res.full) anchors.push([k, cell, res.full]);
       }
       anchors.sort((a, b) => { const [ra, ca] = unkey(a[0]); const [rb, cb] = unkey(b[0]); return ra - rb || ca - cb; });
@@ -429,12 +537,8 @@ export function recalc(wb, opts = {}) {
   };
   // значения формул, которые не пересчитываются, — из прошлого пересчёта
   const prefill = (skip) => {
-    for (const sheet of wb.sheets) {
-      for (const [k, cell] of sheet.cells) {
-        if (cell.f == null || skip.has(cellId(sheet.name, k))) continue;
-        memo.set(`${sheet.name}!${k}`, { top: cell.v ?? 0, full: cell.arr || null, ax: !!cell.ax });
-      }
-    }
+    lazy = true;
+    for (const id of skip) { const mk = memoKey(id); if (mk) recompute.add(mk); }
   };
   const evalIds = (ids) => {
     for (const id of ids) {
@@ -469,7 +573,7 @@ export function recalc(wb, opts = {}) {
       if (!fresh.length) return;
       for (const id of fresh) forced.add(memoKey(id));
       const again = dependents(g, new Set(fresh));
-      for (const id of again) { const mk = memoKey(id); if (mk) memo.delete(mk); }
+      for (const id of again) { const mk = memoKey(id); if (mk) { memo.delete(mk); recompute.add(mk); } }
       evalIds(again);
       for (const id of again) evaluated.add(id);
     }
@@ -483,6 +587,7 @@ export function recalc(wb, opts = {}) {
     for (let pass = 0; pass < 8; pass++) {
       if (pass === 4) recalcInfo.converged = false;
       memo.clear();
+      rangeCache.clear();
       extents.clear();
       newDeps.clear();
       forced.clear(); cyclic.clear(); // циклы — по раскладке «разлива» этого прохода
@@ -507,7 +612,8 @@ export function recalc(wb, opts = {}) {
     for (let pass = 0; pass < 4 && ids.size; pass++) {
       extents.clear();
       forced.clear(); cyclic.clear();
-      for (const id of ids) { const bang = id.lastIndexOf('!'); const sh = sheetByName(wb, id.slice(0, bang)); if (sh) memo.delete(`${sh.name}!${id.slice(bang + 1)}`); }
+      for (const id of ids) { const bang = id.lastIndexOf('!'); const sh = sheetByName(wb, id.slice(0, bang)); if (sh) { const mk = `${sh.name}!${id.slice(bang + 1)}`; memo.delete(mk); recompute.add(mk); } }
+      rangeCache.clear();
       evalIds(ids);
       for (const id of ids) evaluated.add(id);
       settleCycles();
@@ -523,13 +629,15 @@ export function recalc(wb, opts = {}) {
       if (!ids.size) converged = true;
     }
     // «разлив» не успокоился за несколько проходов — пересчитать всё (граф тоже строится заново)
-    if (!converged && !manual) { todo = null; changed = null; recalcInfo.partial = false; runFull(); recalcInfo.converged = false; }
+    if (!converged && !manual) { todo = null; changed = null; lazy = false; recalcInfo.partial = false; runFull(); recalcInfo.converged = false; }
   }
   const sheets = wb.sheets.map((sheet) => {
-    let changed = false;
-    const cells = new Map(sheet.cells);
-    for (const [k, cell] of sheet.cells) {
-      if (cell.f == null) continue;
+    // частичный пересчёт — сверяются только посчитанные ячейки, остальные взяли сохранённые значения
+    const keys = lazy ? (computed.get(sheet.name) || []) : sheet.cells.keys();
+    const upd = [];
+    for (const k of keys) {
+      const cell = sheet.cells.get(k);
+      if (!cell || cell.f == null) continue;
       const res = evalCell(sheet, k, cell);
       const arr = res.full && !cell.legacy ? res.full : undefined;
       const ax = res.ax && !cell.legacy ? true : undefined;
@@ -537,10 +645,25 @@ export function recalc(wb, opts = {}) {
         const n = { ...cell, v: res.top };
         if (arr) n.arr = arr; else delete n.arr;
         if (ax) n.ax = true; else delete n.ax;
-        cells.set(k, n);
-        changed = true;
+        upd.push([k, n]);
       }
     }
+    const changed = upd.length > 0;
+    let cells = sheet.cells;
+    if (changed) {
+      if (freshCells.has(cells)) {
+        // карта только что создана правкой — дописать на месте; дельта к базе — с этими ключами
+        for (const [k, n] of upd) cells.set(k, n);
+        const d = cellDeltas.get(cells);
+        if (d) for (const [k] of upd) d.keys.add(k);
+        cellMeta.delete(cells);
+      } else {
+        cells = new Map(cells);
+        for (const [k, n] of upd) cells.set(k, n);
+        cellDeltas.set(cells, { base: sheet.cells, keys: new Set(upd.map(([k]) => k)) });
+      }
+    }
+    freshCells.delete(cells);
     const sp = spillOfSheet(sheet.name);
     const before = sheet.spill ? { vals: sheet.spill, at: sheet.spillAt || new Map(), blocked: sheet.spillBlocked || new Set() } : emptySpill();
     const spillChanged = !(sameSpill(new Map([['x', sp]]), new Map([['x', before]])) && sameSpill(new Map([['x', before]]), new Map([['x', sp]])));
@@ -568,7 +691,7 @@ export function recalc(wb, opts = {}) {
       const bang = id.lastIndexOf('!'); const sh = sheetByName(wb, id.slice(0, bang)); const c = sh && sh.cells.get(id.slice(bang + 1));
       if (!c || c.f == null) updates.set(id, null);
     }
-    graphs.set(sheets, updateGraph(prevEntry, updates, sheets, wb.names, volOf));
+    graphs.set(sheets, applyGraph(prevEntry, updates, sheets, wb.names, volOf));
   }
   return out;
 }
@@ -661,6 +784,8 @@ export function setInputs(wb, items) {
     const sheet = out.sheets[si];
     const cells = new Map(sheet.cells);
     for (const { r, c, raw } of list) putInput(cells, key(r, c), raw);
+    cellDeltas.set(cells, { base: sheet.cells, keys: new Set(list.map(({ r, c }) => key(r, c))) });
+    freshCells.add(cells);
     out = withSheet(out, si, { ...sheet, cells });
   }
   return recalc(out);

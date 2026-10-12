@@ -3,6 +3,7 @@ import { setPicFormatXml } from '../editor/picFormat.js';
 import { readAnchor, setAnchorXml } from '../editor/anchor.js';
 import { unwrapColumnSections } from '../editor/columns.js';
 import JSZip from 'jszip';
+import { precompress } from './zipBytes.js';
 import { DOMParser } from '@xmldom/xmldom';
 import { DEFAULT_FONT, DEFAULT_SIZE, highlightName, normalizeColor, parseSize } from '../editor/font.js';
 import { NEW_DOC_PARA, ptToTwips } from '../editor/paragraph.js';
@@ -842,6 +843,7 @@ ${notes.length ? `<Relationship Id="rIdPeroF" Type="${relType('footnotes')}" Tar
     zip.file('word/numbering.xml', numberingXml(ex.orderedNums, hLevels));
     zip.file('word/settings.xml', hyphenSettings(patchSettingsFlag(patchSettingsBackground(settingsXml(da.defaultTab, !!hf.evenOdd), !!da.pageColor), 'mirrorMargins', !!da.mirrorMargins, MIRROR_AFTER), da));
     zip.file('word/_rels/document.xml.rels', docRels);
+    await precompress(JSZip, zip); // большие части — встроенным сжатием (zipBytes.js)
     return zip.generateAsync({ type: 'uint8array', compression: 'DEFLATE' });
   }
 
@@ -1021,5 +1023,6 @@ ${notes.length ? `<Relationship Id="rIdPeroF" Type="${relType('footnotes')}" Tar
     zip.file('docProps/core.xml', da.propsChanged ? patchCoreProps(src.core, da.props || {})
       : src.core.replace(/(<dcterms:modified\b[^>]*>)[^<]*(<\/dcterms:modified>)/, `$1${now}$2`));
   }
+  await precompress(JSZip, zip); // большие части — встроенным сжатием (zipBytes.js)
   return zip.generateAsync({ type: 'uint8array', compression: 'DEFLATE' });
 }
