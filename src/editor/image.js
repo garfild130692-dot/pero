@@ -3,7 +3,8 @@
 // Узел image (встроенный в строку): src — data:-URL картинки (для показа и для записи новых рисунков),
 // width/height — размер на странице в px (1 px = 9525 EMU), alt — замещающий текст,
 // xml/target — исходный <w:r> с <w:drawing> и путь картинки в пакете (у рисунков из файла):
-// при сохранении в тот же пакет пишется исходный XML с новым размером — сохраняются обтекание, обрезка, эффекты.
+// при сохранении в тот же пакет пишется исходный XML с новым размером — сохраняются обтекание, обрезка, эффекты;
+// anchor — обтекание и положение плавающего рисунка (anchor.js; null — в строке текста), показ — floatLayout.js.
 import { Node, mergeAttributes } from '@tiptap/core';
 
 export const EMU_PER_PX = 9525;
@@ -50,12 +51,15 @@ class ImageView {
   }
 
   render() {
-    const { src, width, height, alt, floating } = this.node.attrs;
+    const { src, width, height, alt, anchor } = this.node.attrs;
     if (this.img.getAttribute('src') !== src) this.img.src = src || '';
     this.img.alt = alt || '';
     this.img.style.width = width ? `${width}px` : '';
     this.img.style.height = height ? `${height}px` : '';
-    this.dom.title = floating ? 'Рисунок с обтеканием: положение на странице сохраняется, здесь показан в строке' : '';
+    // плавающий: класс по виду обтекания, положение ставит floatLayout (стили — прямо в DOM, ignoreMutation)
+    const kind = !anchor ? '' : anchor.wrap === 'none' ? (anchor.behind ? 'behind' : 'front') : anchor.wrap;
+    this.dom.className = `pero-image${kind ? ` pero-float pf-${kind}` : ''}${this.dom.classList.contains('selected') ? ' selected' : ''}`;
+    if (!kind) { this.dom.removeAttribute('style'); delete this.dom.dataset.floatCss; }
   }
 
   startResize(e) {
@@ -118,7 +122,7 @@ export const PeroImage = Node.create({
       alt: { default: '' },
       xml: { default: null, rendered: false },
       target: { default: null, rendered: false },
-      floating: { default: false, rendered: false },
+      anchor: { default: null, rendered: false },
     };
   },
 

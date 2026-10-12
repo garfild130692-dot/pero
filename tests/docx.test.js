@@ -426,7 +426,7 @@ describe('рисунки', () => {
     expect([img.attrs.width, img.attrs.height]).toEqual([512, 512]);
     expect(img.attrs.target).toBe('word/media/image1.png');
     expect(img.attrs.xml).toContain('<w:drawing');
-    expect(img.attrs.floating).toBe(false);
+    expect(img.attrs.anchor).toBe(null); // в строке текста
   });
 
   it('изменение размера рисунка из файла: исходная разметка, новый размер, та же картинка', async () => {

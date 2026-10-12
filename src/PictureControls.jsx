@@ -49,11 +49,6 @@ export function PicturePanel({ editor, image, Group }) {
             onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); editor.chain().focus().setImageAlt(alt).run(); } }} />
         </div>
       </Group>
-      {image.floating && (
-        <Group title="Положение">
-          <div className="rb-note">Рисунок с обтеканием: в файле сохраняются его положение и обтекание,<br />здесь он показан в строке текста.</div>
-        </Group>
-      )}
     </>
   );
 }

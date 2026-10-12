@@ -1,4 +1,5 @@
 // Экспорт JSON-документа редактора → .docx (OOXML), собственная генерация.
+import { readAnchor, setAnchorXml } from '../editor/anchor.js';
 import { unwrapColumnSections } from '../editor/columns.js';
 import JSZip from 'jszip';
 import { DOMParser } from '@xmldom/xmldom';
@@ -61,6 +62,12 @@ function builtinRemap(stylesXml, defs) {
     if (id && id !== st.id) remap[st.id] = id;
   }
   return remap;
+}
+
+// Обтекание/положение рисунка — только если поменяли (иначе исходный XML: пересчёт px ↔ EMU сдвинул бы смещения)
+function withAnchor(xml, anchor) {
+  const was = readAnchor(xml);
+  return JSON.stringify(was) === JSON.stringify(anchor || null) ? xml : setAnchorXml(xml, anchor || null);
 }
 
 // Разметка нового встроенного рисунка (как пишет Word для «Вставка → Рисунок»)
@@ -246,7 +253,7 @@ class Exporter {
     const cy = Math.max(1, Math.round((a.height || 96) * EMU_PER_PX));
     // рисунок из этого же пакета: исходная разметка (обтекание, обрезка, эффекты) с новым размером
     const rid = a.xml && (/r:embed="([^"]+)"/.exec(a.xml) || [])[1];
-    if (rid && this.relTargets && this.relTargets[rid] === a.target) return patchDrawing(a.xml, cx, cy, a.alt);
+    if (rid && this.relTargets && this.relTargets[rid] === a.target) return patchDrawing(withAnchor(a.xml, a.anchor), cx, cy, a.alt);
     // новый рисунок (или пришёл из другого документа) — своя часть в word/media
     const data = dataUrlToBytes(a.src);
     if (!data) return '';
@@ -254,7 +261,8 @@ class Exporter {
     const ext = extOf(data.mime);
     const img = { rid: `rIdPeroImg${n}`, path: `media/pero_image${n}.${ext}`, bytes: data.bytes, ext, mime: data.mime === 'image/jpeg' ? 'image/jpeg' : `image/${ext}` };
     this.images.push(img);
-    return drawingXml({ rid: img.rid, cx, cy, id: 90000 + n, name: `Рисунок ${n}`, alt: a.alt });
+    const xml = drawingXml({ rid: img.rid, cx, cy, id: 90000 + n, name: `Рисунок ${n}`, alt: a.alt });
+    return a.anchor ? setAnchorXml(xml, a.anchor) : xml;
   }
 
   inlines(content = []) {

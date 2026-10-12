@@ -41,6 +41,7 @@ import { LineNumbers } from './lineNumbers.js';
 import { Columns } from './columns.js';
 import { ColLayout } from './colLayout.js';
 import { ColumnsCommands } from './colCommands.js';
+import { FloatLayout } from './floatLayout.js';
 
 // Как оформлены заголовки — font.js (совпадает со styles.css и стилями Heading1–6 в export.js)
 export { HEADING_FONT, HEADING_SIZES };
@@ -312,6 +313,7 @@ export const extensions = [
   Columns,
   ColLayout,
   ColumnsCommands,
+  FloatLayout,
   PeroTable.configure({ resizable: true }),
   PeroTableRow,
   PeroTableCell,

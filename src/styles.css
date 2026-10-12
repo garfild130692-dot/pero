@@ -983,3 +983,9 @@ p[data-section-type="nextPage"]::after { content: 'Разрыв раздела (
 .cols-table td { padding: 2px 8px 2px 0; }
 .cols-table input { width: 80px; padding: 3px 5px; border: 1px solid #bbb; border-radius: 3px; font: inherit; }
 .cols-preview { display: block; margin: 2px auto; }
+
+/* Плавающие рисунки (floatLayout.js): стили положения ставятся в DOM рисунка; «за текстом» — под текстом */
+.page-content .pero-image.pero-float { line-height: 0; }
+.page-content .pero-image.pf-behind { pointer-events: auto; }
+/* служебный разделитель ProseMirror перед плавающим рисунком сдвигал float на следующую строку */
+.page-content img.ProseMirror-separator:has(+ .pero-float) { display: none !important; } /* у ProseMirror — inline !important */
