@@ -989,3 +989,17 @@ p[data-section-type="nextPage"]::after { content: 'Разрыв раздела (
 .page-content .pero-image.pf-behind { pointer-events: auto; }
 /* служебный разделитель ProseMirror перед плавающим рисунком сдвигал float на следующую строку */
 .page-content img.ProseMirror-separator:has(+ .pero-float) { display: none !important; } /* у ProseMirror — inline !important */
+
+/* «Упорядочение»: обтекание, положение, диалог «Макет» */
+.menu-item.arrange-item { display: flex; align-items: center; gap: 8px; }
+.menu-item.arrange-item.on { background: var(--accent-soft); }
+.pos-grid { display: grid; grid-template-columns: repeat(3, 40px); gap: 6px; padding: 6px 10px; }
+.pos-cell { width: 40px; height: 48px; padding: 3px; border: 1px solid var(--line); background: #fff; cursor: pointer; }
+.pos-cell.on, .pos-cell:hover { border-color: var(--accent); background: var(--accent-soft); }
+.pos-cell > span { display: flex; width: 100%; height: 100%; background: repeating-linear-gradient(#fff 0 3px, #ddd 3px 4px); }
+.pos-cell i { display: block; width: 12px; height: 12px; background: #8fc1b3; border: 1px solid #1f6f5c; }
+.modal.layout-dlg { width: 560px; }
+.lay-row { display: flex; align-items: center; gap: 8px; margin: 4px 0; }
+.lay-row .pd-check { width: 120px; }
+.wrap-kinds { display: flex; flex-wrap: wrap; gap: 6px; }
+.wrap-kinds .cols-preset { width: 72px; }

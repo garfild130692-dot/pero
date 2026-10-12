@@ -8,7 +8,7 @@
 // CSS обтекает только с одной стороны: рисунок посреди колонки, который Word обтекает с двух сторон, у нас — с одной.
 // Поменялась раскладка — разбиение пересчитывается (событие pero-remeasure), не больше нескольких кругов подряд.
 import { Extension } from '@tiptap/core';
-import { Plugin, PluginKey } from '@tiptap/pm/state';
+import { NodeSelection, Plugin, PluginKey } from '@tiptap/pm/state';
 import { pagePx, parseSectPr, sectionList } from './page.js';
 
 const BLOCKS = 'p, h1, h2, h3, h4, h5, h6';
@@ -39,8 +39,10 @@ const setStyle = (el, css) => {
   return true;
 };
 
-// Расставить плавающие рисунки; возвращает true, если что-то сдвинулось (нужен новый замер страниц)
-export function placeFloats(view) {
+// Расставить плавающие рисунки; возвращает true, если что-то сдвинулось (нужен новый замер страниц).
+// pending — позиции рисунков, которые пользователь только что поставил (меню «Положение», перетаскивание): если их место
+// выше строки привязки или на другом листе, рисунок переносится к абзацу на этой высоте (как Word перепривязывает).
+export function placeFloats(view, pending = new Set()) {
   const { doc } = view.state;
   const items = [];
   doc.descendants((n, pos) => { if (n.type.name === 'image' && n.attrs.anchor) items.push({ n, pos }); });
@@ -92,6 +94,13 @@ export function placeFloats(view) {
     const va = a.v.align;
     const y = va === 'center' ? (v0 + v1 - h) / 2 : va === 'bottom' ? v1 - h : va === 'top' ? v0 : v0 + a.v.off;
     const d = a.dist || { t: 0, b: 0, l: 0, r: 0 };
+    // для перетаскивания: место рисунка от колонки и от абзаца
+    dom.dataset.relx = (x - colL).toFixed(2);
+    dom.dataset.rely = (y - pTop).toFixed(2);
+    if (pending.has(pos) && a.wrap !== 'none') {
+      const moved = reanchor(view, pos, n, a, { x, y, colL, scale, pr, pTop });
+      if (moved) return 'moved';
+    }
     let css;
     if (a.wrap === 'none') {
       // абсолютно: от блока, относительно которого позиционирован рисунок
@@ -125,6 +134,33 @@ export function placeFloats(view) {
   return changed;
 }
 
+// Перенести рисунок к абзацу, который на высоте y (того же листа): float не поднимается выше своей строки привязки.
+// Возвращает true, если документ изменён.
+function reanchor(view, pos, node, a, { x, y, colL, scale, pr, pTop }) {
+  const dom = view.nodeDOM(pos);
+  // строка привязки — верх рисунка без его сдвига вниз (margin-top)
+  const line = dom ? dom.getBoundingClientRect().top - (parseFloat(getComputedStyle(dom).marginTop) || 0) * scale : null;
+  const lineY = line == null ? pTop : (line - pr.top) / scale;
+  if (y >= lineY - 2) return false; // ниже строки привязки — переносить незачем
+  const hit = view.posAtCoords({ left: pr.left + (colL + 2) * scale, top: pr.top + (y + 2) * scale });
+  if (!hit) return false;
+  const $p = view.state.doc.resolve(hit.pos);
+  let d = $p.depth;
+  while (d > 0 && !$p.node(d).isTextblock) d--;
+  if (d < 1) return false;
+  const start = $p.start(d);
+  if (start <= pos && pos < $p.end(d)) return false; // уже в этом абзаце
+  const blockDom = view.nodeDOM($p.before(d));
+  const newTop = blockDom && blockDom.getBoundingClientRect ? (blockDom.getBoundingClientRect().top - pr.top) / scale : y;
+  const v = a.v.align ? a.v : { rel: 'paragraph', align: null, off: Math.round((y - newTop) * 100) / 100 };
+  const tr = view.state.tr.delete(pos, pos + node.nodeSize);
+  const at = tr.mapping.map(start);
+  tr.insert(at, node.type.create({ ...node.attrs, anchor: { ...a, v, h: a.h.align ? a.h : { rel: 'column', align: null, off: Math.round((x - colL) * 100) / 100 } } }));
+  tr.setSelection(NodeSelection.create(tr.doc, at));
+  view.dispatch(tr.setMeta(floatLayoutKey, { done: pos }));
+  return true;
+}
+
 export const floatLayoutKey = new PluginKey('floatLayout');
 
 export const FloatLayout = Extension.create({
@@ -132,6 +168,17 @@ export const FloatLayout = Extension.create({
   addProseMirrorPlugins() {
     return [new Plugin({
       key: floatLayoutKey,
+      // позиции рисунков, ждущих перепривязки (meta { pending: pos } — поставил пользователь; { done } — перенесён)
+      state: {
+        init: () => new Set(),
+        apply(tr, set) {
+          const meta = tr.getMeta(floatLayoutKey);
+          let next = tr.docChanged ? new Set([...set].map((p) => tr.mapping.map(p))) : set;
+          if (meta && meta.pending != null) next = new Set([...next, meta.pending]);
+          if (meta && meta.done != null) next = new Set([]);
+          return next;
+        },
+      },
       view(view) {
         let timer = 0;
         let rounds = 0; // кругов «рисунки сдвинулись → новый замер» подряд
@@ -140,7 +187,10 @@ export const FloatLayout = Extension.create({
           timer = setTimeout(() => {
             if (view.isDestroyed) return;
             if (typeof matchMedia === 'function' && matchMedia('print').matches) return;
-            const moved = placeFloats(view);
+            const pending = floatLayoutKey.getState(view.state);
+            const moved = placeFloats(view, pending);
+            if (moved === 'moved') return; // документ изменён — разбиение и новый круг придут сами
+            if (pending.size) view.dispatch(view.state.tr.setMeta(floatLayoutKey, { done: -1 }).setMeta('addToHistory', false));
             if (moved && rounds < 3) { rounds++; view.dom.dispatchEvent(new Event('pero-remeasure')); } else if (!moved) rounds = 0;
           }, 10);
         };

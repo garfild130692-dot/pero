@@ -6,6 +6,7 @@
 // при сохранении в тот же пакет пишется исходный XML с новым размером — сохраняются обтекание, обрезка, эффекты;
 // anchor — обтекание и положение плавающего рисунка (anchor.js; null — в строке текста), показ — floatLayout.js.
 import { Node, mergeAttributes } from '@tiptap/core';
+import { NodeSelection } from '@tiptap/pm/state';
 
 export const EMU_PER_PX = 9525;
 export const MAX_INSERT_WIDTH = 623; // ширина текста A4 с полями по умолчанию (16,5 см) в px
@@ -46,6 +47,9 @@ class ImageView {
     this.handle.className = 'pero-image-handle';
     this.handle.title = 'Потяните, чтобы изменить размер (Shift — без сохранения пропорций)';
     this.handle.addEventListener('mousedown', (e) => this.startResize(e));
+    this.img.addEventListener('mousedown', (e) => this.startMove(e));
+    // у плавающего — своё перетаскивание; родное (перенос узла в тексте) не запускать: ProseMirror сам ставит draggable
+    this.dom.addEventListener('dragstart', (e) => { if (this.node.attrs.anchor) e.preventDefault(); });
     this.dom.append(this.img, this.handle);
     this.render();
   }
@@ -93,6 +97,39 @@ class ImageView {
     window.addEventListener('mouseup', up);
   }
 
+  // Плавающий рисунок: тянуть мышью — новое место от колонки и абзаца (как Word при перетаскивании)
+  startMove(e) {
+    const a = this.node.attrs.anchor;
+    if (!a || e.button !== 0) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const pos = this.getPos();
+    if (typeof pos !== 'number') return;
+    this.view.dispatch(this.view.state.tr.setSelection(NodeSelection.create(this.view.state.doc, pos)));
+    const scale = this.dom.getBoundingClientRect().width / (this.dom.offsetWidth || 1) || 1;
+    const sx = e.clientX; const sy = e.clientY;
+    let dx = 0; let dy = 0;
+    const move = (ev) => {
+      dx = (ev.clientX - sx) / scale; dy = (ev.clientY - sy) / scale;
+      this.dom.style.translate = `${dx}px ${dy}px`;
+    };
+    const up = () => {
+      window.removeEventListener('mousemove', move);
+      window.removeEventListener('mouseup', up);
+      this.dom.style.translate = '';
+      if (Math.abs(dx) < 2 && Math.abs(dy) < 2) return;
+      const p = this.getPos();
+      if (typeof p !== 'number') return;
+      const r = (v) => Math.round(v * 100) / 100;
+      const relx = parseFloat(this.dom.dataset.relx) || 0;
+      const rely = parseFloat(this.dom.dataset.rely) || 0;
+      const anchor = { ...a, h: { rel: 'column', align: null, off: r(relx + dx) }, v: { rel: 'paragraph', align: null, off: r(rely + dy) } };
+      this.view.dispatch(this.view.state.tr.setNodeMarkup(p, undefined, { ...this.node.attrs, anchor }).setMeta('floatLayout$', { pending: p }));
+    };
+    window.addEventListener('mousemove', move);
+    window.addEventListener('mouseup', up);
+  }
+
   update(node) {
     if (node.type !== this.node.type) return false;
     this.node = node;
@@ -102,7 +139,7 @@ class ImageView {
 
   selectNode() { this.dom.classList.add('selected'); }
   deselectNode() { this.dom.classList.remove('selected'); }
-  stopEvent(e) { return e.target === this.handle; }
+  stopEvent(e) { return e.target === this.handle || (!!this.node.attrs.anchor && e.target === this.img && e.type === 'mousedown'); }
   ignoreMutation() { return true; }
 }
 
@@ -154,6 +191,13 @@ export const PeroImage = Node.create({
         const sel = state.selection;
         if (!sel.node || sel.node.type.name !== 'image') return false;
         if (dispatch) dispatch(tr.setNodeMarkup(sel.from, undefined, { ...sel.node.attrs, width, height }));
+        return true;
+      },
+      // обтекание и положение (anchor.js); null — в строке текста
+      setImageAnchor: (anchor) => ({ state, tr, dispatch }) => {
+        const sel = state.selection;
+        if (!sel.node || sel.node.type.name !== 'image') return false;
+        if (dispatch) dispatch(tr.setNodeMarkup(sel.from, undefined, { ...sel.node.attrs, anchor }).setMeta('floatLayout$', { pending: sel.from }));
         return true;
       },
       setImageAlt: (alt) => ({ state, tr, dispatch }) => {

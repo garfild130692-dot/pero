@@ -5,6 +5,7 @@ import { LayoutParaGroup } from './ParaSpinners.jsx';
 import { EMPTY_HF, MARGIN_PRESETS, PAPER, TWIPS_PER_CM, hfFor, hfText, pagePx, paperOf, parseSectPr, patchSectPr, sectionAt, sectionList } from './editor/page.js';
 import { applyPageSetup, lastMargins } from './PageSetupDialog.jsx';
 import { ColumnsButton } from './ColumnsControls.jsx';
+import { ArrangeGroup } from './ArrangeControls.jsx';
 import { LN_AUTO_DISTANCE, parseLnNum } from './editor/lineNumbers.js';
 import { fmtNum } from './editor/paragraph.js';
 import { SECTION_TYPES } from './editor/breaks.js';
@@ -163,6 +164,8 @@ export function LayoutPanel({ editor, Group, onMargins, onHf, onParagraph }) {
         <HyphenButton editor={editor} />
       </Group>
       <LayoutParaGroup editor={editor} Group={Group} onParagraph={onParagraph} />
+      <ArrangeGroup editor={editor} Group={Group}
+        image={editor.state.selection.node && editor.state.selection.node.type.name === 'image' ? editor.state.selection.node.attrs : null} />
       <HfGroup editor={editor} Group={Group} onHf={onHf} />
     </>
   );

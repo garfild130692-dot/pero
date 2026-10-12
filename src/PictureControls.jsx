@@ -1,6 +1,7 @@
 // Контекстная вкладка «Рисунок»: размер (см, с сохранением пропорций) и замещающий текст.
 import React, { useEffect, useState } from 'react';
 import { fmtNum } from './editor/paragraph.js';
+import { ArrangeGroup } from './ArrangeControls.jsx';
 
 const PX_PER_CM = 96 / 2.54;
 
@@ -40,6 +41,7 @@ export function PicturePanel({ editor, image, Group }) {
           <CmField label="Ширина" value={image.width} onCommit={(w) => setSize(w, w * ratio)} />
         </div>
       </Group>
+      <ArrangeGroup editor={editor} image={image} Group={Group} />
       <Group title="Замещающий текст">
         <div className="rb-field alt-field">
           <input value={alt} placeholder="Описание рисунка" aria-label="Замещающий текст"
