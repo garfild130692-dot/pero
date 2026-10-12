@@ -5,7 +5,7 @@ import TitleBar from './TitleBar.jsx';
 import * as fileApi from './fileApi.js';
 
 const dirOf = (p) => p.replace(/[\\/][^\\/]*$/, '');
-const kindOf = (name) => (/\.(xlsx|csv)$/i.test(name) ? 'sheet' : 'doc');
+const kindOf = (name) => (/\.(xlsx|xls|csv)$/i.test(name) ? 'sheet' : 'doc');
 
 // «Сегодня, 14:05», «Вчера, 09:12», иначе дата
 export function fmtWhen(t, now = new Date()) {
@@ -102,7 +102,7 @@ export default function StartScreen({ onCreate, onOpen }) {
   }), []);
 
   const onDrop = async (e) => {
-    const f = [...e.dataTransfer.files].find((x) => /\.(docx|xlsx|csv)$/i.test(x.name));
+    const f = [...e.dataTransfer.files].find((x) => /\.(docx|xlsx|xls|csv)$/i.test(x.name));
     if (!f) return;
     e.preventDefault();
     const p = fileApi.pathForFile(f);

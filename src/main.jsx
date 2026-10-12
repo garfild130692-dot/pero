@@ -14,7 +14,7 @@ window.addEventListener('unhandledrejection', (e) => fileApi.logError(`Необ�
 
 // Одно окно — один файл: текстовый документ (.docx) или книга (.xlsx). Root переключает редакторы;
 // запуск без файла — начальный экран (kind 'start'), выбор на нём открывается в этом же окне.
-const isSheet = (f) => f && /\.(xlsx|csv)$/i.test(f.name);
+const isSheet = (f) => f && /\.(xlsx|xls|csv)$/i.test(f.name);
 
 function Root() {
   const [boot, setBoot] = useState(null); // { autosaveSec, recovery, notice }

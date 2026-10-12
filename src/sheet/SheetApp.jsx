@@ -21,6 +21,7 @@ import {
 } from './model.js';
 import { exportXlsx, importXlsx } from './xlsx.js';
 import { exportCsv, importCsv } from './csv.js';
+import { importXls } from './xls.js';
 import { setPage } from './pageSetup.js';
 import { isLocked, isProtected, protectionViolation, setProtection } from './protect.js';
 import ProtectDialog from './ProtectDialog.jsx';
@@ -47,6 +48,7 @@ import { useAutosave } from '../autosave.js';
 
 const DEFAULT_NAME = 'Книга1.xlsx';
 const isCsv = (name) => /\.csv$/i.test(name || '');
+const isXlsName = (name) => /\.xls$/i.test(name || '');
 const CSV_LOSS = 'В формате CSV сохраняется только текущий лист: значения без формул и оформления. Сохранить в CSV?';
 const normSel = (s) => ({ r1: Math.min(s.r, s.r2), c1: Math.min(s.c, s.c2), r2: Math.max(s.r, s.r2), c2: Math.max(s.c, s.c2) });
 
@@ -122,8 +124,10 @@ export default function SheetApp({ initialFile, onOpenOther, onNewDoc, autosaveS
     try {
       // CSV: книга из одного листа, исходного пакета нет; восстановленная копия CSV — уже .xlsx
       const csv = isCsv(file.name) && !file.recovered;
-      const { wb: book, warnings: w, kept: k } = csv ? { ...importCsv(file.data, file.name), warnings: {}, kept: {} } : await importXlsx(file.data);
-      source.current = csv ? null : file.data;
+      // .xls (Excel 97–2003) — свой разбор BIFF8 (xls.js); исходный пакет .xlsx у такой книги нет
+      const xls = isXlsName(file.name) && !file.recovered;
+      const { wb: book, warnings: w, kept: k } = csv ? { ...importCsv(file.data, file.name), warnings: {}, kept: {} } : xls ? await importXls(file.data) : await importXlsx(file.data);
+      source.current = csv || xls ? null : file.data;
       setKept(k || {});
       setWb(book);
       history.current = { undo: [], redo: [] };
@@ -152,8 +156,9 @@ export default function SheetApp({ initialFile, onOpenOther, onNewDoc, autosaveS
       const csv = isCsv(doc.name) && !asNew;
       if (csv && (wb.sheets.length > 1 || [...wb.sheets[wb.active].cells.values()].some((c) => c.f != null || c.s)) && !window.confirm(CSV_LOSS)) return false;
       const bytes = csv ? exportCsv(wb.sheets[wb.active]) : await exportXlsx(wb, { source: source.current });
-      const name = !csv && isCsv(doc.name) ? doc.name.replace(/\.csv$/i, '.xlsx') : doc.name;
-      const r = asNew || !doc.path ? await fileApi.saveFileAs(name, bytes) : await fileApi.saveFile(doc.path, name, bytes);
+      // открытая .xls сохраняется книгой .xlsx — под новым именем (файл .xls не перезаписывается содержимым .xlsx)
+      const name = !csv && (isCsv(doc.name) || isXlsName(doc.name)) ? doc.name.replace(/\.(csv|xls)$/i, '.xlsx') : doc.name;
+      const r = asNew || !doc.path || isXlsName(doc.name) ? await fileApi.saveFileAs(name, bytes) : await fileApi.saveFile(doc.path, name, bytes);
       if (!r) return false;
       setDoc({ path: r.path, name: r.name });
       setDirty(false);
@@ -182,7 +187,7 @@ export default function SheetApp({ initialFile, onOpenOther, onNewDoc, autosaveS
   // «Экспорт в CSV»: копия текущего листа, книга остаётся открытой как была
   const saveCsv = async () => {
     try {
-      await fileApi.saveFileAs(`${doc.name.replace(/\.(xlsx|csv)$/i, '')} (${sheet.name}).csv`, exportCsv(sheet));
+      await fileApi.saveFileAs(`${doc.name.replace(/\.(xlsx|xls|csv)$/i, '')} (${sheet.name}).csv`, exportCsv(sheet));
     } catch (e) {
       fileApi.showError('Не удалось сохранить CSV', String(e.message || e));
     }
@@ -217,7 +222,7 @@ export default function SheetApp({ initialFile, onOpenOther, onNewDoc, autosaveS
     else if (cmd === 'openData') { if (/\.docx$/i.test(payload.name)) onOpenOther(payload); else h.load(payload); }
     else if (cmd === 'saveAndClose') h.save(() => fileApi.closeNow());
     else if (cmd === 'print') { setPreview(true); setShowBreaks(true); }
-    else if (cmd === 'pdf') fileApi.exportPdf(doc.name.replace(/\.(xlsx|csv)$/i, '') + '.pdf');
+    else if (cmd === 'pdf') fileApi.exportPdf(doc.name.replace(/\.(xlsx|xls|csv)$/i, '') + '.pdf');
   }), [onOpenOther, doc.name]);
 
   // ---------- Ввод ----------
@@ -305,7 +310,7 @@ export default function SheetApp({ initialFile, onOpenOther, onNewDoc, autosaveS
 
   // перетаскивание .xlsx/.docx в окно
   const onDrop = async (e) => {
-    const f = [...e.dataTransfer.files].find((x) => /\.(xlsx|docx|csv)$/i.test(x.name));
+    const f = [...e.dataTransfer.files].find((x) => /\.(xlsx|xls|docx|csv)$/i.test(x.name));
     if (!f) return;
     e.preventDefault();
     const p = fileApi.pathForFile(f);
@@ -380,7 +385,7 @@ export default function SheetApp({ initialFile, onOpenOther, onNewDoc, autosaveS
     setCalcMode: (mode) => change((w) => setCalcMode(w, mode)),
     protect: () => setProtectDlg(isProtected(sheet) ? 'unprotect' : 'protect'),
     wb, sheet, si, sel, rg, change, undo, redo, canUndo: history.current.undo.length > 0, canRedo: history.current.redo.length > 0,
-    file: { newDocument, newBook, open, openHere, save: () => save(), saveAs: () => write(true), saveCsv, print: () => { setPreview(true); setShowBreaks(true); }, pdf: () => fileApi.exportPdf(doc.name.replace(/\.(xlsx|csv)$/i, '') + '.pdf') },
+    file: { newDocument, newBook, open, openHere, save: () => save(), saveAs: () => write(true), saveCsv, print: () => { setPreview(true); setShowBreaks(true); }, pdf: () => fileApi.exportPdf(doc.name.replace(/\.(xlsx|xls|csv)$/i, '') + '.pdf') },
     autoSum: () => {
       const target = rg.r2 > rg.r1 || rg.c2 > rg.c1 ? { r: rg.r2 + 1, c: rg.c1 } : { r: sel.r, c: sel.c };
       const f = rg.r2 > rg.r1 && rg.c1 === rg.c2 ? `SUM(${addr(rg.r1, rg.c1)}:${addr(rg.r2, rg.c1)})` : autoSumFormula(sheet, target.r, target.c);
@@ -611,7 +616,7 @@ export default function SheetApp({ initialFile, onOpenOther, onNewDoc, autosaveS
         <PrintPreview sheet={sheet} cf={cfMap} onClose={() => { setPreview(false); gridRef.current && gridRef.current.focus(); }}
           onPage={(patch) => change((w) => setPage(w, si, patch))}
           onPrint={() => fileApi.print()}
-          onPdf={() => fileApi.exportPdf(doc.name.replace(/\.(xlsx|csv)$/i, '') + '.pdf')} />
+          onPdf={() => fileApi.exportPdf(doc.name.replace(/\.(xlsx|xls|csv)$/i, '') + '.pdf')} />
       )}
       {dvPop && (
         <div className="modal-backdrop clear" onMouseDown={() => setDvPop(null)}>

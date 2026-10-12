@@ -350,7 +350,7 @@ export default function App({ initialFile, onOpenOther, onNewSheet, autosaveSec 
   // Файл, который нужно открыть в этом окне (в программе — только если окно было пустым, иначе файл уже открыт в новом)
   const openHere = useCallback(async (f) => {
     if (!f) return;
-    if (/\.(xlsx|csv)$/i.test(f.name)) { fileApi.setDirty(false); onOpenOther(f); } else await load(f);
+    if (/\.(xlsx|xls|csv)$/i.test(f.name)) { fileApi.setDirty(false); onOpenOther(f); } else await load(f);
   }, [load, onOpenOther]);
 
   const open = useCallback(async () => {
@@ -418,7 +418,7 @@ export default function App({ initialFile, onOpenOther, onNewSheet, autosaveSec 
     else if (cmd === 'save') h.save();
     else if (cmd === 'saveAs') h.saveAs();
     else if (cmd === 'newSheet') h.newSheet();
-    else if (cmd === 'openData') { if (/\.(xlsx|csv)$/i.test(payload.name)) h.onOpenOther(payload); else h.load(payload); }
+    else if (cmd === 'openData') { if (/\.(xlsx|xls|csv)$/i.test(payload.name)) h.onOpenOther(payload); else h.load(payload); }
     else if (cmd === 'saveAndClose') h.save(() => fileApi.closeNow());
     else if (cmd === 'print') h.doPrint();
     else if (cmd === 'find' || cmd === 'replace') setFindMode(cmd);
@@ -453,7 +453,7 @@ export default function App({ initialFile, onOpenOther, onNewSheet, autosaveSec 
 
   // Перетаскивание .docx в окно
   const onDrop = async (e) => {
-    const f = [...e.dataTransfer.files].find((x) => /\.(docx|xlsx|csv)$/i.test(x.name));
+    const f = [...e.dataTransfer.files].find((x) => /\.(docx|xlsx|xls|csv)$/i.test(x.name));
     if (!f) return;
     e.preventDefault();
     const p = fileApi.pathForFile(f);
