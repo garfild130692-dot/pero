@@ -509,6 +509,16 @@ ipcMain.handle('file:saveAs', async (e, suggestedName, data) => {
   return writeUserFile(s, p, data);
 });
 
+// «Сохранить как» книги: путь выбирается раньше, чем строятся байты — формат (.xlsx или .xls) зависит от выбора
+ipcMain.handle('file:pickSavePath', async (e, suggestedName) => {
+  const s = stateOf(e);
+  const ext = (/\.(xlsx|xls)$/i.exec(suggestedName || '') || [, 'xlsx'])[1].toLowerCase();
+  const filters = ext === 'xls' ? [...XLS_FILTER, ...XLSX_FILTER] : [...XLSX_FILTER, ...XLS_FILTER];
+  const r = await dialog.showSaveDialog(s.win, { defaultPath: suggestedName || 'Книга1.xlsx', filters });
+  if (r.canceled || !r.filePath) return null;
+  return /\.(xlsx|xls)$/i.test(r.filePath) ? r.filePath : `${r.filePath}.${ext}`;
+});
+
 ipcMain.handle('file:confirmDiscard', async (e) => {
   const s = stateOf(e);
   if (!s.dirty) return true;

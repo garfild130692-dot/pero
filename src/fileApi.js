@@ -59,9 +59,16 @@ export async function saveFileAs(name, data) {
   return download(name, data);
 }
 
+// Путь для «Сохранить как» книги (.xlsx / .xls) — без записи; в браузере путь — само имя (потом скачивание)
+export async function pickSavePath(name) {
+  if (native && native.pickSavePath) return native.pickSavePath(name);
+  return name;
+}
+
 function download(name, data) {
-  const type = /\.xlsx$/i.test(name || '') ? 'spreadsheetml.sheet' : 'wordprocessingml.document';
-  const blob = new Blob([data], { type: `application/vnd.openxmlformats-officedocument.${type}` });
+  const type = /\.xls$/i.test(name || '') ? 'application/vnd.ms-excel'
+    : `application/vnd.openxmlformats-officedocument.${/\.xlsx$/i.test(name || '') ? 'spreadsheetml.sheet' : 'wordprocessingml.document'}`;
+  const blob = new Blob([data], { type });
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
   a.download = name || 'Документ.docx';

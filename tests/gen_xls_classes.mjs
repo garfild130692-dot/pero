@@ -25,7 +25,7 @@ const note = (name, i, c) => {
   while (a.length <= i) a.push(new Map());
   a[i].set(c, (a[i].get(c) || 0) + 1);
 };
-function walk(ce) {
+function walk(ce, onlyR = false) {
   const st = []; let p = 0;
   while (p < ce.length) {
     const t = ce[p];
@@ -52,7 +52,7 @@ function walk(ce) {
       const args = st.splice(st.length - n, n);
       let name = f && iftab !== UDF ? f.name : null;
       if (iftab === UDF) { const first = args.shift(); name = first && first.name ? first.name.replace(/^_xlfn\.(_xlws\.)?/, '') : null; }
-      if (name) args.forEach((a, i) => note(name, i, a.c));
+      if (name) args.forEach((a, i) => { if (!onlyR || a.c === 'R') note(name, i, a.c); });
       st.push({ c });
     } else if (base === 0x26 || base === 0x27 || base === 0x28 || base === 0x29) { /* подвыражение следует дальше */ } else {
       const e = { c };
@@ -66,10 +66,27 @@ function walk(ce) {
 for (const { t, d } of recs) {
   if (t === 0x06) { const cce = u16(d, 20); const ce = d.subarray(22, 22 + cce); if (ce[0] !== 0x01) walk(ce); }
   if (t === 0x04BC) { const cce = u16(d, 8); walk(d.subarray(10, 10 + cce)); }
+  // формулы массива: там значения пишутся классом A — берём только параметры-ссылки (R)
+  if (t === 0x0221) { const cce = u16(d, 12); walk(d.subarray(14, 14 + cce), true); }
 }
 const table = {};
 for (const [name, a] of [...stat].sort((x, y) => (x[0] < y[0] ? -1 : 1))) {
   table[name] = a.map((m) => [...m].sort((x, y) => y[1] - x[1])[0]?.[0] || 'V').join('');
+}
+// Параметры, которые по грамматике Ftab ([MS-XLS] 2.5.198.17) принимают только ссылку (ref), — класс R, даже если в
+// эталоне Excel им попалась константа или их нет вовсе (последний класс действует для остальных аргументов)
+const REF_ONLY = {
+  ROW: 'R', COLUMN: 'R', AREAS: 'R', OFFSET: 'RV', CELL: 'VR', RANK: 'VRV', SUBTOTAL: 'VR', SUMIF: 'RVR', COUNTIF: 'RV',
+  COUNTBLANK: 'R', PHONETIC: 'R', ISREF: 'R',
+  DCOUNT: 'RRR', DSUM: 'RRR', DAVERAGE: 'RRR', DMIN: 'RRR', DMAX: 'RRR', DSTDEV: 'RRR', DVAR: 'RRR', DPRODUCT: 'RRR',
+  DSTDEVP: 'RRR', DVARP: 'RRR', DCOUNTA: 'RRR', DGET: 'RRR',
+};
+for (const [name, cls] of Object.entries(REF_ONLY)) {
+  const cur = table[name] || '';
+  const n = Math.max(cur.length, cls.length);
+  let out = '';
+  for (let i = 0; i < n; i++) out += cls[Math.min(i, cls.length - 1)] === 'R' ? 'R' : (cur[i] || cls[Math.min(i, cls.length - 1)]);
+  table[name] = out;
 }
 // русские имена пакета анализа → английские: канонические имена дописывает xls.js при чтении; здесь — как записал Excel
 const lines = Object.entries(table).map(([k, v]) => `  ${JSON.stringify(k)}: '${v}',`);

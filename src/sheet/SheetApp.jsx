@@ -22,6 +22,7 @@ import {
 import { exportXlsx, importXlsx } from './xlsx.js';
 import { exportCsv, importCsv } from './csv.js';
 import { importXls } from './xls.js';
+import { exportXls } from './xlsWrite.js';
 import { setPage } from './pageSetup.js';
 import { isLocked, isProtected, protectionViolation, setProtection } from './protect.js';
 import ProtectDialog from './ProtectDialog.jsx';
@@ -152,13 +153,26 @@ export default function SheetApp({ initialFile, onOpenOther, onNewDoc, autosaveS
 
   const write = async (asNew) => {
     try {
-      // открытый CSV: «Сохранить» — снова в CSV, «Сохранить как» — книгой .xlsx
+      // открытый CSV: «Сохранить» — снова в CSV, «Сохранить как» — книгой .xlsx или .xls
       const csv = isCsv(doc.name) && !asNew;
       if (csv && (wb.sheets.length > 1 || [...wb.sheets[wb.active].cells.values()].some((c) => c.f != null || c.s)) && !window.confirm(CSV_LOSS)) return false;
-      const bytes = csv ? exportCsv(wb.sheets[wb.active]) : await exportXlsx(wb, { source: source.current });
-      // открытая .xls сохраняется книгой .xlsx — под новым именем (файл .xls не перезаписывается содержимым .xlsx)
-      const name = !csv && (isCsv(doc.name) || isXlsName(doc.name)) ? doc.name.replace(/\.(csv|xls)$/i, '.xlsx') : doc.name;
-      const r = asNew || !doc.path || isXlsName(doc.name) ? await fileApi.saveFileAs(name, bytes) : await fileApi.saveFile(doc.path, name, bytes);
+      let r;
+      if (csv) r = await fileApi.saveFile(doc.path, doc.name, exportCsv(wb.sheets[wb.active]));
+      else {
+        // путь — до сборки байтов: формат выбирается в диалоге (.xlsx или Excel 97–2003)
+        const suggested = isCsv(doc.name) ? doc.name.replace(/\.csv$/i, '.xlsx') : doc.name;
+        const p = asNew || !doc.path ? await fileApi.pickSavePath(suggested) : doc.path;
+        if (!p) return false;
+        let bytes;
+        if (isXlsName(p)) {
+          const { bytes: b, lost } = exportXls(wb);
+          const what = Object.entries(lost).map(([k, n]) => (n > 1 ? `${k} (${n})` : k));
+          if (what.length && !window.confirm(`В формате Excel 97–2003 (.xls) не сохранится: ${what.join(', ')}. Сохранить?`)) return false;
+          bytes = b;
+        } else bytes = await exportXlsx(wb, { source: source.current });
+        const name = p.split(/[\\/]/).pop();
+        r = fileApi.isDesktop ? await fileApi.saveFile(p, name, bytes) : await fileApi.saveFileAs(name, bytes);
+      }
       if (!r) return false;
       setDoc({ path: r.path, name: r.name });
       setDirty(false);

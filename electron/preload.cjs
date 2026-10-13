@@ -28,6 +28,7 @@ contextBridge.exposeInMainWorld('pero', {
   exportPdf: (name) => ipcRenderer.invoke('doc:pdf', name),
   saveFile: (path, data) => ipcRenderer.invoke('file:save', path, data),
   saveFileAs: (name, data) => ipcRenderer.invoke('file:saveAs', name, data),
+  pickSavePath: (name) => ipcRenderer.invoke('file:pickSavePath', name),
   confirmDiscard: () => ipcRenderer.invoke('file:confirmDiscard'),
   showError: (title, msg) => ipcRenderer.invoke('dialog:error', title, msg),
   setDirty: (v) => ipcRenderer.send('state:dirty', v),

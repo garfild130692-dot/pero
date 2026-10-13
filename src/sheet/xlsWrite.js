@@ -54,6 +54,10 @@ class Stream {
 const PREC = { '=': 1, '<>': 1, '<': 1, '>': 1, '<=': 1, '>=': 1, '&': 2, '+': 3, '-': 3, '*': 4, '/': 4, '^': 5 };
 const BINOP = { '+': 0x03, '-': 0x04, '*': 0x05, '/': 0x06, '^': 0x07, '&': 0x08, '<': 0x09, '<=': 0x0A, '=': 0x0B, '>=': 0x0C, '>': 0x0D, '<>': 0x0E };
 const REF_FN = new Set(['OFFSET', 'INDIRECT', 'INDEX', 'CHOOSE', 'IF']); // могут вернуть ссылку — там, где ждут ссылку, класс R
+// функции, возвращающие массив (в Excel 365 — «разлив»; в .xls такую формулу Excel пишет формулой массива)
+const DYN_FN = new Set(['FILTER', 'SORT', 'SORTBY', 'UNIQUE', 'SEQUENCE', 'RANDARRAY', 'TRANSPOSE', 'MMULT', 'MINVERSE', 'MUNIT',
+  'FREQUENCY', 'TEXTSPLIT', 'VSTACK', 'HSTACK', 'TOCOL', 'TOROW', 'WRAPROWS', 'WRAPCOLS', 'TAKE', 'DROP', 'CHOOSEROWS', 'CHOOSECOLS',
+  'EXPAND', 'LINEST', 'LOGEST', 'TREND', 'GROWTH', 'MAP', 'SCAN', 'MAKEARRAY', 'BYROW', 'BYCOL', 'GROUPBY', 'PIVOTBY']);
 class Unsupported extends Error {}
 
 // ctx: { sheetIndex(name) → номер листа | -1, own (номер текущего листа), xti(first, last) → номер XTI,
@@ -61,6 +65,11 @@ class Unsupported extends Error {}
 //        addin(имя функции) → { ixti, index } — внешнее имя надстройки; three — ссылки всегда трёхмерные (имена) }
 function compile(ast, ctx) {
   const ce = new Buf(); const cb = new Buf();
+  // формуле нужна запись формулой массива: диапазон там, где ждут значение (иначе неявное пересечение), или функция,
+  // возвращающая массив, вне параметра-массива — так Excel 365 решает, «динамическая» ли формула
+  let needArray = false; // диапазон на месте значения (у формулы legacy так задумано — неявное пересечение)
+  let needDyn = false; // функция-массив — формула «динамическая» в любом случае
+  const arrayCtx = ctx.mode === 'A'; // формула массива: всё, кроме параметров-ссылок, — массивы
   const cls = (base, mode) => base + (mode === 'R' ? 0 : mode === 'A' ? 0x40 : 0x20);
   const loc = (r, c, absR, absC) => { ce.u16(r); ce.u16((c & 0x3FFF) | (absC ? 0 : 0x4000) | (absR ? 0 : 0x8000)); };
   const sheetOf = (name) => {
@@ -88,6 +97,7 @@ function compile(ast, ctx) {
       case 'range': {
         const r2 = Math.min(n.r2, MAXR - 1); const c2 = Math.min(n.c2, MAXC - 1);
         const m = mode || 'R';
+        if (m === 'V' && !(n.r1 === n.r2 && n.c1 === n.c2)) needArray = true;
         if (n.r1 >= MAXR || n.c1 >= MAXC) { ce.u8(cls(0x2B, m)).u32(0).u32(0); return; }
         const [aR1, aC1, aR2, aC2] = n.abs || [false, false, false, false];
         if (n.sheet2 && n.r1 === n.r2 && n.c1 === n.c2 && !n.whole) { // Лист1:Лист3!A1 — трёхмерная ссылка на ячейку
@@ -121,12 +131,12 @@ function compile(ast, ctx) {
         }
         return;
       }
-      case 'un': emit(n.a, mode === 'A' ? 'A' : 'V'); if (paren(n.a, 6)) ce.u8(0x15); ce.u8(n.op === '-' ? 0x13 : 0x12); return;
-      case 'pct': emit(n.a, mode === 'A' ? 'A' : 'V'); if (paren(n.a, 6)) ce.u8(0x15); ce.u8(0x14); return;
+      case 'un': emit(n.a, arrayCtx || mode === 'A' ? 'A' : 'V'); if (paren(n.a, 6)) ce.u8(0x15); ce.u8(n.op === '-' ? 0x13 : 0x12); return;
+      case 'pct': emit(n.a, arrayCtx || mode === 'A' ? 'A' : 'V'); if (paren(n.a, 6)) ce.u8(0x15); ce.u8(0x14); return;
       case 'bin': {
         if (!BINOP[n.op]) throw new Unsupported(n.op);
         const p = PREC[n.op];
-        const om = mode === 'A' ? 'A' : 'V'; // операнды операторов — значения (в формуле массива — массивы)
+        const om = arrayCtx || mode === 'A' ? 'A' : 'V'; // операнды операторов — значения (в формуле массива — массивы)
         emit(n.a, om); if (paren(n.a, p)) ce.u8(0x15);
         emit(n.b, om); if (paren(n.b, p + (n.op === '^' ? 0 : 1))) ce.u8(0x15);
         ce.u8(BINOP[n.op]);
@@ -138,10 +148,16 @@ function compile(ast, ctx) {
         const f = FTAB_BY_NAME.get(name);
         // класс аргумента — как пишет сам Excel (xlsClasses.js); в формуле массива значения — массивами
         const pc = PARAM_CLASS[name];
-        const argMode = (i) => { const c = pc ? pc[Math.min(i, pc.length - 1)] : null; return mode === 'A' && c !== 'R' ? 'A' : c; };
-        const fnMode = mode === 'A' ? 'A' : mode === 'R' && REF_FN.has(name) ? 'R' : 'V';
+        const argMode = (i) => { const c = pc ? pc[Math.min(i, pc.length - 1)] : null; return (arrayCtx || mode === 'A') && c !== 'R' ? 'A' : c; };
+        // токен функции (как пишет Excel): где ждут ссылку и функция может её вернуть — R; аргумент формулы массива и
+        // функция, возвращающая массив, — A; иначе V. Функция-массив там, где ждут значение, — формула массива (ARRAY)
+        const fnMode = mode === 'R' && REF_FN.has(name) ? 'R' : mode === 'A' || DYN_FN.has(name) || (arrayCtx && mode === 'R') ? 'A' : 'V';
+        if (DYN_FN.has(name)) needDyn = true;
+        if ((name === 'ROW' || name === 'COLUMN') && n.args[0] && n.args[0].t === 'range' && !(n.args[0].r1 === n.args[0].r2 && n.args[0].c1 === n.args[0].c2)) needArray = true;
         if (f && f.iftab !== UDF) {
           n.args.forEach((a, i) => emit(a, argMode(i)));
+          // СУММ одного аргумента Excel пишет tAttrSum
+          if (name === 'SUM' && n.args.length === 1 && fnMode !== 'R') { ce.u8(0x19).u8(0x10).u16(0); return; }
           if (f.argc != null && f.argc === n.args.length) ce.u8(cls(0x21, fnMode)).u16(f.iftab);
           else ce.u8(cls(0x22, fnMode)).u8(n.args.length).u16(f.iftab);
           return;
@@ -160,8 +176,9 @@ function compile(ast, ctx) {
   // скобки: у дочернего выражения приоритет ниже нужного — PtgParen (для показа формулы в Excel)
   const prec = (n) => (n.t === 'bin' ? PREC[n.op] : 7);
   const paren = (child, need) => prec(child) < need;
-  emit(ast, ctx.mode || 'V');
-  return { rgce: ce.out(), rgcb: cb.out() };
+  // верхняя функция формулы массива — класса V (так пишет Excel), её аргументы — массивы
+  emit(ast, ctx.mode === 'A' && ast.t === 'fn' ? 'V' : ctx.mode || 'V');
+  return { rgce: ce.out(), rgcb: cb.out(), needArray, needDyn };
 }
 
 // ---------- Книга ----------
@@ -375,7 +392,7 @@ export function exportXls(wb, opts = {}) {
         for (const x of (byRow.get(r) || []).sort((a, b) => a.c - b.c)) {
           const { cell, c } = x;
           const xf = xfOf(cell.s);
-          const ak = arrayOf.get(key(r, c));
+          let ak = arrayOf.get(key(r, c));
           if (cell.f != null || ak) {
             let rgce; let rgcb = new Uint8Array(0);
             if (ak) {
@@ -385,6 +402,11 @@ export function exportXls(wb, opts = {}) {
               const res = tryCompile(cell.f, { own: si });
               if (!res) { lose('формулы, которых нет в Excel 97–2003 (записаны значением)'); writeValue(st, r, c, xf, cell.v); continue; }
               ({ rgce, rgcb } = res);
+              if (res.needDyn || (res.needArray && !cell.legacy)) { // «динамическая» формула — формулой массива на свою ячейку, как пишет Excel
+                ak = key(r, c);
+                arrays.set(ak, { r1: r, c1: c, r2: r, c2: c });
+                rgce = Uint8Array.from([0x01, r & 0xFF, r >> 8, c & 0xFF, c >> 8]); rgcb = new Uint8Array(0);
+              }
             }
             const v = x.ghost ? cell.v : cell.v;
             const val = new Buf();

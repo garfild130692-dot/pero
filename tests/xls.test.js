@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { readCfb, writeCfb } from '../src/formats/cfb.js';
 import { importXls, decompile } from '../src/sheet/xls.js';
+import { exportXls } from '../src/sheet/xlsWrite.js';
 import { importXlsx } from '../src/sheet/xlsx.js';
 
 const sortK = (x) => (Array.isArray(x) ? x.map(sortK) : x && typeof x === 'object' ? Object.fromEntries(Object.keys(x).sort().map((k) => [k, sortK(x[k])])) : x);
@@ -74,5 +75,54 @@ describe('.xls: чтение книги (BIFF8)', () => {
       0x08, // &
     ]);
     expect(decompile(rgce, new Uint8Array(0), { name: () => '', sheetRef: () => null, externName: () => '' })).toBe('ROUND((A1+$B$2)*-C3%,2)&"x"');
+  });
+});
+
+// запись: модель из .xlsx → exportXls → importXls — та же модель (что Excel открывает наш файл без восстановления и
+// считает те же значения, проверяется вручную: tests/xls_excel_dump.ps1 — book 11/11, preserve 15/15, formulas 862/871
+// формул, остальные — LET, функции новее Excel 2021, ROWS(A:A) = 65536 строк формата и случайные)
+async function roundTrip(name, allow = () => false) {
+  const b = (await importXlsx(readFileSync(`tests/fixtures/${name}.xlsx`))).wb;
+  const { bytes, lost } = exportXls(b);
+  const a = (await importXls(bytes)).wb;
+  const out = [];
+  b.sheets.forEach((sb, i) => {
+    const sa = a.sheets[i];
+    if (!sa || sa.name !== sb.name) { out.push(`лист ${sb.name}`); return; }
+    for (const k of new Set([...sa.cells.keys(), ...sb.cells.keys()])) {
+      const x = sa.cells.get(k) || {}; const y = sb.cells.get(k) || {};
+      if (noSpace(x.f) !== noSpace(y.f)) { if (!allow(k, 'формула')) out.push(`${sb.name}!${k} формула: ${J(x.f)} ≠ ${J(y.f)}`); }
+      else if (J(x.v) !== J(y.v) && !(typeof x.v === 'number' && typeof y.v === 'number' && Math.abs(x.v - y.v) <= 1e-9 * Math.max(1, Math.abs(y.v)))) { if (!allow(k, 'значение')) out.push(`${sb.name}!${k} значение: ${J(x.v)} ≠ ${J(y.v)}`); }
+      if (J(x.s) !== J(y.s)) out.push(`${sb.name}!${k} стиль: ${J(x.s)} ≠ ${J(y.s)}`);
+    }
+    for (const p of ['colW', 'rowH', 'merges', 'freeze', 'page', 'printArea', 'printTitles', 'protection']) if (J(sa[p]) !== J(sb[p])) out.push(`${sb.name} ${p}: ${J(sa[p])} ≠ ${J(sb[p])}`);
+    for (const p of ['colInfo', 'rowInfo']) if (J(noXf(sa[p])) !== J(noXf(sb[p]))) out.push(`${sb.name} ${p}`);
+  });
+  if (J(a.names) !== J(b.names)) out.push(`имена: ${J(a.names)} ≠ ${J(b.names)}`);
+  if (a.active !== b.active) out.push('активный лист');
+  return { out, lost, bytes };
+}
+
+describe('.xls: запись книги (BIFF8)', () => {
+  it('book: значения, формулы, стили, объединение, ширины — туда и обратно без расхождений', async () => {
+    const { out, lost } = await roundTrip('book');
+    expect(out).toEqual([]);
+    expect(lost).toEqual({});
+  });
+  it('preserve: имена, закрепление, скрытие и группировка, параметры страницы, область печати, защита', async () => {
+    const { out, lost } = await roundTrip('preserve');
+    expect(out).toEqual([]);
+    expect(Object.keys(lost).sort()).toEqual(['проверка данных', 'условное форматирование']);
+  });
+  it('formulas: 870 формул — классы операндов, функции новее Excel 2003 (_xlfn), формулы массива', async () => {
+    // LET в .xls нет — записывается значением; СЛЧИС/СЛУЧМЕЖДУ — случайные
+    const { out, lost, bytes } = await roundTrip('formulas', (k, what) => (what === 'формула' && ['354,2', '491,2'].includes(k)) || (what === 'значение' && ['358,2', '359,2'].includes(k)));
+    expect(out).toEqual([]);
+    expect(lost).toEqual({ 'формулы, которых нет в Excel 97–2003 (записаны значением)': 2 });
+    // динамические формулы — ARRAY на одну ячейку с токенами класса A (как пишет Excel): =СУММ(ФИЛЬТР(…))
+    const s = readCfb(bytes).stream('Workbook');
+    let arrays = 0;
+    for (let p = 0; p + 4 <= s.length;) { const t = s[p] | (s[p + 1] << 8); const l = s[p + 2] | (s[p + 3] << 8); if (t === 0x0221) arrays++; p += 4 + l; }
+    expect(arrays).toBeGreaterThan(10);
   });
 });
