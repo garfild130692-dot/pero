@@ -102,7 +102,7 @@ export default function StartScreen({ onCreate, onOpen }) {
   }), []);
 
   const onDrop = async (e) => {
-    const f = [...e.dataTransfer.files].find((x) => /\.(docx|xlsx|xls|csv)$/i.test(x.name));
+    const f = [...e.dataTransfer.files].find((x) => /\.(docx|doc|xlsx|xls|csv)$/i.test(x.name));
     if (!f) return;
     e.preventDefault();
     const p = fileApi.pathForFile(f);

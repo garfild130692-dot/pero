@@ -2,3 +2,7 @@ node_modules/
 dist/
 release/
 tests/out/
+
+# большой .doc (3 МБ): tests/make_doc_fixtures.ps1 big
+tests/fixtures/big.doc
+tests/fixtures/big.doc.docx

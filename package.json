@@ -68,6 +68,13 @@
         "icon": "build/icon.ico"
       },
       {
+        "ext": "doc",
+        "name": "Pero.Document8",
+        "description": "Документ Word 97–2003",
+        "role": "Editor",
+        "icon": "build/icon.ico"
+      },
+      {
         "ext": "xls",
         "name": "Pero.Workbook8",
         "description": "Книга Excel 97–2003",

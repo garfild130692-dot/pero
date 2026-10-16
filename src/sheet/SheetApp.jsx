@@ -201,7 +201,7 @@ export default function SheetApp({ initialFile, onOpenOther, onNewDoc, autosaveS
   // файл для этого окна (в программе — только если окно было пустым, иначе он уже открыт в новом окне)
   const openHere = (f) => {
     if (!f) return;
-    if (/\.docx$/i.test(f.name)) { fileApi.setDirty(false); onOpenOther(f); } else load(f);
+    if (/\.docx?$/i.test(f.name)) { fileApi.setDirty(false); onOpenOther(f); } else load(f);
   };
   // «Экспорт в CSV»: копия текущего листа, книга остаётся открытой как была
   const saveCsv = async () => {
@@ -238,7 +238,7 @@ export default function SheetApp({ initialFile, onOpenOther, onNewDoc, autosaveS
     else if (cmd === 'open') h.open();
     else if (cmd === 'save') h.save();
     else if (cmd === 'saveAs') h.saveAs();
-    else if (cmd === 'openData') { if (/\.docx$/i.test(payload.name)) onOpenOther(payload); else h.load(payload); }
+    else if (cmd === 'openData') { if (/\.docx?$/i.test(payload.name)) onOpenOther(payload); else h.load(payload); }
     else if (cmd === 'saveAndClose') h.save(() => fileApi.closeNow());
     else if (cmd === 'print') { setPreview(true); setShowBreaks(true); }
     else if (cmd === 'pdf') fileApi.exportPdf(doc.name.replace(/\.(xlsx|xls|csv)$/i, '') + '.pdf');
@@ -329,7 +329,7 @@ export default function SheetApp({ initialFile, onOpenOther, onNewDoc, autosaveS
 
   // перетаскивание .xlsx/.docx в окно
   const onDrop = async (e) => {
-    const f = [...e.dataTransfer.files].find((x) => /\.(xlsx|xls|docx|csv)$/i.test(x.name));
+    const f = [...e.dataTransfer.files].find((x) => /\.(xlsx|xls|docx|doc|csv)$/i.test(x.name));
     if (!f) return;
     e.preventDefault();
     const p = fileApi.pathForFile(f);

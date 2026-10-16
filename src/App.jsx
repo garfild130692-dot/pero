@@ -4,6 +4,7 @@ import { EditorState } from '@tiptap/pm/state';
 import { extensions, loadDocument } from './editor/extensions.js';
 import TitleBar from './TitleBar.jsx';
 import { importDocx } from './docx/import.js';
+import { docToDocx } from './docx/doc.js';
 import { exportDocx } from './docx/export.js';
 import { OPAQUE_SUMMARY } from './editor/opaque.js';
 import Ribbon, { QuickAccess } from './Ribbon.jsx';
@@ -316,7 +317,12 @@ export default function App({ initialFile, onOpenOther, onNewSheet, autosaveSec 
 
   const load = useCallback(async (file) => {
     try {
-      const { doc: json, warnings: w, preserved: kept } = await importDocx(file.data);
+      // .doc (Word 97–2003) — свой разбор [MS-DOC] в пакет .docx; дальше — как обычный .docx (он же — исходный пакет)
+      const isDoc = /\.doc$/i.test(file.name) && !file.recovered;
+      const conv = isDoc ? await docToDocx(file.data) : null;
+      const data = conv ? conv.docx : file.data;
+      const { doc: json, warnings: w0, preserved: kept } = await importDocx(data);
+      const w = conv ? { ...conv.warnings, ...w0 } : w0;
       loadDocument(editor, json);
       resetHistory(editor);
       editor.commands.focus('start');
@@ -324,7 +330,7 @@ export default function App({ initialFile, onOpenOther, onNewSheet, autosaveSec 
       setWarnings(w);
       setPreserved(kept);
       setShowComments((json.attrs.comments || []).length > 0);
-      source.current = file.data;
+      source.current = data;
       setDirtyState(!!file.recovered); // восстановленный после сбоя — ещё не сохранён
     } catch (e) {
       fileApi.showError('Не удалось открыть файл', `${file.name}\n\n${e.message || e}`);
@@ -368,7 +374,10 @@ export default function App({ initialFile, onOpenOther, onNewSheet, autosaveSec 
   const write = useCallback(async (asNew) => {
     try {
       const bytes = await exportDocx(editor.getJSON(), { source: source.current });
-      const r = asNew || !doc.path ? await fileApi.saveFileAs(doc.name, bytes) : await fileApi.saveFile(doc.path, doc.name, bytes);
+      // открытый .doc сохраняется документом .docx под новым именем (файл .doc не перезаписывается содержимым .docx)
+      const fromDoc = /\.doc$/i.test(doc.name);
+      const name = fromDoc ? doc.name.replace(/\.doc$/i, '.docx') : doc.name;
+      const r = asNew || !doc.path || fromDoc ? await fileApi.saveFileAs(name, bytes) : await fileApi.saveFile(doc.path, name, bytes);
       if (!r) return false;
       setDoc({ path: r.path, name: r.name });
       setDirtyState(false);
@@ -402,7 +411,7 @@ export default function App({ initialFile, onOpenOther, onNewSheet, autosaveSec 
   const doPrint = useCallback(() => fileApi.print(), []);
   const doPdf = useCallback(async () => {
     try {
-      await fileApi.exportPdf(doc.name.replace(/\.docx$/i, '') + '.pdf');
+      await fileApi.exportPdf(doc.name.replace(/\.docx?$/i, '') + '.pdf');
     } catch (e) {
       fileApi.showError('Не удалось сохранить PDF', String(e.message || e));
     }
@@ -453,7 +462,7 @@ export default function App({ initialFile, onOpenOther, onNewSheet, autosaveSec 
 
   // Перетаскивание .docx в окно
   const onDrop = async (e) => {
-    const f = [...e.dataTransfer.files].find((x) => /\.(docx|xlsx|xls|csv)$/i.test(x.name));
+    const f = [...e.dataTransfer.files].find((x) => /\.(docx|doc|xlsx|xls|csv)$/i.test(x.name));
     if (!f) return;
     e.preventDefault();
     const p = fileApi.pathForFile(f);
