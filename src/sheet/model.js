@@ -1103,6 +1103,8 @@ export function shiftCells(wb, si, axis, at, count) {
       }
       // лист из файла: сдвиг запоминается — экспорт сдвинет диапазоны условного форматирования, проверки, ссылок
       if (sheet.src) next.src = { ...sheet.src, shifts: [...(sheet.src.shifts || []), { axis, at, count }] };
+      // лист из .xls: перенесённые как есть записи (рисунки, примечания, УФ…) ссылаются на старые адреса — не переносить
+      if (sheet.xlsKeep) next.xlsKeep = { ...sheet.xlsKeep, shifted: true };
     }
     return next;
   });

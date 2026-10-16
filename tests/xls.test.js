@@ -6,6 +6,7 @@ import { readCfb, writeCfb } from '../src/formats/cfb.js';
 import { importXls, decompile } from '../src/sheet/xls.js';
 import { exportXls } from '../src/sheet/xlsWrite.js';
 import { importXlsx } from '../src/sheet/xlsx.js';
+import { setInput, shiftCells, renameSheet, newSheet } from '../src/sheet/model.js';
 
 const sortK = (x) => (Array.isArray(x) ? x.map(sortK) : x && typeof x === 'object' ? Object.fromEntries(Object.keys(x).sort().map((k) => [k, sortK(x[k])])) : x);
 const J = (x) => JSON.stringify(sortK(x ?? null));
@@ -124,5 +125,52 @@ describe('.xls: запись книги (BIFF8)', () => {
     let arrays = 0;
     for (let p = 0; p + 4 <= s.length;) { const t = s[p] | (s[p + 1] << 8); const l = s[p + 2] | (s[p + 3] << 8); if (t === 0x0221) arrays++; p += 4 + l; }
     expect(arrays).toBeGreaterThan(10);
+  });
+});
+
+// типы записей потока Workbook (глобальная часть и листы) — для проверки переноса как есть
+const recTypes = (bytes) => {
+  const s = readCfb(bytes).stream('Workbook'); const out = [];
+  for (let p = 0; p + 4 <= s.length;) { const t = s[p] | (s[p + 1] << 8); const l = s[p + 2] | (s[p + 3] << 8); out.push({ t, d: s.subarray(p + 4, p + 4 + l) }); p += 4 + l; }
+  return out;
+};
+const sameBytes = (a, b) => a.length === b.length && a.every((x, i) => x === b[i]);
+
+describe('.xls: сохранение поверх исходной книги', () => {
+  it('рисунки, диаграмма, примечание, УФ, ссылка, проверка, таблица — записями как в файле (Excel видит их те же — xls_objects_check.ps1)', async () => {
+    const src = readFileSync('tests/fixtures/preserve.xls');
+    const { wb, kept, warnings } = await importXls(src);
+    expect(Object.keys(kept).sort()).toEqual(['гиперссылки', 'диаграммы', 'параметры принтера', 'примечания к ячейкам', 'проверка данных', 'рисунки и фигуры', 'таблицы', 'условное форматирование'].sort());
+    expect(warnings).toEqual({ 'сводные таблицы': 1 });
+    const edited = setInput(wb, 0, 1, 1, '777');
+    const { bytes, lost } = exportXls(edited);
+    expect(lost).toEqual({});
+    // каждая перенесённая запись исходного файла есть в результате байт в байт
+    const KEEP = new Set([0xEB, 0xEC, 0x5D, 0x1B6, 0x1C, 0x1B0, 0x1B1, 0x1B8, 0x1B2, 0x1BE, 0x872, 0x4D]);
+    const mine = recTypes(bytes);
+    for (const r of recTypes(src).filter((x) => KEEP.has(x.t))) expect(mine.some((m) => m.t === r.t && sameBytes(m.d, r.d)), r.t.toString(16)).toBe(true);
+    // шрифты и форматы файла — на своих номерах (на них ссылаются диаграммы и надписи)
+    const fonts = (rs) => rs.filter((x) => x.t === 0x31).map((x) => Buffer.from(x.d).toString('hex'));
+    expect(fonts(mine).slice(0, fonts(recTypes(src)).length)).toEqual(fonts(recTypes(src)));
+    const back = await importXls(bytes);
+    expect(back.kept).toEqual(kept);
+    expect(back.wb.sheets[0].cells.get('1,1').v).toBe(777);
+  });
+  it('переименование листа — ряды диаграммы следуют (EXTERNSHEET в порядке файла); вставка строки — объекты листа теряются с предупреждением', async () => {
+    const { wb } = await importXls(readFileSync('tests/fixtures/preserve.xls'));
+    const renamed = exportXls(renameSheet(wb, 0, 'Новое'));
+    expect(renamed.lost).toEqual({});
+    expect((await importXls(renamed.bytes)).wb.sheets[0].name).toBe('Новое');
+    const shifted = exportXls(shiftCells(wb, 0, 'row', 3, 1));
+    expect(Object.keys(shifted.lost).some((k) => k.startsWith('диаграммы'))).toBe(true);
+    expect((await importXls(shifted.bytes)).kept['диаграммы']).toBeUndefined();
+  });
+  it('точные цвета ячеек — XFEXT с контрольной суммой XFCRC (Excel показывает все 140 из 140 — tests/out/xlscolor2.mjs)', async () => {
+    const s = newSheet('Цвета');
+    const h = (n) => n.toString(16).padStart(2, '0');
+    for (let i = 0; i < 70; i++) s.cells.set(`${i},0`, { v: i, s: { fill: `#${h(i * 3)}${h(255 - i * 2)}${h((i * 37) % 256)}`, color: `#${h((i * 11) % 256)}${h(i)}${h(200 - i)}` } });
+    const { bytes } = exportXls({ sheets: [s], active: 0 });
+    const back = (await importXls(bytes)).wb.sheets[0];
+    for (const [k, c] of s.cells) expect(back.cells.get(k).s, k).toEqual(c.s);
   });
 });

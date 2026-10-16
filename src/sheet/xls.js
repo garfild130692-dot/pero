@@ -27,6 +27,16 @@ const R = {
   PASSWORD: 0x0013, HORIZONTALPAGEBREAKS: 0x001B, VERTICALPAGEBREAKS: 0x001A, MSODRAWING: 0x00EC, OBJ: 0x005D, NOTE: 0x001C,
   HLINK: 0x01B8, CF: 0x01B1, DV: 0x01BE, AUTOFILTER: 0x009E, CHART_BOF: 0x0809, XFEXT: 0x087D, THEME: 0x0896, CONTINUEFRT12: 0x087F,
 };
+// Записи, которые Перо не разбирает, но переносит при сохранении в .xls как есть (зона — место в потоке листа)
+const KEEP_PRE = new Set([0x009B, 0x009D, 0x009E, 0x087E, 0x0090]); // автофильтр, сортировка — до DIMENSIONS
+const KEEP_OBJ = new Set([0x00EC, 0x005D, 0x01B6, 0x001C, 0x00ED]); // рисунки, объекты, надписи, примечания — до WINDOW2
+const KEEP_PROT = new Set([0x00DD, 0x0063]); // защита сценариев и объектов — после PROTECT
+const KEEP_TAIL = new Set([0x01B0, 0x01B1, 0x0879, 0x087A, 0x087B, 0x01B8, 0x0800, 0x01B2, 0x01BE, 0x0862, 0x0867, 0x0868,
+  0x0871, 0x0872, 0x0877]); // условное форматирование, ссылки, проверка, таблицы, защита (FEAT) — в конце листа
+const KEEP_LABEL = { 0x009E: 'автофильтр', 0x001C: 'примечания к ячейкам', 0x00EC: 'рисунки и фигуры', 0x01B1: 'условное форматирование',
+  0x087A: 'условное форматирование', 0x01B8: 'гиперссылки', 0x01BE: 'проверка данных', 0x0872: 'таблицы', 0x004D: 'параметры принтера',
+  0x0014: 'колонтитулы', 0x0015: 'колонтитулы' };
+
 // цвета темы Office по умолчанию в порядке индексов Excel: lt1, dk1, lt2, dk2, accent1–6, hlink, folHlink
 const THEME_DEF = ['FFFFFF', '000000', 'E7E6E6', '44546A', '4472C4', 'ED7D31', 'A5A5A5', 'FFC000', '5B9BD5', '70AD47', '0563C1', '954F72'];
 
@@ -226,8 +236,12 @@ export async function importXls(data, { recalc: doRecalc = true } = {}) {
   const stream = cfb.stream('Workbook') || cfb.stream('Book');
   if (!stream) throw new Error('Это не книга Excel: внутри нет потока Workbook');
   const recs = records(stream);
-  const kept = {};
+  const kept = {}; // предупреждения: при сохранении потеряется
   const keep = (k) => { kept[k] = (kept[k] || 0) + 1; };
+  const saved = {}; // переносится при сохранении в .xls как есть
+  const rawRec = (r) => stream.subarray(r.pos, r.pos + 4 + r.data.length);
+  const drawingGroup = []; // MSODRAWINGGROUP (+ CONTINUE) — общая часть рисунков всех листов
+  const fontRaw = []; const fmtRaw = []; // записи FONT и FORMAT как в файле: на их номера ссылаются диаграммы и надписи
   if (cfb.entries.some((e) => /^_VBA_PROJECT_CUR/i.test(e.path))) keep('макросы VBA');
 
   // глобальная часть
@@ -247,9 +261,10 @@ export async function importXls(data, { recalc: doRecalc = true } = {}) {
         const [name] = shortString(d, 14);
         fonts.push({ size: u16(d, 0) / 20, italic: !!(u16(d, 2) & 0x02), strike: !!(u16(d, 2) & 0x08), icv: u16(d, 4), bold: u16(d, 6) >= 700, sss: u16(d, 8), u: d[10], name });
         if (fonts.length === 4) fonts.push(null); // шрифта с номером 4 в BIFF нет
+        fontRaw.push(rawRec(recs[i]));
         break;
       }
-      case R.FORMAT: formats[u16(d, 0)] = xlString(d, 2)[0]; break;
+      case R.FORMAT: formats[u16(d, 0)] = xlString(d, 2)[0]; fmtRaw.push({ id: u16(d, 0), code: formats[u16(d, 0)], raw: rawRec(recs[i]) }); break;
       case R.XF: xfs.push(d.slice()); break;
       case R.XFEXT: { // точные цвета стиля (Excel 2007+): заливка, текст, границы — RGB или цвет темы с оттенком
         const ix = u16(d, 14); const n = u16(d, 18); let o = 20; const ext = {};
@@ -278,6 +293,7 @@ export async function importXls(data, { recalc: doRecalc = true } = {}) {
         for (let k = 0; k < n; k++) sst[k] = seg.richString();
         break;
       }
+      case 0x00EB: drawingGroup.push(rawRec(recs[i])); while (recs[i + 1] && recs[i + 1].type === R.CONTINUE) drawingGroup.push(rawRec(recs[++i])); break;
       case R.SUPBOOK: {
         const ctab = u16(d, 0); const cch = u16(d, 2);
         supbooks.push({ self: cch === 0x0401, addin: cch === 0x3A01, ctab, names: [] });
@@ -297,7 +313,7 @@ export async function importXls(data, { recalc: doRecalc = true } = {}) {
         const high = (d[14] & 1) === 1;
         const raw = charsAt(d, 15, cch, high);
         const fstart = 15 + cch * (high ? 2 : 1);
-        names.push({ builtin: !!(fl & 0x20), hidden: !!(fl & 0x01), fn: !!(fl & 0x02), name: fl & 0x20 ? `\u0001${raw.charCodeAt(0)}` : raw, itab, rgce: d.subarray(fstart, fstart + cce), rgcb: d.subarray(fstart + cce) });
+        names.push({ builtin: !!(fl & 0x20), hidden: !!(fl & 0x01), fn: !!(fl & 0x02), name: fl & 0x20 ? `\u0001${raw.charCodeAt(0)}` : raw, itab, rgce: d.subarray(fstart, fstart + cce), rgcb: d.subarray(fstart + cce), data: d.slice() });
         break;
       }
       default: break;
@@ -411,15 +427,25 @@ export async function importXls(data, { recalc: doRecalc = true } = {}) {
       return decompile(rgce, rgcb, { ...ctx, base: { r, c }, base3d: null });
     };
     const formulaCells = [];
+    // записи для переноса при сохранении в .xls: зона → байты записей (с заголовками) в исходном порядке
+    const kz = { pre: [], obj: [], prot: [], pls: [], hf: [], tail: [], labels: new Set(), chart: false };
+    let lastZone = null;
     for (k += 1; k < recs.length; k++) {
       const { type, data: d } = recs[k];
       if (type === R.EOF) break;
-      if (type === R.BOF) { // вложенная часть (диаграмма на листе) — пропустить до её конца
+      if (type === R.BOF) { // вложенная часть (диаграмма на листе) — переносится целиком
         let depth = 1;
-        while (depth && ++k < recs.length) { if (recs[k].type === R.BOF) depth++; else if (recs[k].type === R.EOF) depth--; }
-        keep('рисунки и диаграммы');
+        kz.obj.push(rawRec(recs[k]));
+        while (depth && ++k < recs.length) { kz.obj.push(rawRec(recs[k])); if (recs[k].type === R.BOF) depth++; else if (recs[k].type === R.EOF) depth--; }
+        kz.chart = true; kz.labels.add('диаграммы'); lastZone = null;
         continue;
       }
+      // зона записи для переноса; CONTINUE — вслед за своей записью
+      const zone = type === R.CONTINUE ? lastZone : KEEP_PRE.has(type) ? 'pre' : KEEP_OBJ.has(type) ? 'obj' : KEEP_PROT.has(type) ? 'prot'
+        : KEEP_TAIL.has(type) ? 'tail' : type === 0x004D ? 'pls' : ((type === 0x0014 || type === 0x0015) && d.length && u16(d, 0)) || type === 0x089C ? 'hf' : null;
+      if (zone) { kz[zone].push(rawRec(recs[k])); if (KEEP_LABEL[type]) kz.labels.add(KEEP_LABEL[type]); }
+      lastZone = zone;
+      if (type === 0x00B0) keep('сводные таблицы');
       switch (type) {
         case R.COLINFO: {
           const c1 = u16(d, 0); const c2 = Math.min(u16(d, 2), 255); const w = u16(d, 4) / 256; const fl = u16(d, 8);
@@ -506,12 +532,6 @@ export async function importXls(data, { recalc: doRecalc = true } = {}) {
         case R.HCENTER: if (u16(d, 0)) page.centerH = true; break;
         case R.PROTECT: locked = u16(d, 0) === 1; break;
         case R.PASSWORD: { const h = u16(d, 0); if (h) pass = h.toString(16).toUpperCase(); break; }
-        case R.MSODRAWING: case R.OBJ: keep('рисунки и диаграммы'); break;
-        case R.NOTE: keep('примечания к ячейкам'); break;
-        case R.HLINK: keep('гиперссылки'); break;
-        case R.CF: keep('условное форматирование'); break;
-        case R.DV: keep('проверка данных'); break;
-        case R.AUTOFILTER: keep('автофильтр'); break;
         default: break;
       }
     }
@@ -538,6 +558,11 @@ export async function importXls(data, { recalc: doRecalc = true } = {}) {
     if (fitToPage && page.__fit) { page.fitWidth = page.__fit.fw; page.fitHeight = page.__fit.fh; }
     delete page.__fit;
     if (Object.keys(page).length) sheet.page = page;
+    // перенос при сохранении в .xls: index — место листа в исходной книге (ссылки диаграмм — по нему), page — для PLS
+    if ([kz.pre, kz.obj, kz.prot, kz.pls, kz.hf, kz.tail].some((z) => z.length)) {
+      sheet.xlsKeep = { index: si, pre: kz.pre, obj: kz.obj, prot: kz.prot, pls: kz.pls, hf: kz.hf, tail: kz.tail, chart: kz.chart, labels: [...kz.labels], page: JSON.stringify(sheet.page || null) };
+      for (const l of kz.labels) saved[l] = (saved[l] || 0) + 1;
+    }
     if (locked) sheet.protection = { attrs: { sheet: '1', objects: '1', scenarios: '1', ...(pass ? { password: pass } : {}) } };
     // область печати и сквозные строки (встроенные имена листа)
     for (const n of printNames.filter((x) => x.itab === si + 1)) {
@@ -555,10 +580,25 @@ export async function importXls(data, { recalc: doRecalc = true } = {}) {
   }).filter(Boolean);
   if (!sheets.length) sheets.push(newSheet('Лист1'));
   const base = { sheets, active: Math.min(activeTab, sheets.length - 1), ...(wbNames.length ? { names: wbNames } : {}), ...(manual ? { calcMode: 'manual' } : {}) };
+  // сохранение в .xls поверх исходной книги: порядок EXTERNSHEET и NAME — как в файле (на их номера ссылаются
+  // перенесённые записи: ряды диаграмм, формулы проверки), общая часть рисунков, свойства документа
+  if (sheets.some((s) => s.xlsKeep)) {
+    base.xlsKeep = {
+      books: supbooks.map((b) => (b.self ? 'self' : b.addin ? { addin: b.names } : 'other')),
+      xti: xti.map((x) => ({ ...x })),
+      names: names.map((n) => ({ name: n.name, code: n.builtin ? +n.name.slice(1) : null, fn: n.fn, itab: n.itab, data: n.data })),
+      drawingGroup,
+      // шрифты (вид — как у стиля ячейки в записи), форматы, палитра — на прежних номерах
+      fonts: fonts.filter((f, k) => k !== 4).map((f, k) => ({ desc: { name: f.name, size: f.size, bold: f.bold, italic: f.italic, underline: !!f.u, strike: f.strike, color: color(f.icv) }, raw: fontRaw[k] })),
+      formats: fmtRaw,
+      palette: palette.slice(8, 64),
+      streams: cfb.entries.filter((e) => e.type === 'stream' && /SummaryInformation$/.test(e.path)).map((e) => ({ path: e.path, data: e.data })),
+    };
+  }
   // формулы массива (cse) — вычислить при открытии; остальное — значения из файла, как у .xlsx
   const wb = doRecalc ? recalcOpen(base) : base;
-  // пока запись .xls не умеет переносить диаграммы, примечания и т. п., они — предупреждения, а не «сохраняются»
-  return { wb, warnings: kept, kept: {} };
+  // warnings — что теряется при сохранении; kept — что переносится в .xls как есть
+  return { wb, warnings: kept, kept: saved };
 }
 
 // Текст формулы → каноническая запись: функции надстроек (пакет анализа) русский Excel пишет в .xls русскими именами

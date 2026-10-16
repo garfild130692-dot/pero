@@ -169,7 +169,12 @@ export default function SheetApp({ initialFile, onOpenOther, onNewDoc, autosaveS
           const what = Object.entries(lost).map(([k, n]) => (n > 1 ? `${k} (${n})` : k));
           if (what.length && !window.confirm(`В формате Excel 97–2003 (.xls) не сохранится: ${what.join(', ')}. Сохранить?`)) return false;
           bytes = b;
-        } else bytes = await exportXlsx(wb, { source: source.current });
+        } else {
+          // книга из .xls: рисунки, диаграммы, примечания и т. п. переносятся только в .xls (записями как есть)
+          const fromXls = [...new Set(wb.sheets.flatMap((s) => (s.xlsKeep ? s.xlsKeep.labels : [])))].filter((l) => l !== 'параметры принтера');
+          if (fromXls.length && !window.confirm(`В формате .xlsx не сохранится (из книги Excel 97–2003 Перо переносит это только в .xls): ${fromXls.join(', ')}. Сохранить?`)) return false;
+          bytes = await exportXlsx(wb, { source: source.current });
+        }
         const name = p.split(/[\\/]/).pop();
         r = fileApi.isDesktop ? await fileApi.saveFile(p, name, bytes) : await fileApi.saveFileAs(name, bytes);
       }

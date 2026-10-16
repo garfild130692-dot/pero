@@ -47,6 +47,7 @@ class Stream {
       this.parts.push(h, d.subarray(o, o + n)); this.len += 4 + n; o += n;
     }
   }
+  raw(bytes) { this.parts.push(bytes); this.len += bytes.length; } // готовая запись с заголовком (перенос из исходного файла)
   out() { const b = new Uint8Array(this.len); let o = 0; for (const p of this.parts) { b.set(p, o); o += p.length; } return b; }
 }
 
@@ -181,6 +182,10 @@ function compile(ast, ctx) {
   return { rgce: ce.out(), rgcb: cb.out(), needArray, needDyn };
 }
 
+// MsoCrc32Compute ([MS-OSHARED] 2.4.3): контрольная сумма для XFCRC (сверено с файлом Excel)
+const CRC_TABLE = (() => { const t = []; for (let i = 0; i < 256; i++) { let v = (i << 24) >>> 0; for (let b = 0; b < 8; b++) v = v & 0x80000000 ? ((v << 1) ^ 0xAF) >>> 0 : (v << 1) >>> 0; t.push(v); } return t; })();
+function msoCrc32(c, bytes) { for (const b of bytes) c = (((c << 8) >>> 0) ^ CRC_TABLE[((c >>> 24) ^ b) & 255]) >>> 0; return c; }
+
 // ---------- Книга ----------
 // → { bytes, lost: { что: сколько } } — то, что в .xls не помещается или не записывается
 export function exportXls(wb, opts = {}) {
@@ -195,9 +200,43 @@ export function exportXls(wb, opts = {}) {
   const SELF = 0; const ADDIN = 1; let addinUsed = false;
   const addinNames = []; const addinIndex = new Map();
   const userNames = (wb.names || []).filter((n) => /^[A-Za-z_Ѐ-ӿ\\][\w.Ѐ-ӿ]*$/.test(n.name));
-  const nameRecs = []; // { name, builtin (код), itab, formula? (AST), hidden, fn }
-  for (const n of userNames) nameRecs.push({ name: n.name, itab: n.sheet ? (lcIndex.get(n.sheet.toLowerCase()) ?? -1) + 1 : 0, text: n.text });
+  const nameRecs = []; // { name, builtin (код), itab, formula? (AST), hidden, fn, raw (запись из файла), stub }
   const futureIdx = new Map();
+  // книга из .xls: перенесённые как есть записи (ряды диаграмм, формулы проверки и УФ) ссылаются на номера EXTERNSHEET и
+  // NAME исходного файла — их порядок повторяется: листы — по исходному месту (xlsKeep.index), удалённое — #REF!/заглушка
+  const K = wb.xlsKeep;
+  const origPos = new Map(); // исходный номер листа → текущий
+  sheets.forEach((s, i) => { if (s.xlsKeep) origPos.set(s.xlsKeep.index, i); });
+  const keepRefs = !!K && !K.books.includes('other'); // ссылки на другие книги не переносим — их записи не пишутся
+  const placedUser = new Set(); const placedPrint = new Set();
+  const userIdx = (name, itab) => userNames.findIndex((n) => n.name.toLowerCase() === name.toLowerCase() && (n.sheet ? (lcIndex.get(n.sheet.toLowerCase()) ?? -1) + 1 : 0) === itab);
+  if (keepRefs) {
+    for (const x of K.xti) {
+      const b = K.books[x.book];
+      const map = (t) => (t < 0 ? t : origPos.has(t) ? origPos.get(t) : -1);
+      xtis.push([b === 'self' ? SELF : ADDIN, map(x.first), map(x.last)]);
+      if (b !== 'self') addinUsed = true;
+      const k = xtis[xtis.length - 1].join(':'); if (!xtiKey.has(k)) xtiKey.set(k, xtis.length - 1);
+    }
+    const ab = K.books.find((b) => b && b.addin);
+    if (ab) for (const n of ab.addin) { addinNames.push(n); if (!addinIndex.has(n)) addinIndex.set(n, addinNames.length); }
+    let stub = 0;
+    for (const n of K.names) {
+      const itab = n.itab ? (origPos.has(n.itab - 1) ? origPos.get(n.itab - 1) + 1 : -1) : 0;
+      if (n.fn) { nameRecs.push({ name: n.name, fn: true, hidden: true, itab: 0 }); futureIdx.set(n.name, nameRecs.length); continue; }
+      if (itab < 0) { nameRecs.push({ name: `_Pero_deleted_${++stub}`, stub: true, hidden: true, itab: 0 }); continue; }
+      // область печати / сквозные строки (Excel 2007+ пишет их и обычными именами листа) — ниже, текущими
+      const pk = n.code === 6 || n.code === 7 ? n.code : itab && /^print_area$/i.test(n.name) ? 6 : itab && /^print_titles$/i.test(n.name) ? 7 : 0;
+      if (pk) { nameRecs.push({ builtin: pk, itab, pending: true }); continue; }
+      if (n.code == null) {
+        const ui = userIdx(n.name, itab);
+        if (ui >= 0 && !placedUser.has(ui)) { placedUser.add(ui); nameRecs.push({ name: userNames[ui].name, itab, text: userNames[ui].text }); continue; }
+        if (wb.names && wb.names.some((m) => m.name.toLowerCase() === n.name.toLowerCase())) { nameRecs.push({ name: `_Pero_deleted_${++stub}`, stub: true, hidden: true, itab: 0 }); continue; }
+      }
+      nameRecs.push({ name: n.name, raw: n.data, itab }); // имя, которое Перо не читает (_FilterDatabase и т. п.), — как в файле
+    }
+  }
+  userNames.forEach((n, i) => { if (!placedUser.has(i)) nameRecs.push({ name: n.name, itab: n.sheet ? (lcIndex.get(n.sheet.toLowerCase()) ?? -1) + 1 : 0, text: n.text }); });
   const ctxBase = {
     sheetIndex: (name) => lcIndex.get(String(name).toLowerCase()) ?? -1,
     xti: (a, b) => xti(SELF, a, b),
@@ -227,21 +266,31 @@ export function exportXls(wb, opts = {}) {
   sheets.forEach((s, i) => {
     const q = `'${s.name.replace(/'/g, "''")}'`;
     const col = (c) => { let n = c + 1; let r = ''; while (n) { const m = (n - 1) % 26; r = String.fromCharCode(65 + m) + r; n = Math.floor((n - 1) / 26); } return r; };
-    if (s.printArea) { const a = s.printArea; nameRecs.push({ builtin: 6, itab: i + 1, text: `${q}!$${col(a.c1)}$${a.r1 + 1}:$${col(a.c2)}$${a.r2 + 1}` }); }
+    // место в списке имён: заготовка из исходного файла (тот же номер) или в конец
+    const place = (code, text) => {
+      const slot = nameRecs.find((n) => n.pending && n.builtin === code && n.itab === i + 1);
+      if (slot) { delete slot.pending; slot.text = text; } else nameRecs.push({ builtin: code, itab: i + 1, text });
+    };
+    if (s.printArea) { const a = s.printArea; place(6, `${q}!$${col(a.c1)}$${a.r1 + 1}:$${col(a.c2)}$${a.r2 + 1}`); }
     if (s.printTitles && (s.printTitles.rows || s.printTitles.cols)) {
       const parts = [];
       if (s.printTitles.cols) parts.push(`${q}!$${col(s.printTitles.cols[0])}:$${col(s.printTitles.cols[1])}`);
       if (s.printTitles.rows) parts.push(`${q}!$${s.printTitles.rows[0] + 1}:$${s.printTitles.rows[1] + 1}`);
-      nameRecs.push({ builtin: 7, itab: i + 1, text: parts.length > 1 ? `(${parts.join(',')})` : parts[0] });
+      place(7, parts.length > 1 ? `(${parts.join(',')})` : parts[0]);
     }
   });
+  // заготовки, которым нечего занять (область печати убрана), — заглушки, чтобы номера имён не сдвинулись
+  let stubN = nameRecs.filter((n) => n.stub).length;
+  for (const n of nameRecs) if (n.pending) { delete n.pending; delete n.builtin; Object.assign(n, { name: `_Pero_deleted_${++stubN}`, stub: true, hidden: true, itab: 0 }); }
 
   // --- стили: шрифты, форматы, палитра, XF ---
-  const palette = INDEXED.slice(8, 64); // 56 цветов, номера 8…63
+  // книга из .xls: палитра исходного файла; если переносятся рисунки/диаграммы (их цвета — номера палитры), она не меняется
+  const palette = K ? K.palette.slice() : INDEXED.slice(8, 64); // 56 цветов, номера 8…63
   const used = new Map(); // цвет → номер
   const free = []; // номера, которые можно занять своим цветом (с конца)
-  for (let i = 55; i >= 0; i--) free.push(i);
-  let paletteChanged = false;
+  const fixedPalette = !!K && sheets.some((s) => s.xlsKeep && s.xlsKeep.obj.length);
+  if (!fixedPalette) for (let i = 55; i >= 0; i--) free.push(i);
+  let paletteChanged = !!K && palette.some((p, k) => p !== INDEXED[8 + k]);
   const rgb = (hex) => [1, 3, 5].map((k) => parseInt(hex.slice(k, k + 2), 16));
   const icv = (c) => {
     if (!c) return null;
@@ -255,7 +304,7 @@ export function exportXls(wb, opts = {}) {
       if (free.length) { slot = free.shift(); palette[slot] = hex; paletteChanged = true; i = slot; } else {
         const [r, g, b] = rgb(c); let best = 0; let bd = Infinity;
         palette.forEach((p, k) => { const [r2, g2, b2] = rgb(`#${p}`); const dd = (r - r2) ** 2 + (g - g2) ** 2 + (b - b2) ** 2; if (dd < bd) { bd = dd; best = k; } });
-        i = best; lose('цвета сверх 56 (заменены ближайшими)');
+        i = best; // ближайший цвет палитры — для старых версий; точный цвет ячейки — в XFEXT
       }
     }
     used.set(hex, i + 8);
@@ -269,16 +318,22 @@ export function exportXls(wb, opts = {}) {
     const i = fontKey.get(k);
     return i >= 4 ? i + 1 : i; // шрифта с номером 4 в BIFF нет
   };
-  const base = fontOf({}); for (let i = 1; i < 4; i++) { fonts.push(fonts[base]); } // шрифты 0–3 — по умолчанию
+  // книга из .xls: шрифты файла — первыми, на своих номерах (как в файле); новые — после них
+  const fontRaw = K ? K.fonts.map((f) => f.raw) : [];
+  if (K) for (const f of K.fonts) { const k = JSON.stringify(f.desc); fonts.push(f.desc); if (!fontKey.has(k)) fontKey.set(k, fonts.length - 1); }
+  if (!fonts.length) fontOf({});
+  while (fonts.length < 4) fonts.push(fonts[0]); // шрифты 0–3 — по умолчанию
   const builtinId = new Map(Object.entries(BUILTIN_FMT).map(([id, code]) => [code, +id]));
-  const formats = []; const fmtId = new Map();
+  const formats = []; const fmtId = new Map(); // свои форматы: { id, code, raw? }
+  if (K) for (const f of K.formats) { formats.push(f); if (!fmtId.has(f.code)) fmtId.set(f.code, f.id); }
+  let nextFmt = Math.max(163, ...formats.map((f) => f.id)) + 1;
   const fmtOf = (code) => {
     if (!code || code === 'General') return 0;
-    if (builtinId.has(code)) return builtinId.get(code);
-    if (!fmtId.has(code)) { fmtId.set(code, 164 + formats.length); formats.push(code); }
+    if (builtinId.has(code) && !fmtId.has(code)) return builtinId.get(code);
+    if (!fmtId.has(code)) { fmtId.set(code, nextFmt); formats.push({ id: nextFmt++, code }); }
     return fmtId.get(code);
   };
-  const xfs = []; const xfKey = new Map();
+  const xfs = []; const xfKey = new Map(); const xfExt = new Map(); // номер XF → [[тип, '#rrggbb']]
   const xfOf = (s) => {
     if (!s) return 15;
     const k = JSON.stringify(s);
@@ -297,6 +352,12 @@ export function exportXls(wb, opts = {}) {
     b.u32((bc('top') | (bc('bottom') << 7) | ((fill != null ? 1 : 0) << 26)) >>> 0);
     b.u16((fill ?? 64) | (65 << 7));
     xfs.push(b.out());
+    // точные цвета (Excel 2007+): заливка, текст, границы — XFEXT с RGB
+    const ext = [];
+    if (s.fill) ext.push([4, s.fill]);
+    if (s.color) ext.push([13, s.color]);
+    for (const [side, et] of [['top', 7], ['bottom', 8], ['left', 9], ['right', 10]]) if (bd[side] && bd[side].color) ext.push([et, bd[side].color]);
+    if (ext.length) xfExt.set(15 + xfs.length, ext);
     xfKey.set(k, 15 + xfs.length);
     return 15 + xfs.length;
   };
@@ -305,9 +366,10 @@ export function exportXls(wb, opts = {}) {
   const sst = []; const sstIndex = new Map(); let sstTotal = 0;
   const strIx = (s) => { sstTotal++; if (!sstIndex.has(s)) { sstIndex.set(s, sst.length); sst.push(s); } return sstIndex.get(s); };
   const colLetters = (c) => { let n = c + 1; let r = ''; while (n) { const m = (n - 1) % 26; r = String.fromCharCode(65 + m) + r; n = Math.floor((n - 1) / 26); } return r; };
+  const carried = { obj: false };
   const sheetStreams = sheets.map((sheet, si) => {
     const st = new Stream();
-    st.rec(0x0809, new Buf().u16(0x0600).u16(0x0010).u16(0x0DBB).u16(0x07CC).u32(0).u32(0x06)); // BOF листа
+    st.rec(0x0809, new Buf().u16(0x0600).u16(0x0010).u16(0x4F5A).u16(0x07CD).u32(0x000200C1).u32(0x0806)); // BOF листа (как Excel 2010+)
     st.rec(0x000D, new Buf().u16(wb.calcMode === 'manual' ? 0 : 1)); // CALCMODE
     st.rec(0x000C, new Buf().u16(100)); // CALCCOUNT
     st.rec(0x000F, new Buf().u16(1)); // REFMODE: A1
@@ -321,18 +383,30 @@ export function exportXls(wb, opts = {}) {
     st.rec(0x0225, new Buf().u16(0).u16(300)); // DEFAULTROWHEIGHT: 15 pt
     const fit = pg.fitWidth != null || pg.fitHeight != null;
     st.rec(0x0081, new Buf().u16(0x04C1 | (fit ? 0x0100 : 0))); // WSBOOL
-    st.rec(0x0014, new Buf().bytes(xlString(''))); st.rec(0x0015, new Buf().bytes(xlString(''))); // HEADER/FOOTER
+    // перенесённое из исходного .xls: сдвиг строк/столбцов — записи ссылаются на старые адреса и не переносятся
+    const kp = sheet.xlsKeep;
+    const okPlace = kp && !kp.shifted;
+    if (kp && kp.shifted) for (const l of kp.labels) if (l !== 'колонтитулы' && l !== 'параметры принтера') lose(`${l} (строки или столбцы листа вставлены/удалены)`);
+    const keepOf = (z) => (okPlace ? kp[z] : kp && (z === 'hf' || z === 'pls') ? kp[z] : []);
+    const hf = keepOf('hf');
+    const hasHf = (type) => hf.some((r) => (r[0] | (r[1] << 8)) === type);
+    if (!hasHf(0x0014)) st.rec(0x0014, new Buf().bytes(xlString('')));
+    if (!hasHf(0x0015)) st.rec(0x0015, new Buf().bytes(xlString(''))); // HEADER/FOOTER
+    for (const r of hf) if ((r[0] | (r[1] << 8)) !== 0x089C) st.raw(r);
     st.rec(0x0083, new Buf().u16(pg.centerH ? 1 : 0)); st.rec(0x0084, new Buf().u16(0)); // HCENTER/VCENTER
     const m = pg.margins || {};
     st.rec(0x0026, new Buf().f64(m.left ?? 0.7)); st.rec(0x0027, new Buf().f64(m.right ?? 0.7));
     st.rec(0x0028, new Buf().f64(m.top ?? 0.75)); st.rec(0x0029, new Buf().f64(m.bottom ?? 0.75));
+    if (kp && kp.page === JSON.stringify(sheet.page || null)) for (const r of keepOf('pls')) st.raw(r); // настройки принтера
     st.rec(0x00A1, new Buf().u16(pg.paper || 9).u16(pg.scale || 100).u16(1).u16(pg.fitWidth ?? 1).u16(pg.fitHeight ?? 1)
       .u16((pg.orientation === 'landscape' ? 0 : 0x02) | (pg.paper || pg.orientation || pg.scale ? 0 : 0x04)).u16(600).u16(600).f64(m.header ?? 0.3).f64(m.footer ?? 0.3).u16(1)); // SETUP
+    for (const r of hf) if ((r[0] | (r[1] << 8)) === 0x089C) st.raw(r); // HEADERFOOTER (Excel 2007+)
     if (sheet.protection) {
       st.rec(0x0012, new Buf().u16(1)); // PROTECT
       const pw = sheet.protection.attrs && sheet.protection.attrs.password;
       if (pw && /^[0-9A-F]{1,4}$/i.test(pw)) st.rec(0x0013, new Buf().u16(parseInt(pw, 16)));
       else if (sheet.protection.attrs && sheet.protection.attrs.hashValue) lose('пароль защиты листа (в .xls — только старый формат)');
+      for (const r of keepOf('prot')) st.raw(r);
     }
     st.rec(0x0055, new Buf().u16(8)); // DEFCOLWIDTH
     // столбцы
@@ -373,6 +447,7 @@ export function exportXls(wb, opts = {}) {
     for (const r of Object.keys(sheet.rowH || {})) if (+r < MAXR) rowKeys.add(+r);
     for (const r of Object.keys(sheet.rowInfo || {})) if (+r < MAXR) rowKeys.add(+r);
     if (rowKeys.size) { maxR = Math.max(maxR, ...rowKeys); minR = Math.min(minR, ...rowKeys); }
+    for (const r of keepOf('pre')) st.raw(r); // автофильтр, сортировка
     st.rec(0x0200, new Buf().u32(maxR < 0 ? 0 : minR).u32(maxR + 1).u16(maxC < 0 ? 0 : minC).u16(maxC + 1).u16(0)); // DIMENSIONS
     const byRow = new Map();
     for (const x of cells.values()) { if (!byRow.has(x.r)) byRow.set(x.r, []); byRow.get(x.r).push(x); }
@@ -427,6 +502,11 @@ export function exportXls(wb, opts = {}) {
         }
       }
     }
+    // рисунки, объекты, примечания, диаграммы на листе; ряды диаграмм ссылаются на EXTERNSHEET исходного файла
+    if (okPlace && kp.obj.length) {
+      if (kp.chart && !keepRefs) lose('диаграммы (ссылки на другие книги)');
+      else { for (const r of kp.obj) st.raw(r); carried.obj = true; }
+    }
     // окно: выбранный лист, закрепление
     const active = si === (wb.active || 0);
     const fr = sheet.freeze && (sheet.freeze.rows || sheet.freeze.cols) ? sheet.freeze : null;
@@ -440,6 +520,7 @@ export function exportXls(wb, opts = {}) {
       for (const g of part) b.u16(g.r1).u16(Math.min(g.r2, MAXR - 1)).u16(g.c1).u16(Math.min(g.c2, MAXC - 1));
       st.rec(0x00E5, b);
     }
+    for (const r of keepOf('tail')) st.raw(r); // условное форматирование, ссылки, проверка данных, таблицы
     if (sheet.autoFilter) lose('автофильтр');
     if (sheet.cf && sheet.cf.length) lose('условное форматирование');
     if (sheet.dv && sheet.dv.length) lose('проверка данных');
@@ -455,7 +536,7 @@ export function exportXls(wb, opts = {}) {
   }
   // формулы имён (после ячеек: функции _xlfn. из ячеек уже записаны в nameRecs)
   const nameBodies = nameRecs.map((n) => {
-    if (n.fn) return { rgce: Uint8Array.from([0x1C, 0x17]), rgcb: new Uint8Array(0) }; // заглушка #ССЫЛКА!, как у Excel
+    if (n.fn || n.stub || n.raw) return { rgce: Uint8Array.from([0x1C, 0x17]), rgcb: new Uint8Array(0) }; // заглушка #ССЫЛКА!, как у Excel
     const res = tryCompile(n.text, { own: n.itab ? n.itab - 1 : 0, three: true, mode: 'R' });
     if (!res) lose('имена, которые не записались');
     return res || { rgce: Uint8Array.from([0x1C, 0x17]), rgcb: new Uint8Array(0) };
@@ -463,7 +544,8 @@ export function exportXls(wb, opts = {}) {
 
   // --- глобальная часть ---
   const g = new Stream();
-  g.rec(0x0809, new Buf().u16(0x0600).u16(0x0005).u16(0x0DBB).u16(0x07CC).u32(0).u32(0x06)); // BOF книги
+  // BOF книги: версия, сохранившая файл, — Excel 2007+ (verLastXLSaved), иначе Excel не берёт точные цвета XFEXT
+  g.rec(0x0809, new Buf().u16(0x0600).u16(0x0005).u16(0x4F5A).u16(0x07CD).u32(0x000200C1).u32(0x0806));
   g.rec(0x00E1, new Buf().u16(1200)); g.rec(0x00C1, new Buf().u16(0)); g.rec(0x00E2, new Uint8Array(0)); // INTERFACEHDR, MMS, INTERFACEEND
   g.rec(0x005C, new Buf().bytes(xlString('Перо')).bytes(new Array(Math.max(0, 112 - 3 - 8)).fill(0x20)).out().subarray(0, 112)); // WRITEACCESS
   g.rec(0x0042, new Buf().u16(1200)); // CODEPAGE: UTF-16
@@ -478,13 +560,29 @@ export function exportXls(wb, opts = {}) {
   // шрифты (палитра для цветов текста уже собрана при XF; цвета шрифтов — здесь)
   const fontRecs = fonts.map((f) => new Buf().u16(Math.round(f.size * 20)).u16((f.italic ? 2 : 0) | (f.strike ? 8 : 0)).u16(f.color ? icv(f.color) : 0x7FFF)
     .u16(f.bold ? 700 : 400).u16(0).u8(f.underline ? 1 : 0).u8(0).u8(1).u8(0).bytes(shortString(f.name)));
-  for (const fr of fontRecs) g.rec(0x0031, fr);
-  for (const [k, code] of formats.entries()) g.rec(0x041E, new Buf().u16(164 + k).bytes(xlString(code)));
+  fontRecs.forEach((fr, k) => (fontRaw[k] ? g.raw(fontRaw[k]) : g.rec(0x0031, fr)));
+  for (const f of formats) { if (f.raw) g.raw(f.raw); else g.rec(0x041E, new Buf().u16(f.id).bytes(xlString(f.code))); }
   // XF: 0–14 — стили, 15 — ячейка по умолчанию, дальше — стили ячеек
   const styleXf = (fnt) => new Buf().u16(fnt).u16(0).u16(0xFFF5).u8(0x20).u8(0).u8(0).u8(fnt ? 0xF4 : 0).u32(0).u32(0).u16(64 | (65 << 7));
   for (let i = 0; i < 15; i++) g.rec(0x00E0, styleXf(i === 0 ? 0 : i < 3 ? 1 : i < 5 ? 2 : 0));
-  g.rec(0x00E0, new Buf().u16(0).u16(0).u16(0x0001).u8(0x20).u8(0).u8(0).u8(0).u32(0).u32(0).u16(64 | (65 << 7)));
+  const defaultXf = new Buf().u16(0).u16(0).u16(0x0001).u8(0x20).u8(0).u8(0).u8(0).u32(0).u32(0).u16(64 | (65 << 7));
+  g.rec(0x00E0, defaultXf);
   for (const x of xfs) g.rec(0x00E0, x);
+  if (xfExt.size) {
+    // XFCRC — контрольная сумма всех XF (MsoCrc32 [MS-OSHARED]); без совпадения Excel не берёт XFEXT
+    const allXf = [];
+    for (let i = 0; i < 15; i++) allXf.push(styleXf(i === 0 ? 0 : i < 3 ? 1 : i < 5 ? 2 : 0).out());
+    allXf.push(defaultXf.out());
+    for (const x of xfs) allXf.push(x);
+    let crc = 0;
+    for (const x of allXf) crc = msoCrc32(crc, x);
+    g.rec(0x087C, new Buf().u16(0x087C).u16(0).u32(0).u32(0).u16(0).u16(allXf.length).u32(crc));
+    for (const [ix, ext] of [...xfExt].sort((a, b) => a[0] - b[0])) {
+      const b = new Buf().u16(0x087D).u16(0).u32(0).u32(0).u16(0).u16(ix).u16(0).u16(ext.length);
+      for (const [type, hex] of ext) b.u16(type).u16(20).u16(2).u16(0).bytes([...rgb(hex), 0]).u32(0).u32(0);
+      g.rec(0x087D, b);
+    }
+  }
   g.rec(0x0293, new Buf().u16(0x8000).u8(0).u8(0xFF)); // STYLE «Обычный»
   if (paletteChanged) { const b = new Buf().u16(56); for (const p of palette) b.bytes([...rgb(`#${p}`), 0]); g.rec(0x0092, b); }
   g.rec(0x0160, new Buf().u16(0)); // USESELFS
@@ -502,6 +600,7 @@ export function exportXls(wb, opts = {}) {
     g.rec(0x0017, b); // EXTERNSHEET
   }
   nameRecs.forEach((n, i) => {
+    if (n.raw) { const d = n.raw.slice(); d[8] = n.itab & 0xFF; d[9] = n.itab >> 8; g.rec(0x0018, d); return; } // как в файле, с номером листа
     const body = nameBodies[i];
     const nm = n.builtin ? String.fromCharCode(n.builtin) : n.name;
     const h = wide(nm);
@@ -509,6 +608,8 @@ export function exportXls(wb, opts = {}) {
     g.rec(0x0018, new Buf().u16(fl).u8(0).u8(nm.length).u16(body.rgce.length).u16(0).u16(n.itab || 0).u8(0).u8(0).u8(0).u8(0)
       .u8(h ? 1 : 0).bytes(charBytes(nm, h)).bytes(body.rgce).bytes(body.rgcb));
   });
+  // общая часть рисунков (MSODRAWINGGROUP) — если хоть один лист переносит свои рисунки
+  if (K && carried.obj) for (const r of K.drawingGroup) g.raw(r);
   // SST — строки разрываются на границах записей (в продолжении — свой байт флагов); EXTSST — каждая 8-я строка
   const sstStart = g.len;
   const extsst = [];
@@ -548,5 +649,7 @@ export function exportXls(wb, opts = {}) {
   all.set(globals, 0);
   let o = globals.length;
   for (const s of sheetStreams) { all.set(s.out(), o); o += s.len; }
-  return { bytes: writeCfb([{ path: 'Workbook', data: all }]), lost };
+  // свойства документа (название, автор…) — потоки исходного файла
+  const extra = K ? K.streams.map((s) => ({ path: s.path, data: s.data })) : [];
+  return { bytes: writeCfb([{ path: 'Workbook', data: all }, ...extra]), lost };
 }
