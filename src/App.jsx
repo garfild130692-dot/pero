@@ -317,8 +317,13 @@ export default function App({ initialFile, onOpenOther, onNewSheet, autosaveSec 
 
   const load = useCallback(async (file) => {
     try {
+      // формат — по содержимому, не по расширению: .docx, переименованный в .doc, и наоборот, открываются как есть.
       // .doc (Word 97–2003) — свой разбор [MS-DOC] в пакет .docx; дальше — как обычный .docx (он же — исходный пакет)
-      const isDoc = /\.doc$/i.test(file.name) && !file.recovered;
+      const head = new Uint8Array(file.data.slice ? file.data.slice(0, 8) : file.data).subarray(0, 8);
+      const isZip = head[0] === 0x50 && head[1] === 0x4B;
+      if (!isZip && String.fromCharCode(...head.subarray(0, 5)) === '{\\rtf') throw new Error('Это документ RTF — Перо пока не открывает RTF (формат в планах)');
+      // не ZIP и не RTF — разбор .doc: он сам объяснит, что не так (не составной файл, Word 6.0/95, повреждён)
+      const isDoc = !isZip;
       const conv = isDoc ? await docToDocx(file.data) : null;
       const data = conv ? conv.docx : file.data;
       const { doc: json, warnings: w0, preserved: kept } = await importDocx(data);
@@ -377,7 +382,10 @@ export default function App({ initialFile, onOpenOther, onNewSheet, autosaveSec 
       // открытый .doc сохраняется документом .docx под новым именем (файл .doc не перезаписывается содержимым .docx)
       const fromDoc = /\.doc$/i.test(doc.name);
       const name = fromDoc ? doc.name.replace(/\.doc$/i, '.docx') : doc.name;
-      const r = asNew || !doc.path || fromDoc ? await fileApi.saveFileAs(name, bytes) : await fileApi.saveFile(doc.path, name, bytes);
+      // диалог «Сохранить как» открывается в папке исходного файла (как у Word)
+      const dir = fileApi.isDesktop && doc.path ? doc.path.replace(/[\\/][^\\/]*$/, '') : '';
+      const suggested = dir ? `${dir}\\${name}` : name;
+      const r = asNew || !doc.path || fromDoc ? await fileApi.saveFileAs(suggested, bytes) : await fileApi.saveFile(doc.path, name, bytes);
       if (!r) return false;
       setDoc({ path: r.path, name: r.name });
       setDirtyState(false);
@@ -392,7 +400,17 @@ export default function App({ initialFile, onOpenOther, onNewSheet, autosaveSec 
   // Сохранение поверх файла, в котором были неподдерживаемые элементы, — только с подтверждением
   const save = useCallback((then) => new Promise((resolve) => {
     const done = (ok) => { resolve(ok); if (ok && typeof then === 'function') then(); };
-    if (doc.path && Object.keys(warnings).length) {
+    // документ Word 97–2003 сохраняется в .docx «Сохранить как» — перезаписи нет; не перенесённое при открытии — сказать
+    if (/\.doc$/i.test(doc.name) && Object.keys(warnings).length) {
+      setModal({
+        title: 'Сохранение в формате .docx',
+        body: `Документ Word 97–2003 будет сохранён в формате .docx (исходный .doc не меняется). При открытии не перенесено: ${Object.keys(warnings).join(', ')}.`,
+        actions: [
+          ['Сохранить как .docx', true, async () => { setModal(null); done(await write(true)); }],
+          ['Отмена', false, () => { setModal(null); done(false); }],
+        ],
+      });
+    } else if (doc.path && Object.keys(warnings).length) {
       setModal({
         title: 'Сохранение может удалить часть содержимого',
         body: `В исходном файле есть элементы, которые Перо пока не умеет сохранять (${Object.keys(warnings).join(', ')}). ` +

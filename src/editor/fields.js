@@ -11,7 +11,8 @@ import { Plugin, TextSelection } from '@tiptap/pm/state';
 import { paginationKey } from './pagination.js';
 import { parseSectPr, sectionAt } from './page.js';
 
-const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+// символы, недопустимые в XML 1.0, выбрасываются (как в export.js) — иначе текст из чужого файла ломает часть
+const esc = (s) => String(s).replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\uFFFE\uFFFF]/g, '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 const unesc = (s) => String(s).replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/&amp;/g, '&');
 
 // ---------- Разбор значков ----------

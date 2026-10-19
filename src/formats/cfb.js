@@ -17,19 +17,26 @@ export function readCfb(input) {
   const u16 = (o) => dv.getUint16(o, true); const u32 = (o) => dv.getUint32(o, true);
   const shift = u16(30); const size = 1 << shift;           // 512 (версия 3) или 4096 (версия 4)
   const miniSize = 1 << u16(32);
-  const nFat = u32(44); const dirStart = u32(48); const cutoff = u32(56);
-  const miniFatStart = u32(60); const nMiniFat = u32(64); let difat = u32(68); const nDifat = u32(72);
+  const cutoff = u32(56);
+  // заголовок по [MS-CFB] 2.2: сектор 512/4096, мини-сектор 64, порог мини-потока 4096 — иначе файл повреждён
+  if ((shift !== 9 && shift !== 12) || u16(32) !== 6 || cutoff !== 4096) throw new Error('Составной файл повреждён (заголовок)');
+  const nSec = Math.max(0, Math.floor(bytes.length / size) - 1); // секторов в файле — границы для всех чисел из заголовка
+  const nFat = Math.min(u32(44), nSec); const dirStart = u32(48);
+  const miniFatStart = u32(60); const nMiniFat = u32(64); let difat = u32(68); const nDifat = Math.min(u32(72), nSec);
   const off = (s) => (s + 1) * size;
-  // секторы FAT: первые 109 — в заголовке, дальше — цепочка секторов DIFAT
+  // секторы FAT: первые 109 — в заголовке, дальше — цепочка секторов DIFAT (без петель и в пределах файла)
   const fatSecs = [];
-  for (let i = 0; i < 109 && fatSecs.length < nFat; i++) { const s = u32(76 + i * 4); if (s !== FREE) fatSecs.push(s); }
-  for (let k = 0; k < nDifat && difat !== END && difat !== FREE; k++) {
+  // сектор FAT за пределами файла — заглушка (-1 → свободные записи), чтобы следующие секторы FAT не съехали
+  for (let i = 0; i < 109 && fatSecs.length < nFat; i++) { const s = u32(76 + i * 4); if (s !== FREE) fatSecs.push(s < nSec ? s : -1); }
+  const difatSeen = new Set();
+  for (let k = 0; k < nDifat && difat < nSec && !difatSeen.has(difat); k++) {
+    difatSeen.add(difat);
     const base = off(difat); const per = size / 4 - 1;
-    for (let i = 0; i < per && fatSecs.length < nFat; i++) { const s = u32(base + i * 4); if (s !== FREE) fatSecs.push(s); }
+    for (let i = 0; i < per && fatSecs.length < nFat; i++) { const s = u32(base + i * 4); if (s !== FREE) fatSecs.push(s < nSec ? s : -1); }
     difat = u32(base + per * 4);
   }
   const fat = new Uint32Array(fatSecs.length * size / 4);
-  fatSecs.forEach((s, i) => { for (let j = 0; j < size / 4; j++) fat[i * size / 4 + j] = u32(off(s) + j * 4); });
+  fatSecs.forEach((s, i) => { for (let j = 0; j < size / 4; j++) fat[i * size / 4 + j] = s < 0 ? FREE : u32(off(s) + j * 4); });
   const chain = (start, table) => {
     const out = []; const seen = new Set();
     for (let s = start; s !== END && s !== FREE && s < table.length && !seen.has(s); s = table[s]) { seen.add(s); out.push(s); }
@@ -37,7 +44,8 @@ export function readCfb(input) {
   };
   const readChain = (start, len) => {
     const secs = chain(start, fat);
-    const out = new Uint8Array(len ?? secs.length * size);
+    // размер из каталога — не больше, чем данных в цепочке (враждебный размер иначе — гигантское выделение памяти)
+    const out = new Uint8Array(Math.min(len ?? Infinity, secs.length * size));
     let p = 0;
     for (const s of secs) {
       const n = Math.min(size, out.length - p);
@@ -66,9 +74,10 @@ export function readCfb(input) {
   const mfBytes = nMiniFat && miniFatStart !== END ? readChain(miniFatStart) : new Uint8Array(0);
   const miniFat = new Uint32Array(mfBytes.buffer, 0, Math.floor(mfBytes.length / 4));
   const readMini = (start, len) => {
-    const out = new Uint8Array(len); let p = 0;
-    for (const s of chain(start, miniFat)) {
-      const n = Math.min(miniSize, len - p);
+    const secs = chain(start, miniFat);
+    const out = new Uint8Array(Math.min(len, secs.length * miniSize)); let p = 0;
+    for (const s of secs) {
+      const n = Math.min(miniSize, out.length - p);
       if (n <= 0) break;
       out.set(miniStream.subarray(s * miniSize, s * miniSize + n), p); p += n;
     }

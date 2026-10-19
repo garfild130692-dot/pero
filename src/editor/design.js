@@ -7,7 +7,8 @@
 // Границы страниц — w:pgBorders в sectPr каждого раздела (атрибуты sectPr, как поля и размер листа).
 import { Extension } from '@tiptap/core';
 
-const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+// символы, недопустимые в XML 1.0, выбрасываются (как в export.js) — иначе текст из чужого файла ломает часть
+const esc = (s) => String(s).replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\uFFFE\uFFFF]/g, '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 const unesc = (s) => String(s).replace(/&quot;/g, '"').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&apos;/g, "'").replace(/&amp;/g, '&');
 
 // ---------- Подложка ----------

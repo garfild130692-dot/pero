@@ -7,6 +7,7 @@
 // STSH, разделы — PlcfSed + SEPX, списки — PlfLst/PlfLfo, колонтитулы — PlcfHdd, сноски — PlcffndRef/Txt, рисунки — поток
 // Data (PICF + OfficeArt). Разметка: 0x0D — конец абзаца, 0x07 — конец ячейки/строки таблицы, 0x13/0x14/0x15 — поле.
 import JSZip from 'jszip';
+import { DOMParser, XMLSerializer } from '@xmldom/xmldom';
 import { readCfb } from '../formats/cfb.js';
 import { watermarkRunXml } from '../editor/design.js';
 
@@ -18,7 +19,12 @@ const u32 = (d, o) => (d[o] | (d[o + 1] << 8) | (d[o + 2] << 16) | (d[o + 3] << 
 const i32 = (d, o) => u32(d, o) | 0;
 const utf16 = (d, o, n) => { let s = ''; for (let i = 0; i < n; i++) s += String.fromCharCode(u16(d, o + i * 2)); return s; };
 const hex6 = (v) => v.toString(16).padStart(6, '0').toUpperCase();
-const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+// экранирование для XML; символы, недопустимые в XML 1.0 (управляющие, U+FFFE/FFFF, одиночные суррогаты), — выбрасываются
+const esc = (s) => String(s).replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F￾￿]|[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g, '')
+  .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+const unesc = (s) => String(s).replace(/&quot;/g, '"').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
+// ссылки HYPERLINK из файла: только веб, почта и закладки (file:, UNC, javascript: в Word сработали бы при щелчке)
+const safeUrl = (u) => /^(https?:\/\/|mailto:)/i.test(String(u).trim());
 // COLORREF (r, g, b, fAuto) → 'RRGGBB' | 'auto'
 const colorref = (d, o) => (d[o + 3] === 0xFF ? 'auto' : hex6((d[o] << 16) | (d[o + 1] << 8) | d[o + 2]));
 
@@ -89,6 +95,18 @@ const STI = {
   374: 'Unresolved Mention',
 };
 
+// Prm0 куска ([MS-DOC] 2.9.215): isprm → код sprm (все с операндом в 1 байт; прочие isprm недопустимы).
+// Выписано из спецификации (tests/out/specs/doc_fixes.md); isprm совпадают с номерами sprm Word 6.
+const PRM0 = {
+  0x04: 0x2602, 0x05: 0x2461, 0x07: 0x2405, 0x08: 0x2406, 0x09: 0x2407, 0x0C: 0x260A, 0x0D: 0x2470, 0x0E: 0x240C, 0x0F: 0x2471,
+  0x18: 0x2416, 0x19: 0x2417, 0x1D: 0x261B, 0x25: 0x2423, 0x2C: 0x242A, 0x32: 0x2430, 0x33: 0x2431, 0x35: 0x2433, 0x36: 0x2434,
+  0x37: 0x2435, 0x38: 0x2436, 0x39: 0x2437, 0x3A: 0x2438, 0x78: 0x2640, 0x7E: 0x2443,
+  0x41: 0x0800, 0x42: 0x0801, 0x43: 0x0802, 0x47: 0x0806, 0x4B: 0x080A, 0x4D: 0x2A0C, 0x4E: 0x0858, 0x4F: 0x2859, 0x50: 0x0811,
+  0x51: 0x0818, 0x53: 0x2A33, 0x55: 0x0835, 0x56: 0x0836, 0x57: 0x0837, 0x58: 0x0838, 0x59: 0x0839, 0x5A: 0x083A, 0x5B: 0x083B,
+  0x5C: 0x083C, 0x5E: 0x2A3E, 0x62: 0x2A42, 0x68: 0x2A48, 0x73: 0x2A53, 0x74: 0x0854, 0x75: 0x0855, 0x76: 0x0856, 0x7B: 0x2A90,
+  0x7C: 0x2A86,
+};
+
 // ---------- sprm ----------
 // размер операнда по spra (биты 13–15): 0,1 — 1; 2 — 2; 3 — 4; 4,5 — 2; 6 — переменный; 7 — 3
 function sprms(g, from = 0, to = g.length) {
@@ -124,7 +142,8 @@ function sttb(d, fc, lcb) {
   let p = fc; const ext = u16(d, p) === 0xFFFF; if (ext) p += 2;
   const n = u16(d, p); const cbExtra = u16(d, p + 2); p += 4;
   const strs = []; const extra = [];
-  for (let i = 0; i < n && p < fc + lcb; i++) {
+  const end = Math.min(fc + lcb, d.length);
+  for (let i = 0; i < n && p < end; i++) {
     if (ext) { const cch = u16(d, p); strs.push(utf16(d, p + 2, cch)); p += 2 + cch * 2; } else { const cch = d[p]; strs.push(String.fromCharCode(...d.subarray(p + 1, p + 1 + cch))); p += 1 + cch; }
     extra.push(d.subarray(p, p + cbExtra)); p += cbExtra;
   }
@@ -132,8 +151,9 @@ function sttb(d, fc, lcb) {
 }
 // PLC: (n + 1) CP и n записей по cb байт
 function plc(d, fc, lcb, cb) {
-  if (!lcb) return { cps: [], data: [] };
-  const n = cb ? (lcb - 4) / (4 + cb) : (lcb - 4) / 4;
+  // длина из FIB — не больше потока (враждебный lcb иначе даёт сотни миллионов итераций)
+  if (!lcb || lcb < 4 || fc + lcb > d.length) return { cps: [], data: [] };
+  const n = Math.floor(cb ? (lcb - 4) / (4 + cb) : (lcb - 4) / 4);
   const cps = []; for (let i = 0; i <= n; i++) cps.push(i32(d, fc + i * 4));
   const data = []; for (let i = 0; i < n; i++) data.push(d.subarray(fc + (n + 1) * 4 + i * cb, fc + (n + 1) * 4 + (i + 1) * cb));
   return { cps, data };
@@ -160,21 +180,44 @@ function propertySet(d) {
   return out;
 }
 
+// Формула из файла → проверенный OMML: разбор XML, корень — m:oMath / m:oMathPara, внутри только элементы m: и w:, без
+// инструкций обработки; затем сериализация заново (разметка из файла не может закрыть абзац и вставить своё). Иначе — null.
+const M_NS = 'http://schemas.openxmlformats.org/officeDocument/2006/math';
+const W_NS = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main';
+function safeOmml(frag) {
+  let doc; let failed = false;
+  try {
+    doc = new DOMParser({ onError: () => { failed = true; } }).parseFromString(`<r xmlns:m="${M_NS}" xmlns:w="${W_NS}">${frag}</r>`, 'text/xml');
+  } catch { return null; }
+  if (failed || !doc || !doc.documentElement) return null;
+  const kids = [...doc.documentElement.childNodes].filter((n) => n.nodeType === 1);
+  if (kids.length !== 1 || !/^m:oMath(Para)?$/.test(kids[0].nodeName)) return null;
+  const ok = (n) => {
+    if (n.nodeType === 7 || n.nodeType === 10) return false; // инструкции обработки, DOCTYPE
+    if (n.nodeType === 1 && (!/^(m|w):/.test(n.nodeName) || (n.namespaceURI !== M_NS && n.namespaceURI !== W_NS))) return false;
+    return [...(n.childNodes || [])].every(ok);
+  };
+  if (!ok(kids[0])) return null;
+  return new XMLSerializer().serializeToString(kids[0]).replace(/\s+xmlns:(m|w)="[^"]*"/g, '');
+}
+
 // ---------- OfficeArt ([MS-ODRAW]) ----------
 // записи: { type, inst, ver, at (данные), len, kids (у контейнеров) } — все подряд, с вложенными
 function artRecords(d, a, b) {
   const out = [];
-  const walk = (x, y, parent) => {
+  const walk = (x, y, parent, depth) => {
+    y = Math.min(y, d.length); // границы из файла — не дальше буфера
+    if (depth > 64) return; // глубже Word не вкладывает; враждебная вложенность — не до переполнения стека
     while (x + 8 <= y) {
       const vi = u16(d, x); const type = u16(d, x + 2); const len = u32(d, x + 4);
       if (type < 0xF000 || type > 0xF200 || x + 8 + len > y) { x++; continue; } // в DggInfo перед рисунком — байт dgglbl
       const r = { type, inst: vi >> 4, ver: vi & 0xF, at: x + 8, len, kids: [] };
       out.push(r); if (parent) parent.kids.push(r);
-      if (r.ver === 0xF) walk(x + 8, x + 8 + len, r);
+      if (r.ver === 0xF) walk(x + 8, x + 8 + len, r, depth + 1);
       x += 8 + len;
     }
   };
-  walk(a, b, null);
+  walk(a, b, null, 0);
   return out;
 }
 // свойства фигуры (OfficeArtFOPT и вторичные): pid → { val, str (сложные — строки UTF-16) }
@@ -182,12 +225,16 @@ function shapeOpt(d, sp) {
   const m = new Map();
   for (const k of sp.kids) {
     if (k.type !== 0xF00B && k.type !== 0xF121 && k.type !== 0xF122) continue;
-    const n = k.inst; let cx = k.at + n * 6;
+    const end = Math.min(k.at + k.len, d.length);
+    const n = Math.min(k.inst, Math.floor((end - k.at) / 6)); let cx = k.at + n * 6;
     for (let i = 0; i < n; i++) {
       const id = u16(d, k.at + i * 6); const val = u32(d, k.at + i * 6 + 2);
       const pid = id & 0x3FFF; const complex = !!(id & 0x8000);
       const e = { val };
-      if (complex) { e.raw = d.subarray(cx, cx + val); e.str =utf16(d, cx, Math.floor(val / 2)).replace(/\0[\s\S]*$/, ''); cx += val; }
+      if (complex) {
+        const len = Math.min(val, Math.max(0, end - cx)); // длина сложного свойства — не дальше записи
+        e.raw = d.subarray(cx, cx + len); e.str = utf16(d, cx, Math.floor(len / 2)).replace(/\0[\s\S]*$/, ''); cx += len;
+      }
       if (!m.has(pid)) m.set(pid, e);
     }
   }
@@ -246,7 +293,12 @@ export async function docToDocx(input) {
   // FIB
   const ccp = { text: u32(w, 76), ftn: u32(w, 80), hdd: u32(w, 84), atn: u32(w, 92), edn: u32(w, 96), txbx: u32(w, 100), hdrTxbx: u32(w, 104) };
   const nFcLcb = u16(w, 152);
-  const fcl = (i) => (i < nFcLcb ? [u32(w, 154 + i * 8), u32(w, 158 + i * 8)] : [0, 0]);
+  // пара fc/lcb из FIB; часть за пределами потока таблиц — как отсутствующая
+  const fcl = (i) => {
+    if (i >= nFcLcb) return [0, 0];
+    const fc = u32(w, 154 + i * 8); const lcb = u32(w, 158 + i * 8);
+    return fc + lcb > T.length ? [0, 0] : [fc, lcb];
+  };
   const [fcStshf, lcbStshf] = fcl(1); const [fcFndRef, lcbFndRef] = fcl(2); const [fcFndTxt, lcbFndTxt] = fcl(3);
   const [fcAndRef, lcbAndRef] = fcl(4); const [fcAndTxt, lcbAndTxt] = fcl(5); const [fcSed, lcbSed] = fcl(6);
   const [fcHdd, lcbHdd] = fcl(11); const [fcBteChpx, lcbBteChpx] = fcl(12); const [fcBtePapx, lcbBtePapx] = fcl(13);
@@ -259,22 +311,36 @@ export async function docToDocx(input) {
 
   // куски текста (Clx: Prc* + Pcdt)
   const prcs = []; let p = fcClx; const pieces = [];
-  while (p < fcClx + lcbClx) {
-    if (T[p] === 0x01) { const cb = i16(T, p + 1); prcs.push(T.subarray(p + 3, p + 3 + cb)); p += 3 + cb; continue; }
+  const bad = (what) => { throw new Error(`Документ повреждён (${what}) — Перо не может его прочитать`); };
+  const clxEnd = fcClx + lcbClx;
+  while (p < clxEnd) {
+    if (T[p] === 0x01) {
+      const cb = i16(T, p + 1);
+      if (cb < 0 || p + 3 + cb > clxEnd) bad('Clx');
+      prcs.push(T.subarray(p + 3, p + 3 + cb)); p += 3 + cb; continue;
+    }
     if (T[p] === 0x02) {
-      const lcb = u32(T, p + 1); const n = (lcb - 4) / 12; const base = p + 5;
+      const lcb = u32(T, p + 1); const base = p + 5;
+      if (lcb < 4 || base + lcb > clxEnd) bad('таблица кусков');
+      const n = Math.floor((lcb - 4) / 12);
       for (let i = 0; i < n; i++) {
         const cp0 = u32(T, base + i * 4); const cp1 = u32(T, base + (i + 1) * 4);
         const pcd = base + (n + 1) * 4 + i * 8;
         const fcRaw = u32(T, pcd + 2); const compressed = !!(fcRaw & 0x40000000);
-        pieces.push({ cp0, cp1, fc: compressed ? (fcRaw & 0x3FFFFFFF) / 2 : fcRaw, compressed, prm: u16(T, pcd + 6) });
+        const fc = compressed ? (fcRaw & 0x3FFFFFFF) / 2 : fcRaw;
+        // куски — по возрастанию CP и целиком внутри потока WordDocument
+        if (cp1 < cp0 || (!pieces.length && cp0 !== 0) || fc + (cp1 - cp0) * (compressed ? 1 : 2) > w.length) bad('кусок текста');
+        pieces.push({ cp0, cp1, fc, compressed, prm: u16(T, pcd + 6) });
       }
       break;
     }
     break;
   }
+  if (!pieces.length) bad('нет текста');
   const dec1252 = new TextDecoder('windows-1252');
-  const total = pieces.length ? pieces[pieces.length - 1].cp1 : 0;
+  const total = pieces[pieces.length - 1].cp1;
+  // длины историй из FIB — в пределах текста (по порядку: основной, сноски, колонтитулы, примечания, концевые, надписи)
+  { let acc = 0; for (const k of ['text', 'ftn', 'hdd', 'atn', 'edn', 'txbx', 'hdrTxbx']) { ccp[k] = Math.max(0, Math.min(ccp[k], total - acc)); acc += ccp[k]; } }
   let text = '';
   for (const pc of pieces) {
     const n = pc.cp1 - pc.cp0;
@@ -286,9 +352,11 @@ export async function docToDocx(input) {
   // FKP: свойства символов (CHPX) и абзацев (PAPX) по диапазонам FC
   const chpx = []; const papx = [];
   {
+    // повторная ссылка на ту же страницу FKP (раздувание из 8 байт в сотню объектов) и страница за файлом — пропуск
+    const pages = new Set(); const fresh = (page) => page + 512 <= w.length && !pages.has(page) && pages.add(page);
     const bc = plc(T, fcBteChpx, lcbBteChpx, 4);
     for (const pn of bc.data) {
-      const page = (u32(pn, 0) & 0x3FFFFF) * 512; const crun = w[page + 511];
+      const page = (u32(pn, 0) & 0x3FFFFF) * 512; if (!fresh(page)) continue; const crun = w[page + 511];
       for (let i = 0; i < crun; i++) {
         const off = w[page + (crun + 1) * 4 + i] * 2;
         const g = off ? w.subarray(page + off + 1, page + off + 1 + w[page + off]) : new Uint8Array(0);
@@ -297,7 +365,7 @@ export async function docToDocx(input) {
     }
     const bp = plc(T, fcBtePapx, lcbBtePapx, 4);
     for (const pn of bp.data) {
-      const page = (u32(pn, 0) & 0x3FFFFF) * 512; const cpara = w[page + 511];
+      const page = (u32(pn, 0) & 0x3FFFFF) * 512; if (!fresh(page)) continue; const cpara = w[page + 511];
       for (let i = 0; i < cpara; i++) {
         const off = w[page + (cpara + 1) * 4 + i * 13] * 2;
         let istd = 0; let g = new Uint8Array(0);
@@ -306,7 +374,13 @@ export async function docToDocx(input) {
           if (cb === 0) { cb = w[q] * 2; q++; } else cb = cb * 2 - 1;
           istd = u16(w, q); g = w.subarray(q + 2, q + cb);
         }
-        papx.push({ fc0: u32(w, page + i * 4), fc1: u32(w, page + (i + 1) * 4), istd, s: sprms(g) });
+        // sprmPHugePapx: свойства абзаца не поместились в FKP — они в потоке Data (PrcData: cbGrpprl u16 + GrpPrl)
+        let s = sprms(g);
+        if (s[0] && s[0].sprm === 0x6646) {
+          const off = u32(s[0].g, s[0].at); const cb = u16(D, off);
+          s = off + 2 + cb <= D.length ? sprms(D.subarray(off + 2, off + 2 + cb)) : [];
+        }
+        papx.push({ fc0: u32(w, page + i * 4), fc1: u32(w, page + (i + 1) * 4), istd, s });
       }
     }
   }
@@ -316,10 +390,8 @@ export async function docToDocx(input) {
     if (!prm) return [];
     if (prm & 1) { const g = prcs[prm >> 1]; return g ? sprms(g) : []; }
     const isprm = (prm >> 1) & 0x7F; const val = prm >> 8;
-    const PRM0 = { 0x00: 0, 0x08: 0x0835, 0x09: 0x0836, 0x0A: 0x0837, 0x14: 0x4A43 }; // самые частые: Ж, К, зачёркнутый
     const sp = PRM0[isprm]; if (!sp) return [];
-    const g = Uint8Array.from([sp & 0xFF, sp >> 8, val & 0xFF, val >> 8]);
-    return sprms(g, 0, 2 + [1, 1, 2, 4, 2, 2, 0, 3][sp >> 13]);
+    return sprms(Uint8Array.from([sp & 0xFF, sp >> 8, val & 0xFF])); // у всех sprm таблицы операнд — 1 байт
   };
 
   // шрифты
@@ -336,7 +408,6 @@ export async function docToDocx(input) {
   const brcXml = (name, b) => (!b ? '' : b.val === 'nil' ? `<w:${name} w:val="nil"/>` : `<w:${name} w:val="${b.val}" w:sz="${b.sz}" w:space="${b.space}" w:color="${b.color}"/>`);
   const shd10 = (g, o) => { const back = colorref(g, o + 4); const fore = colorref(g, o); const pat = u16(g, o + 8); if (pat === 0xFFFF) return null; return `<w:shd w:val="${SHD_PAT[pat] || 'clear'}" w:color="${fore}" w:fill="${back}"/>`; };
   const shd80 = (v) => { const fore = ICO[v & 0x1F] || 'auto'; const back = ICO[(v >> 5) & 0x1F] || 'auto'; const pat = v >> 10; return `<w:shd w:val="${SHD_PAT[pat] || 'clear'}" w:color="${fore}" w:fill="${back}"/>`; };
-  const ON = (v) => (v === 1 ? '' : v === 0 ? ' w:val="0"' : null); // 0x80/0x81 — «как в стиле»/«наоборот» — решает вызывающий
 
   // свойства символа: sprm → { элемент: xml }; toggle(name) — значение стиля для 0x81
   function runProps(list, styleToggle = () => false) {
@@ -504,7 +575,7 @@ export async function docToDocx(input) {
     // STSHI: cstd, cbSTDBaseInFile, флаги, stiMax, istdMaxFixed, nVerBuiltIn, rgftcStandardChpStsh (ascii, fe, прочие), ftcBi
     if (cbStshi >= 20) ftcDefault = [u16(T, sh + 12), u16(T, sh + 14), u16(T, sh + 16), u16(T, sh + 18)];
     let q = sh + cbStshi;
-    for (let istd = 0; istd < cstd; istd++) {
+    for (let istd = 0; istd < cstd && q + 2 <= fcStshf + lcbStshf; istd++) {
       const cb = u16(T, q); q += 2;
       if (!cb) { styles.push(null); continue; }
       const st = q; const end = q + cb; q = end;
@@ -520,26 +591,35 @@ export async function docToDocx(input) {
       styles.push({ istd, sti, stk, name, base: base === 0x0FFF ? null : base, next: next === 0x0FFF ? null : next, papx: pg ? sprms(pg) : [], chpx: cg ? sprms(cg) : [] });
     }
   }
-  const styleIds = new Map(); const usedIds = new Set();
+  const styleIds = new Map(); const usedIds = new Set(); const idCount = new Map();
   for (const s of styles) {
     if (!s) continue;
     const nm = STI[s.sti] && s.sti !== 4094 ? STI[s.sti] : s.name;
     s.oname = s.sti < 4094 && STI[s.sti] ? STI[s.sti] : s.name;
     let id = nm.replace(/[^A-Za-z0-9Ѐ-ӿ]/g, '') || `s${s.istd}`;
     if (/^\d/.test(id)) id = `s${id}`;
-    while (usedIds.has(id)) id += 'x';
-    usedIds.add(id); styleIds.set(s.istd, id); void nm;
+    // повтор имени — номер (счётчик на имя: тысячи одинаковых стилей не дают квадратичного перебора)
+    if (usedIds.has(id)) { let k = (idCount.get(id) || 1) + 1; while (usedIds.has(`${id}_${k}`)) k++; idCount.set(id, k); id = `${id}_${k}`; } // «_»: не спутать с «Heading2»
+    usedIds.add(id); styleIds.set(s.istd, id);
   }
   function styleIdOf(istd) { return styleIds.get(istd) || null; }
   // значение «переключателя» в стиле (для 0x81) — по цепочке basedOn
+  // кеш: (стиль, свойство) → значение и свойства стиля → runProps один раз (цепочки до 4095 и тысячи стилей — не квадратично)
+  const toggleCache = new Map(); const ownRun = new Map();
   const styleToggle = (istd) => (name) => {
-    const seen = new Set();
+    const key = `${istd}|${name}`;
+    if (toggleCache.has(key)) return toggleCache.get(key);
+    let val = false; const seen = new Set();
     for (let s = styles[istd]; s && !seen.has(s.istd); s = s.base != null ? styles[s.base] : null) {
       seen.add(s.istd);
-      const r = runProps(s.chpx);
-      if (r[name] != null) return !/w:val="0"/.test(r[name]);
+      const pk = `${s.istd}|${name}`;
+      if (toggleCache.has(pk)) { val = toggleCache.get(pk); break; }
+      if (!ownRun.has(s.istd)) ownRun.set(s.istd, runProps(s.chpx));
+      const r = ownRun.get(s.istd);
+      if (r[name] != null) { val = !/w:val="0"/.test(r[name]); break; }
     }
-    return false;
+    toggleCache.set(key, val);
+    return val;
   };
   const STK = { 1: 'paragraph', 2: 'character', 3: 'table', 4: 'numbering' };
   let stylesXml = '';
@@ -564,12 +644,14 @@ export async function docToDocx(input) {
   // ---------- списки (PlfLst / PlfLfo) ----------
   let numberingXml = '';
   if (lcbLst) {
-    const n = u16(T, fcLst); const lsts = []; let q = fcLst + 2;
+    // lcbLst покрывает только массив LSTF; уровни (LVL) лежат следом за ним — их граница — конец потока
+    const lstEnd = T.length;
+    const n = Math.min(u16(T, fcLst), Math.floor((lcbLst - 2) / 28)); const lsts = []; let q = fcLst + 2;
     for (let i = 0; i < n; i++) { lsts.push({ lsid: i32(T, q), styles: Array.from({ length: 9 }, (_, k) => u16(T, q + 8 + k * 2)), simple: !!(T[q + 26] & 1) }); q += 28; }
     // уровни: LVLF (28 байт) + grpprlPapx + grpprlChpx + xst
     for (const l of lsts) {
       l.lvls = [];
-      for (let k = 0; k < (l.simple ? 1 : 9); k++) {
+      for (let k = 0; k < (l.simple ? 1 : 9) && q + 28 <= lstEnd; k++) {
         const start = i32(T, q); const nfc = T[q + 4]; const fl = T[q + 5]; const follow = T[q + 15];
         const cbC = T[q + 24]; const cbP = T[q + 25];
         const legal = !!(fl & 0x04); const noRestart = !!(fl & 0x08);
@@ -587,13 +669,14 @@ export async function docToDocx(input) {
         const txt = v.nfc === 23 ? v.xst : [...v.xst].map((ch) => (ch.charCodeAt(0) < 9 ? `%${ch.charCodeAt(0) + 1}` : ch)).join('');
         const pst = l.styles[k] !== 0x0FFF && styleIds.has(l.styles[k]) ? `<w:pStyle w:val="${styleIds.get(l.styles[k])}"/>` : '';
         const pp = { ...v.p }; delete pp.istd;
-        abs += `<w:lvl w:ilvl="${k}"><w:start w:val="${v.start}"/><w:numFmt w:val="${NFC[v.nfc] || 'decimal'}"/>${v.legal ? '<w:isLgl/>' : ''}${pst}<w:suff w:val="${v.follow}"/><w:lvlText w:val="${esc(txt)}"/><w:lvlJc w:val="${v.jc}"/>${pPrXml(pp)}${rPrXml(v.r)}</w:lvl>`;
+        // порядок CT_Lvl: start, numFmt, lvlRestart, pStyle, isLgl, suff, lvlText, lvlJc, pPr, rPr
+        abs += `<w:lvl w:ilvl="${k}"><w:start w:val="${v.start}"/><w:numFmt w:val="${NFC[v.nfc] || 'decimal'}"/>${v.noRestart ? '<w:lvlRestart w:val="0"/>' : ''}${pst}${v.legal ? '<w:isLgl/>' : ''}<w:suff w:val="${v.follow}"/><w:lvlText w:val="${esc(txt)}"/><w:lvlJc w:val="${v.jc}"/>${pPrXml(pp)}${rPrXml(v.r)}</w:lvl>`;
       });
       abs += '</w:abstractNum>';
     });
     let nums = '';
     if (lcbLfo) {
-      const m = u32(T, fcLfo); let o = fcLfo + 4; const lfos = [];
+      const m = Math.min(u32(T, fcLfo), Math.floor((lcbLfo - 4) / 16)); let o = fcLfo + 4; const lfos = [];
       for (let i = 0; i < m; i++) { lfos.push({ lsid: i32(T, o), clfolvl: T[o + 12] }); o += 16; }
       for (const f of lfos) {
         f.over = [];
@@ -638,7 +721,7 @@ export async function docToDocx(input) {
   // примечания: ссылки (ATRDPre10), авторы, диапазоны по закладкам примечаний
   const atn = plc(T, fcAndRef, lcbAndRef, 30);
   const atnOwners = [];
-  { let o = fcAtnOwn; while (o < fcAtnOwn + lcbAtnOwn) { const cch = u16(T, o); atnOwners.push(utf16(T, o + 2, cch)); o += 2 + cch * 2; } }
+  { let o = fcAtnOwn; while (o + 2 <= fcAtnOwn + lcbAtnOwn) { const cch = u16(T, o); atnOwners.push(utf16(T, o + 2, cch)); o += 2 + cch * 2; } }
   const atnRanges = new Map();
   {
     const bk = sttb(T, fcAtnBkmk, lcbAtnBkmk); const f = plc(T, fcAtnBkf, lcbAtnBkf, 4); const l = plc(T, fcAtnBkl, lcbAtnBkl, 0);
@@ -657,8 +740,16 @@ export async function docToDocx(input) {
 
   // ---------- рисунки ----------
   const media = []; // { name, data, ext }
-  const rels = []; // { id, type, target }
-  let relN = 0; const rel = (type, target) => { const id = `rIdDoc${++relN}`; rels.push({ id, type, target }); return id; };
+  // связи — у каждой части пакета свои (рисунок в колонтитуле ссылается через связи колонтитула, не документа)
+  const relsByPart = new Map(); // часть (имя в word/) → [{ id, type, target }]
+  let curPart = 'document.xml';
+  let relN = 0;
+  const rel = (type, target) => {
+    const id = `rIdDoc${++relN}`;
+    if (!relsByPart.has(curPart)) relsByPart.set(curPart, []);
+    relsByPart.get(curPart).push({ id, type, target });
+    return id;
+  };
   const RT = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships';
   // картинка (растровая) → часть media и связь; { rid, name, id } | null
   function addImage(blip) {
@@ -677,7 +768,7 @@ export async function docToDocx(input) {
     if (fcPic + 68 > D.length) return null;
     const lcb = u32(D, fcPic); const cbHeader = u16(D, fcPic + 4); const mm = u16(D, fcPic + 6);
     const dxaGoal = i16(D, fcPic + 28); const dyaGoal = i16(D, fcPic + 30); const mx = u16(D, fcPic + 32); const my = u16(D, fcPic + 34);
-    let o = fcPic + cbHeader; const end = fcPic + lcb;
+    let o = fcPic + cbHeader; const end = Math.min(fcPic + lcb, D.length);
     if (mm === 0x66) o += 1 + D[o];
     const recs = artRecords(D, o, end);
     const sp = recs.find((r) => r.type === 0xF004);
@@ -687,10 +778,11 @@ export async function docToDocx(input) {
     for (const e of opt.values()) {
       if (!e.raw || e.raw.length < 20 || e.raw[0] !== 0x3C || e.raw[1] !== 0x3F) continue;
       const xml = new TextDecoder('utf-8').decode(e.raw);
-      const clean = (s) => s.replace(/<w:rPr>[\s\S]*?<\/w:rPr>/g, '').replace(/<\/?aml:[^>]*>/g, '');
+      const clean = (s) => safeOmml(s.replace(/<w:rPr>[\s\S]*?<\/w:rPr>/g, '').replace(/<\/?aml:[^>]*>/g, ''));
       const para = /<m:oMathPara\b[\s\S]*?<\/m:oMathPara>/.exec(xml); const one = /<m:oMath\b[\s\S]*?<\/m:oMath>/.exec(xml);
       // в XML формула всегда в oMathPara; в строке текста Word ставит один oMath
-      if (one) return { math: clean(one[0]), para: para ? clean(para[0]) : null };
+      const math = one ? clean(one[0]) : null; // не прошла проверку — показываем картинку, как без формулы
+      if (math) return { math, para: para ? clean(para[0]) : null };
     }
     for (const r of recs) if (r.type === 0xF007) { blip = bseBlip(D, r, w); if (blip) break; }
     const img = addImage(blip);
@@ -764,8 +856,9 @@ export async function docToDocx(input) {
     const relH = o.has(0x0390) ? ['margin', 'page', 'column', 'character'][num(0x0390, 2)] || 'column' : ['margin', 'page', 'column'][bx] || 'column';
     const relV = o.has(0x0392) ? ['margin', 'page', 'paragraph', 'line'][num(0x0392, 2)] || 'paragraph' : ['margin', 'page', 'paragraph'][by] || 'paragraph';
     const posh = num(0x038F, 0); const posv = num(0x0391, 0);
-    const H = posh ? `<wp:align>${['', 'left', 'center', 'right', 'inside', 'outside'][posh]}</wp:align>` : `<wp:posOffset>${Math.round(x0 * 635)}</wp:posOffset>`;
-    const V = posv ? `<wp:align>${['', 'top', 'center', 'bottom', 'inside', 'outside'][posv]}</wp:align>` : `<wp:posOffset>${Math.round(y0 * 635)}</wp:posOffset>`;
+    // выравнивание из файла — только известные значения, иначе смещение (wp:align с мусором нарушает схему)
+    const H = posh >= 1 && posh <= 5 ? `<wp:align>${['', 'left', 'center', 'right', 'inside', 'outside'][posh]}</wp:align>` : `<wp:posOffset>${Math.round(x0 * 635)}</wp:posOffset>`;
+    const V = posv >= 1 && posv <= 5 ? `<wp:align>${['', 'top', 'center', 'bottom', 'inside', 'outside'][posv]}</wp:align>` : `<wp:posOffset>${Math.round(y0 * 635)}</wp:posOffset>`;
     const side = ['bothSides', 'left', 'right', 'largest'][wrk] || 'bothSides';
     const poly = '<wp:wrapPolygon edited="0"><wp:start x="0" y="0"/><wp:lineTo x="0" y="21600"/><wp:lineTo x="21600" y="21600"/><wp:lineTo x="21600" y="0"/><wp:lineTo x="0" y="0"/></wp:wrapPolygon>';
     const wrap = wr === 1 ? '<wp:wrapTopAndBottom/>' : wr === 3 ? '<wp:wrapNone/>' : wr === 4 ? `<wp:wrapTight wrapText="${side}">${poly}</wp:wrapTight>` : wr === 5 ? `<wp:wrapThrough wrapText="${side}">${poly}</wp:wrapThrough>` : `<wp:wrapSquare wrapText="${side}"/>`;
@@ -824,13 +917,29 @@ export async function docToDocx(input) {
   const papAt = (cp) => { const pc = pieceAt(cp); const r = find(papx, fcOf(cp)); const extra = prmSprms(pc.prm); return r ? { istd: r.istd, s: extra.length ? [...r.s, ...extra] : r.s } : { istd: 0, s: extra }; };
 
   const fieldStack = [];
-  // одна история (основной текст, сноска, колонтитул…) → OOXML блоков; story: 'main' | 'ftn' | 'hdr' | 'atn'
-  function story(a, b, kind, sectBreaks = null) {
+  // одна история (основной текст, сноска, колонтитул…) → OOXML блоков; story: 'main' | 'ftn' | 'hdr' | 'atn' | 'txbx';
+  // part — часть пакета, куда пойдёт текст (связи рисунков и ссылок — в её .rels); у надписи — часть, где стоит фигура
+  // диапазон каждой истории — границы для CP из PLC файла; каждая побочная история выводится не больше одного раза
+  const atnBase = ccp.text + ccp.ftn + ccp.hdd;
+  const RANGE = {
+    main: [0, ccp.text], ftn: [ccp.text, ccp.text + ccp.ftn], hdr: [ccp.text + ccp.ftn, atnBase], atn: [atnBase, atnBase + ccp.atn],
+    txbx: [atnBase + ccp.atn + ccp.edn, atnBase + ccp.atn + ccp.edn + ccp.txbx + ccp.hdrTxbx],
+  };
+  const storyDone = new Set();
+  function story(a0, b0, kind, sectBreaks = null, part = null) {
+    const lim = RANGE[kind] || RANGE.main;
+    const a = Math.max(a0, lim[0]); const b = Math.min(b0, lim[1], text.length);
+    if (!(b > a)) return '';
+    if (kind !== 'main') { const key = `${kind}:${a}:${b}`; if (storyDone.has(key)) return ''; storyDone.add(key); }
+    const prevPart = curPart; const prevStack = fieldStack.splice(0); // незакрытое поле не «протекает» между историями
+    if (part) curPart = part;
+    try { return storyBody(a, b, kind, sectBreaks); } finally { curPart = prevPart; fieldStack.length = 0; fieldStack.push(...prevStack); }
+  }
+  function storyBody(a, b, kind, sectBreaks) {
     let xml = '';
     let cpStart = a;
     let table = null; // { rows: [{ cells: [xml], tap }], cell: xml }
     let cellXml = '';
-    let tdepth = 0;
     const flushTable = () => { if (table) { xml += tableXml(table); table = null; } };
     for (let cp = a; cp < b; cp++) {
       const ch = text.charCodeAt(cp);
@@ -844,7 +953,10 @@ export async function docToDocx(input) {
       if (itap > 1) { warn('вложенные таблицы (показаны текстом)'); }
       if (ch === 0x07 && pp.ttp) { // конец строки таблицы: TAPX этой метки
         if (!table) table = { rows: [] };
-        table.rows.push({ cells: table.pending || [], tap: pap.s });
+        // закладки и диапазоны примечаний на метке строки — в конец последней ячейки
+        const pend = table.pending || [];
+        if (marks.has(cp) && pend.length) { const last = pend.length - 1; const i = pend[last].lastIndexOf('</w:p>'); if (i >= 0) pend[last] = `${pend[last].slice(0, i)}${marks.get(cp).join('')}${pend[last].slice(i)}`; }
+        table.rows.push({ cells: pend, tap: pap.s });
         table.pending = [];
         cpStart = cp + 1;
         continue;
@@ -863,10 +975,8 @@ export async function docToDocx(input) {
         flushTable();
         xml += para;
       }
-      tdepth = itap;
       cpStart = cp + 1;
     }
-    void tdepth;
     if (cellXml && table) { table.pending.push(cellXml); }
     flushTable();
     return xml;
@@ -879,7 +989,7 @@ export async function docToDocx(input) {
     const markR = runProps(markRuns[0] ? markRuns[0].s : [], styleToggle(pp.istd || 0));
     let skipTo = -1; // поле, заменённое целиком (формула в QUOTE), — пропустить до его конца
     for (const run of a < endCp ? runsOf(a, endCp) : []) {
-      if (run.b <= skipTo) continue;
+      if (run.b <= skipTo) { for (let k = run.a; k < run.b; k++) if (marks.has(k)) body += marks.get(k).join(''); continue; } // метки внутри пропущенного поля — не терять
       const r = runProps(run.s, styleToggle(pp.istd || 0));
       let buf = ''; let instr = '';
       const rpr = rPrXml(r);
@@ -922,7 +1032,7 @@ export async function docToDocx(input) {
             else if (kind === 'atn') emit('<w:annotationRef/>');
             continue;
           }
-          if (c === 0x08) { const x = floating(cp, kind); if (x) emit(x); continue; }
+          if (c === 0x08) { if (kind !== 'txbx') { const x = floating(cp, kind); if (x) emit(x); } continue; } // в надписи — без фигур (иначе петля)
           if (c === 0x28 || c === 0x29 || c < 0x20) continue;
         }
         if (c === 0x09) { emit('<w:tab/>'); continue; }
@@ -939,20 +1049,32 @@ export async function docToDocx(input) {
     if (marks.has(endCp)) body += marks.get(endCp).join('');
     // свойства знака абзаца (размер и т. п.) — как Word пишет в pPr/rPr
     const markRpr = rPrXml(markR);
-    const mark = markR.ins || markR.del ? `<w:rPr>${markR.ins ? `<w:ins w:id="${revN++}" w:author="${esc(authors[markR.ibst || 0] || '')}" w:date="${dttm(markR.dttm)}"/>` : ''}${markRpr.slice(7, -8)}</w:rPr>` : markRpr;
+    // вставленный / удалённый знак абзаца (CT_ParaRPr: ins, del — до rStyle и прочего)
+    const insM = markR.ins ? `<w:ins w:id="${revN++}" w:author="${esc(authors[markR.ibst || 0] || '')}" w:date="${dttm(markR.dttm)}"/>` : '';
+    const delM = markR.del ? `<w:del w:id="${revN++}" w:author="${esc(authors[markR.ibstDel ?? markR.ibst ?? 0] || '')}" w:date="${dttm(markR.dttmDel || markR.dttm)}"/>` : '';
+    const mark = insM || delM ? `<w:rPr>${insM}${delM}${markRpr.slice(7, -8)}</w:rPr>` : markRpr;
     return `<w:p>${pPrXml(pp, { sectPr, rPr: mark })}${hyperlinks(body)}</w:p>`;
   }
   let revN = 1;
   // поле QUOTE, в коде которого — картинка-формула: { math, end } (end — CP метки конца поля)
-  function quoteMath(cp, lim) {
-    let depth = 0; let sep = -1; let end = -1;
-    for (let k = cp; k < lim; k++) {
-      const c = text.charCodeAt(k);
-      if (c === 0x13) depth++;
-      else if (c === 0x14 && depth === 1 && sep < 0) sep = k;
-      else if (c === 0x15) { depth--; if (!depth) { end = k; break; } }
+  // разделитель и конец каждого поля — одним проходом по всему тексту (стек), а не поиском от каждого 0x13
+  let fieldPairs = null;
+  function fieldOf(cp) {
+    if (!fieldPairs) {
+      fieldPairs = new Map(); const st = [];
+      for (let k = 0; k < text.length; k++) {
+        const c = text.charCodeAt(k);
+        if (c === 0x13) st.push({ start: k, sep: -1 });
+        else if (c === 0x14 && st.length && st[st.length - 1].sep < 0) st[st.length - 1].sep = k;
+        else if (c === 0x15 && st.length) { const f = st.pop(); fieldPairs.set(f.start, { sep: f.sep, end: k }); }
+      }
     }
-    if (end < 0) return null;
+    return fieldPairs.get(cp) || null;
+  }
+  function quoteMath(cp, lim) {
+    const f = fieldOf(cp);
+    if (!f || f.end >= lim) return null;
+    const { sep, end } = f;
     const instr = text.slice(cp + 1, sep > 0 ? sep : end);
     if (!/^\s*QUOTE\b/.test(instr)) return null;
     const at = cp + 1 + instr.indexOf('\u0001');
@@ -966,18 +1088,25 @@ export async function docToDocx(input) {
     const R = (inner) => `<w:r>(?:<w:rPr>(?:(?!</w:rPr>).)*</w:rPr>)?${inner}</w:r>`;
     const re = new RegExp(`${R('<w:fldChar w:fldCharType="begin"/>')}${R('<w:instrText xml:space="preserve">\\s*HYPERLINK\\s+([^<]*)</w:instrText>')}${R('<w:fldChar w:fldCharType="separate"/>')}((?:(?!<w:fldChar)(?!<w:instrText).)*?)${R('<w:fldChar w:fldCharType="end"/>')}`, 'g');
     return body.replace(re, (m, instr, result) => {
-      const a = instr.replace(/&quot;/g, '"');
-      const anchor = /\\l\s+"([^"]*)"/.exec(a); const url = /^\s*"([^"]*)"/.exec(a);
+      const a = unesc(instr); // код поля уже экранирован в instrText — вернуть как было (иначе &amp;lt; при повторном esc)
+      const anchor = /\\l\s+"([^"]*)"/.exec(a); // адрес — в кавычках или первым словом без кавычек (не ключ вида \l, \o)
+      let url = /^\s*"([^"]*)"/.exec(a) || /^\s*(?!\\[a-z](\s|$))(\S+)/i.exec(a);
+      if (url && url.length > 2 && url[2] != null) url = [url[0], url[2]];
       const tip = /\\o\s+"([^"]*)"/.exec(a);
-      const attrs = `${url ? ` r:id="${rel(`${RT}/hyperlink`, url[1].replace(/&amp;/g, '&'))}"` : ''}${anchor ? ` w:anchor="${esc(anchor[1])}"` : ''}${tip ? ` w:tooltip="${esc(tip[1])}"` : ''} w:history="1"`;
+      // ссылка на файл, сетевую папку и т. п. — остаётся полем, как в исходном .doc (не теряется при сохранении; в Пере
+      // поле по щелчку не открывается, Word при переходе по такой ссылке сам предупреждает)
+      if (url && !safeUrl(url[1])) return m;
       if (!url && !anchor) return m;
+      const attrs = `${url ? ` r:id="${rel(`${RT}/hyperlink`, url[1])}"` : ''}${anchor ? ` w:anchor="${esc(anchor[1])}"` : ''}${tip ? ` w:tooltip="${esc(tip[1])}"` : ''} w:history="1"`;
       return `<w:hyperlink${attrs}>${result}</w:hyperlink>`;
     });
   }
+  // исправления: вставка, удаление или вставка, удалённая другим рецензентом (w:del внутри w:ins)
   function wrapRev(r, x) {
-    if (r.ins) return `<w:ins w:id="${revN++}" w:author="${esc(authors[r.ibst || 0] || '')}" w:date="${dttm(r.dttm)}">${x}</w:ins>`;
-    if (r.del) return `<w:del w:id="${revN++}" w:author="${esc(authors[r.ibstDel ?? r.ibst ?? 0] || '')}" w:date="${dttm(r.dttmDel || r.dttm)}">${x}</w:del>`;
-    return x;
+    let out = x;
+    if (r.del) out = `<w:del w:id="${revN++}" w:author="${esc(authors[r.ibstDel ?? r.ibst ?? 0] || '')}" w:date="${dttm(r.dttmDel || r.dttm)}">${out}</w:del>`;
+    if (r.ins) out = `<w:ins w:id="${revN++}" w:author="${esc(authors[r.ibst || 0] || '')}" w:date="${dttm(r.dttm)}">${out}</w:ins>`;
+    return out;
   }
 
   // таблица: строки с TAPX (sprmTDefTable — границы столбцов и TC80 ячеек)
@@ -1026,14 +1155,22 @@ export async function docToDocx(input) {
     const bn = ['top', 'left', 'bottom', 'right', 'insideH', 'insideV'];
     const tblBorders = first.brc ? `<w:tblBorders>${first.brc.map((b, k) => brcXml(bn[k], b)).join('')}</w:tblBorders>` : '';
     const style = first.style != null && styleIds.has(first.style) ? `<w:tblStyle w:val="${styleIds.get(first.style)}"/>` : '';
-    let xml = `<w:tbl><w:tblPr>${style}<w:tblW w:w="${first.width && first.width.fts === 3 ? first.width.w : 0}" w:type="${first.width && first.width.fts === 3 ? 'dxa' : 'auto'}"/>${first.jc && first.jc !== 'left' ? `<w:jc w:val="${first.jc}"/>` : ''}${first.left ? `<w:tblInd w:w="${first.left + (first.centers.length ? 0 : 0)}" w:type="dxa"/>` : ''}${tblBorders}<w:tblLayout w:type="fixed"/></w:tblPr>`;
+    let xml = `<w:tbl><w:tblPr>${style}<w:tblW w:w="${first.width && first.width.fts === 3 ? first.width.w : 0}" w:type="${first.width && first.width.fts === 3 ? 'dxa' : 'auto'}"/>${first.jc && first.jc !== 'left' ? `<w:jc w:val="${first.jc}"/>` : ''}${first.left ? `<w:tblInd w:w="${first.left}" w:type="dxa"/>` : ''}${tblBorders}<w:tblLayout w:type="fixed"/></w:tblPr>`;
     xml += `<w:tblGrid>${xs.slice(0, -1).map((x, k) => `<w:gridCol w:w="${xs[k + 1] - x}"/>`).join('')}</w:tblGrid>`;
     for (const row of rows) {
       const tp = row.tap;
       const trPr = [tp.cantSplit ? '<w:cantSplit/>' : '', tp.height ? `<w:trHeight w:val="${Math.abs(tp.height)}"${tp.height < 0 ? ' w:hRule="exact"' : ''}/>` : '', tp.header ? '<w:tblHeader/>' : ''].join('');
       xml += `<w:tr>${trPr ? `<w:trPr>${trPr}</w:trPr>` : ''}`;
+      // ячеек больше, чем описано в TDefTable (повреждённая или урезанная строка), — без свойств, но с содержимым
+      // ячеек больше, чем описано в TDefTable: содержимое лишних — в последнюю описанную (у лишних нет столбца сетки)
+      if (row.cells.length > tp.tcs.length) {
+        if (!tp.tcs.length) tp.tcs.push({ grf: 0, brc: [], extra: true });
+        const keep = tp.tcs.length;
+        row.cells = [...row.cells.slice(0, keep - 1), row.cells.slice(keep - 1).join('')];
+      }
       for (let k = 0; k < tp.tcs.length; k++) {
         const tc = tp.tcs[k]; const grf = tc.grf;
+        if (tc.extra) { xml += `<w:tc><w:tcPr><w:tcW w:w="0" w:type="auto"/></w:tcPr>${row.cells[k] || '<w:p/>'}</w:tc>`; continue; } // строка без TDefTable
         if (grf & 0x02) continue; // объединена с предыдущей (старый способ)
         let span = 1; while (k + span < tp.tcs.length && (tp.tcs[k + span].grf & 0x02)) span++;
         const x0 = tp.centers[k]; const x1 = tp.centers[k + span];
@@ -1063,7 +1200,7 @@ export async function docToDocx(input) {
     if (!st) return null;
     const isHeader = k === 0 || k === 1 || k === 4;
     const name = `${isHeader ? 'header' : 'footer'}_doc${hfParts.length + 1}.xml`;
-    let body = story(st[0], st[1] - (text.charCodeAt(st[1] - 1) === 0x0D && st[1] - st[0] > 1 && text.charCodeAt(st[1] - 2) === 0x0D ? 1 : 0), 'hdr');
+    let body = story(st[0], st[1] - (text.charCodeAt(st[1] - 1) === 0x0D && st[1] - st[0] > 1 && text.charCodeAt(st[1] - 2) === 0x0D ? 1 : 0), 'hdr', null, name);
     if (!body) body = '<w:p/>';
     hfParts.push({ name, type: isHeader ? 'header' : 'footer', xml: body });
     return { id: rel(`${RT}/${isHeader ? 'header' : 'footer'}`, name), isHeader, type: k === 0 || k === 2 ? 'even' : k === 4 || k === 5 ? 'first' : 'default' };
@@ -1138,7 +1275,7 @@ export async function docToDocx(input) {
     for (let i = 0; i + 1 < ft.length && i < fnd.cps.length - 1; i++) {
       const a = ccp.text + ft[i]; let b = ccp.text + ft[i + 1];
       if (b > a && text.charCodeAt(b - 1) === 0x0D && b - a > 1 && i + 2 === ft.length - 0) b--;
-      footnotesXml += `<w:footnote w:id="${i + 1}">${story(a, b, 'ftn') || '<w:p/>'}</w:footnote>`;
+      footnotesXml += `<w:footnote w:id="${i + 1}">${story(a, b, 'ftn', null, 'footnotes.xml') || '<w:p/>'}</w:footnote>`;
     }
   }
   // примечания
@@ -1147,7 +1284,7 @@ export async function docToDocx(input) {
     const at = plc(T, fcAndTxt, lcbAndTxt, 0).cps; const base = ccp.text + ccp.ftn + ccp.hdd;
     comments.forEach((c, i) => {
       const a = base + at[i]; const b = base + at[i + 1];
-      commentsXml += `<w:comment w:id="${c.id}" w:author="${esc(c.author)}" w:date="${c.date || '2000-01-01T00:00:00Z'}" w:initials="${esc(c.initials)}">${b > a ? story(a, b, 'atn') : '<w:p/>'}</w:comment>`;
+      commentsXml += `<w:comment w:id="${c.id}" w:author="${esc(c.author)}" w:date="${c.date || '2000-01-01T00:00:00Z'}" w:initials="${esc(c.initials)}">${b > a ? story(a, b, 'atn', null, 'comments.xml') : '<w:p/>'}</w:comment>`;
     });
   }
   // параметры документа (DopBase): байт 0 бит 0 — разные колонтитулы чётных/нечётных; байт 5: бит 3 — переносить
@@ -1191,13 +1328,15 @@ export async function docToDocx(input) {
     pkgRels.push('<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties" Target="docProps/core.xml"/>');
     overrides.push(['/docProps/core.xml', 'application/vnd.openxmlformats-package.core-properties+xml']);
   }
-  zip.file('word/_rels/document.xml.rels', `${head}<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${[...docRels, ...rels].map((r) => `<Relationship Id="${r.id}" Type="${r.type}" Target="${esc(r.target)}"${/\/hyperlink$/.test(r.type) ? ' TargetMode="External"' : ''}/>`).join('')}</Relationships>`);
+  const relsXml = (list) => `${head}<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${list.map((r) => `<Relationship Id="${r.id}" Type="${r.type}" Target="${esc(r.target)}"${/\/hyperlink$/.test(r.type) ? ' TargetMode="External"' : ''}/>`).join('')}</Relationships>`;
+  zip.file('word/_rels/document.xml.rels', relsXml([...docRels, ...(relsByPart.get('document.xml') || [])]));
+  // связи колонтитулов, сносок, примечаний — у каждой части свои
+  for (const [part, list] of relsByPart) if (part !== 'document.xml' && list.length) zip.file(`word/_rels/${part}.rels`, relsXml(list));
   zip.file('_rels/.rels', `${head}<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${pkgRels.join('')}</Relationships>`);
   const exts = [...new Set(media.map((m) => m.ext))];
   const CT = { jpeg: 'image/jpeg', png: 'image/png', bmp: 'image/bmp', tiff: 'image/tiff' };
   zip.file('[Content_Types].xml', `${head}<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/>${exts.map((e) => `<Default Extension="${e}" ContentType="${CT[e]}"/>`).join('')}${overrides.map(([p, t]) => `<Override PartName="${p}" ContentType="${t}"/>`).join('')}</Types>`);
   const docx = await zip.generateAsync({ type: 'uint8array' });
   if (cfb.entries.some((e) => /^Macros|_VBA_PROJECT/i.test(e.path))) warn('макросы VBA');
-  void total; void ON; void fcEndRef; void u8;
   return { docx, warnings };
 }

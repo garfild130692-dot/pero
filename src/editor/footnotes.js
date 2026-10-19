@@ -8,7 +8,8 @@
 import { Extension } from '@tiptap/core';
 import { TextSelection } from '@tiptap/pm/state';
 
-const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+// символы, недопустимые в XML 1.0, выбрасываются (как в export.js) — иначе текст из чужого файла ломает часть
+const esc = (s) => String(s).replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\uFFFE\uFFFF]/g, '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 export const FOOTNOTES_TYPE = 'application/vnd.openxmlformats-officedocument.wordprocessingml.footnotes+xml';
 
 const idOf = (xml) => { const m = /w:id="(-?\d+)"/.exec(xml || ''); return m ? m[1] : null; };
