@@ -103,3 +103,7 @@ tools/             сканер книг компании (npm run scan)
 [MS-DOC]: https://learn.microsoft.com/openspecs/office_file_formats/ms-doc/
 [MS-XLS]: https://learn.microsoft.com/openspecs/office_file_formats/ms-xls/
 [MS-CFB]: https://learn.microsoft.com/openspecs/windows_protocols/ms-cfb/
+
+## Лицензия
+
+[MIT](LICENSE).
