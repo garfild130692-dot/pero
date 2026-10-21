@@ -102,6 +102,12 @@ tools/             сканер книг компании (npm run scan)
 [MS-XLS]: https://learn.microsoft.com/openspecs/office_file_formats/ms-xls/
 [MS-CFB]: https://learn.microsoft.com/openspecs/windows_protocols/ms-cfb/
 
+## Как разрабатывается
+
+Проект разрабатывает один разработчик вместе с [Claude Code](https://claude.com/claude-code) (Anthropic) — ИИ-помощником
+для программирования: Claude пишет большую часть кода и тестов, владелец проекта ставит задачи, принимает решения
+и проверяет результат. Поэтому в истории коммитов Claude указан соавтором (`Co-Authored-By`).
+
 ## Лицензия
 
 [MIT](LICENSE).
